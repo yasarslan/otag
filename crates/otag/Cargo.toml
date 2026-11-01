@@ -1,0 +1,29 @@
+[package]
+name = "otag"
+description = "Terminal-native multiplexer for AI coding agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["terminal", "multiplexer", "tui", "agents", "cli"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "otag"
+path = "src/main.rs"
+
+[dependencies]
+otag-core = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "signal"] }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

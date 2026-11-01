@@ -144,10 +144,10 @@ impl Drop for Server {
     fn drop(&mut self) {
         // Leaving the socket behind would make the next start look like a
         // crashed daemon, so remove it. A failure here is not worth an error.
-        if let Err(error) = std::fs::remove_file(&self.path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                tracing::debug!(%error, socket = %self.path.display(), "cannot remove the otag socket");
-            }
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::debug!(%error, socket = %self.path.display(), "cannot remove the otag socket");
         }
     }
 }

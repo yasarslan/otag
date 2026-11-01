@@ -5,7 +5,7 @@ open an issue describing what you want to do before writing a large patch.
 
 ## Requirements
 
-- A stable Rust toolchain, 1.85 or newer (the minimum supported Rust version is
+- A stable Rust toolchain, 1.88 or newer (the minimum supported Rust version is
   declared as `rust-version` in `Cargo.toml`).
 - macOS or Linux. Windows is not supported yet.
 

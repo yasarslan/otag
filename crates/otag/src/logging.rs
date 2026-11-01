@@ -49,10 +49,10 @@ pub fn init_daemon(log_dir: &Path, filter: Option<&str>) -> Result<WorkerGuard> 
 
 /// Build a filter from the flag, then `OTAG_LOG`, then the given default.
 fn env_filter(filter: Option<&str>, default: &str) -> EnvFilter {
-    if let Some(filter) = filter {
-        if let Ok(filter) = EnvFilter::try_new(filter) {
-            return filter;
-        }
+    if let Some(filter) = filter
+        && let Ok(filter) = EnvFilter::try_new(filter)
+    {
+        return filter;
     }
     EnvFilter::try_from_env(LOG_ENV).unwrap_or_else(|_| EnvFilter::new(default))
 }

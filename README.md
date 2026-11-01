@@ -14,7 +14,7 @@ agent's permission prompts.
 
 ## Build from source
 
-Requires a stable Rust toolchain (1.85 or newer) on macOS or Linux.
+Requires a stable Rust toolchain (1.88 or newer) on macOS or Linux.
 
 ```sh
 git clone https://github.com/yasarslan/otag

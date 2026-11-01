@@ -1,0 +1,33 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/yasarslan/otag"
+homepage = "https://github.com/yasarslan/otag"
+authors = ["The otag contributors"]
+
+[workspace.dependencies]
+otag-agents = { path = "crates/otag-agents", version = "0.1.0" }
+otag-core = { path = "crates/otag-core", version = "0.1.0" }
+otag-features = { path = "crates/otag-features", version = "0.1.0" }
+otag-persist = { path = "crates/otag-persist", version = "0.1.0" }
+otag-ui = { path = "crates/otag-ui", version = "0.1.0" }
+
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"
+thiserror = "2.0"
+tokio = { version = "1.38", default-features = false }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+strip = "debuginfo"

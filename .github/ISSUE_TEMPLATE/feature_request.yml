@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest something otag should do.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation you are in, not only the feature you want.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should otag do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+    validations:
+      required: false

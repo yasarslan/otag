@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/yasarslan/otag/discussions
+    about: Ask a question or talk through an idea before filing an issue.
+  - name: Security vulnerability
+    url: https://github.com/yasarslan/otag/security/advisories/new
+    about: Report a security problem privately, never as a public issue.

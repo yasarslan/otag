@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Runs on every push and every pull request.
+  linux:
+    name: Linux (stable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --all --all-features --locked
+
+      - name: Build documentation
+        run: cargo doc --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Runs on every push and every pull request: the minimum supported Rust
+  # version from `rust-version` in Cargo.toml must still build the workspace.
+  msrv:
+    name: MSRV build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read the minimum supported Rust version
+        id: msrv
+        run: |
+          version="$(grep -m1 '^rust-version' Cargo.toml | cut -d '"' -f 2)"
+          test -n "$version" || { echo "rust-version is missing from Cargo.toml" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install the minimum supported toolchain
+        run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+
+      # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, which pins stable.
+      - name: Build
+        run: cargo build --all --all-features --locked
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
+
+  # Runs on every push and every pull request.
+  deny:
+    name: Licenses and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  # macOS is the primary platform, but its runners are expensive, so this job
+  # runs only on pushes to main and on a manual dispatch. Use the workflow's
+  # "Run workflow" button to check a platform-sensitive pull request.
+  macos:
+    name: macOS (stable)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --all --all-features --locked

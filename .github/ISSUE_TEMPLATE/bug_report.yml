@@ -1,0 +1,52 @@
+name: Bug report
+description: Something does not work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. otag is pre-alpha, so please check that the
+        problem still happens on the latest `main` before filing.
+
+        Do not report security problems here — see SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `otag ...`
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: otag version
+      description: Output of `otag version`, or the commit you built.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and terminal
+      placeholder: macOS 15.1 (Apple Silicon), Ghostty 1.0
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        From otag's log directory, or from `otag daemon --log debug`. Please
+        remove anything private — paths, project names, prompts.
+      render: text
+    validations:
+      required: false

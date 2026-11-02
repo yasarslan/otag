@@ -42,6 +42,7 @@ impl Terminal {
     /// directory and socket so the test never touches the real ones.
     fn start(home: Arc<TempDir>, rows: u16, cols: u16) -> Self {
         let socket = home.path().join("otag.sock");
+        let shell = write_test_shell(home.path());
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -55,6 +56,14 @@ impl Terminal {
         command.env("HOME", home.path());
         command.env("OTAG_SOCKET", &socket);
         command.env("TERM", "xterm-256color");
+        // The pane runs this instead of whoever's shell happens to be
+        // configured on the machine running the tests.
+        command.env("SHELL", &shell);
+        command.env("BASH_SILENCE_DEPRECATION_WARNING", "1");
+        command.env_remove("ENV");
+        command.env_remove("BASH_ENV");
+        command.env_remove("PS1");
+        command.env_remove("PROMPT_COMMAND");
         command.env_remove("OTAG_LOG");
         command.cwd(home.path());
 
@@ -112,29 +121,43 @@ impl Terminal {
         self.screen.lock().expect("the screen").screen().contents()
     }
 
+    /// Everything on the screen, with rows that continue one another joined
+    /// back into the line they came from.
+    ///
+    /// A line longer than the pane is split across rows, so searching the
+    /// screen for text that happens to land on a break would fail even
+    /// though the user sees it. A row that fills its last column continues
+    /// on the next one: otag draws each row where it belongs rather than
+    /// letting the terminal wrap, so that, and not the terminal's own wrap
+    /// flag, is what says where a line goes on.
+    fn joined_text(&self) -> String {
+        let screen = self.screen.lock().expect("the screen");
+        let screen = screen.screen();
+        let (rows, _) = screen.size();
+        let mut text = String::new();
+        for row in 0..rows.get() {
+            let contents = row_text(screen, row, false);
+            if screen.row_wrapped(row) || !contents.ends_with(' ') {
+                text.push_str(&contents);
+            } else {
+                text.push_str(contents.trim_end());
+                text.push('\n');
+            }
+        }
+        text
+    }
+
     /// One row of the screen, with trailing blanks removed.
     fn row(&self, row: u16) -> String {
         let screen = self.screen.lock().expect("the screen");
-        let screen = screen.screen();
-        let (_, cols) = screen.size();
-        let mut text = String::new();
-        for col in 0..cols.get() {
-            if let Some(cell) = screen.cell(row, col) {
-                if cell.is_wide_continuation() {
-                    continue;
-                }
-                let contents = cell.contents();
-                text.push_str(if contents.is_empty() { " " } else { contents });
-            }
-        }
-        text.trim_end().to_owned()
+        row_text(screen.screen(), row, true)
     }
 
     /// Wait until the screen contains `needle`.
     fn wait_for(&self, needle: &str) {
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
-            if self.text().contains(needle) {
+            if self.joined_text().contains(needle) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(25));
@@ -146,13 +169,17 @@ impl Terminal {
     }
 
     /// Wait for a shell prompt by running a command whose output is unique.
+    ///
+    /// The marker is assembled by the shell, so that the keys the terminal
+    /// may still be echoing before otag takes over cannot be mistaken for a
+    /// shell that has answered.
     fn wait_for_shell(&self) {
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
-            self.type_line("echo otag-ready-marker");
+            self.type_line("printf '%s%s\\n' otag-ready -marker");
             let until = Instant::now() + Duration::from_millis(500);
             while Instant::now() < until {
-                if self.text().contains("otag-ready-marker") {
+                if self.joined_text().contains("otag-ready-marker") {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(25));
@@ -212,6 +239,79 @@ impl Drop for Terminal {
             .env("HOME", self._home.path())
             .output();
     }
+}
+
+/// The text of one row, optionally with its trailing blanks removed.
+fn row_text(screen: &vt100::Screen, row: u16, trim: bool) -> String {
+    let (_, cols) = screen.size();
+    let mut text = String::new();
+    for col in 0..cols.get() {
+        if let Some(cell) = screen.cell(row, col) {
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let contents = cell.contents();
+            text.push_str(if contents.is_empty() { " " } else { contents });
+        }
+    }
+    if trim {
+        text.truncate(text.trim_end().len());
+    }
+    text
+}
+
+/// Write the shell the panes in these tests run, and return its path.
+///
+/// The tests assert on what the screen shows, so the shell has to be the
+/// same everywhere: a machine whose user runs another shell, or whose prompt
+/// is long enough to wrap the commands the tests type, must not change the
+/// result. This is a plain, interactive bash that reads no start-up file of
+/// the machine's, with a two-character prompt and a history file inside the
+/// test's own home directory.
+fn write_test_shell(home: &Path) -> PathBuf {
+    let rc = home.join("test-bashrc");
+    std::fs::write(
+        &rc,
+        format!(
+            "PS1='$ '\n\
+             PS2='> '\n\
+             unset PROMPT_COMMAND\n\
+             HISTFILE='{history}'\n\
+             HISTSIZE=200\n\
+             HISTFILESIZE=200\n",
+            history = home.join("test-history").display()
+        ),
+    )
+    .expect("the shell's start-up file is written");
+
+    let shell = home.join("test-shell");
+    std::fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\nexec '{bash}' --noprofile --rcfile '{rc}' -i \"$@\"\n",
+            bash = bash_path().display(),
+            rc = rc.display()
+        ),
+    )
+    .expect("the test shell is written");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755))
+            .expect("the test shell is executable");
+    }
+
+    shell
+}
+
+/// Where bash lives on this machine.
+fn bash_path() -> PathBuf {
+    ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .expect("these tests need bash; install it or add it to one of the usual locations")
 }
 
 /// Answer the queries a client sends to find out about its terminal.
@@ -342,8 +442,11 @@ fn the_up_arrow_recalls_a_command_from_the_shell_s_history() {
     let terminal = Terminal::start(home(), 24, 80);
     terminal.wait_for_shell();
 
-    terminal.type_line("echo recalled-by-the-up-arrow");
-    terminal.wait_for("recalled-by-the-up-arrow");
+    // The marker is assembled from two words, so that only the program's
+    // output counts: the command line the shell echoes does not contain it,
+    // wherever the prompt happens to break it.
+    terminal.type_line("printf '%s%s\\n' recalled by-the-up-arrow");
+    terminal.wait_for("recalledby-the-up-arrow");
 
     // A shell's line editor asks for application cursor keys, so this only
     // works if the pane's modes reach the client and are used to encode the
@@ -354,7 +457,12 @@ fn the_up_arrow_recalls_a_command_from_the_shell_s_history() {
 
     let deadline = Instant::now() + TIMEOUT;
     while Instant::now() < deadline {
-        if terminal.text().matches("recalled-by-the-up-arrow").count() >= 3 {
+        if terminal
+            .joined_text()
+            .matches("recalledby-the-up-arrow")
+            .count()
+            >= 2
+        {
             return;
         }
         std::thread::sleep(Duration::from_millis(25));

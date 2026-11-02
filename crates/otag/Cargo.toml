@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 otag-core = { workspace = true }
+otag-persist = { workspace = true }
 otag-ui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

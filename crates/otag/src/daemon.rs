@@ -11,6 +11,8 @@ use otag_core::proto::{PaneInfo, Request, Response};
 use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 
+use crate::persist;
+
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
     // Keep the guard alive for the whole run so buffered log lines are
@@ -40,14 +42,63 @@ async fn serve(socket: &Path) -> Result<()> {
         .with_context(|| format!("cannot start the otag daemon on {}", socket.display()))?;
 
     tracing::info!(version = otag_core::VERSION, "otag daemon started");
+    // Every pane runs the user's shell, told how to reach otag so that agent
+    // hooks inside it can report back.
+    let session = Session::new(PaneSpec::shell().with_env(SOCKET_ENV, socket));
+
+    // Persistence is a convenience, not a requirement: a daemon that cannot
+    // save its state still runs the user's panes.
+    let snapshots = open_snapshots();
+    let saving = match &snapshots {
+        Some(snapshots) => {
+            persist::restore(&session, snapshots).await;
+            Some(tokio::spawn(persist::keep_saving(
+                Arc::clone(&session),
+                snapshots.clone(),
+            )))
+        }
+        None => None,
+    };
+
     let daemon = Daemon {
-        // Every pane runs the user's shell, told how to reach otag so that
-        // agent hooks inside it can report back.
-        session: Session::new(PaneSpec::shell().with_env(SOCKET_ENV, socket)),
+        session: Arc::clone(&session),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
+
+    // The panes are about to be killed with the daemon, so what they show
+    // now is what a restart has to put back.
+    if let Some(snapshots) = &snapshots {
+        if let Some(saving) = saving {
+            saving.abort();
+        }
+        persist::save_everything(&session, snapshots).await;
+    }
+
     tracing::info!("otag daemon stopped");
     result.context("the otag daemon stopped with an error")
+}
+
+/// Open the snapshot database, or report why the daemon will not remember
+/// anything.
+fn open_snapshots() -> Option<persist::Snapshots> {
+    let state_dir = match Dirs::from_env().state_dir() {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            tracing::warn!(%error, "otag will not remember this session");
+            return None;
+        }
+    };
+
+    match persist::Snapshots::open(state_dir.join(otag_persist::DATABASE_FILE_NAME)) {
+        Ok(snapshots) => {
+            tracing::info!(database = %snapshots.path().display(), "otag is saving its state");
+            Some(snapshots)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "otag will not remember this session");
+            None
+        }
+    }
 }
 
 /// Everything one daemon owns.

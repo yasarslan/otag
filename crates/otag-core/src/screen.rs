@@ -79,6 +79,72 @@ impl Screen {
         std::mem::take(&mut self.parser.callbacks_mut().replies)
     }
 
+    /// The lines that have scrolled off the top, oldest first, at most `max`
+    /// of them.
+    ///
+    /// The emulator only reports the rows in view, so reading the scrollback
+    /// means moving the view up it a screen at a time and putting it back
+    /// afterwards. Nothing the program sees changes: the view is the
+    /// daemon's own way of looking at the grid.
+    pub fn scrollback_lines(&mut self, max: usize) -> Vec<String> {
+        let rows = usize::from(self.size.rows());
+        let total = self.parser.screen().scrollback_len();
+        let wanted = total.min(max);
+        if wanted == 0 || rows == 0 {
+            return Vec::new();
+        }
+
+        let mut lines = Vec::with_capacity(wanted);
+        // Counting from the oldest line that still fits in `max`.
+        let mut index = total - wanted;
+        while index < total {
+            // With the view this far up, its first row is the line at
+            // `index`, and the rows below it are the lines after it — until
+            // the live screen begins.
+            let offset = total - index;
+            self.parser.screen_mut().set_scrollback(offset);
+            let from_scrollback = offset.min(rows);
+
+            let screen = self.parser.screen();
+            lines.extend(screen.rows(0, self.size.cols()).take(from_scrollback));
+            index += from_scrollback;
+        }
+
+        self.parser.screen_mut().set_scrollback(0);
+        lines
+    }
+
+    /// Every line the pane has shown that is worth keeping, oldest first, at
+    /// most `max` of them.
+    ///
+    /// What is on the screen now counts: a pane is restored so that it looks
+    /// like the one it replaces, and the user does not think of the last
+    /// screenful as something different from what scrolled above it. Trailing
+    /// blank rows are left out, so a pane showing three lines is not restored
+    /// as three lines and a screenful of nothing.
+    ///
+    /// A program drawing on the alternate screen — an editor, a system
+    /// monitor — contributes nothing: what it has drawn is a picture it will
+    /// draw again, not a record of what happened.
+    pub fn history(&mut self, max: usize) -> Vec<String> {
+        let mut lines = self.scrollback_lines(max);
+
+        if !self.parser.screen().alternate_screen() {
+            let visible: Vec<String> = self.parser.screen().rows(0, self.size.cols()).collect();
+            let used = visible
+                .iter()
+                .rposition(|line| !line.trim().is_empty())
+                .map_or(0, |last| last + 1);
+            lines.extend(visible.into_iter().take(used));
+        }
+
+        // The oldest lines go first when there are more than asked for.
+        if lines.len() > max {
+            lines.drain(..lines.len() - max);
+        }
+        lines
+    }
+
     /// The screen as the client should see it.
     #[must_use]
     pub fn state(&self) -> ScreenState {
@@ -571,5 +637,114 @@ mod tests {
         // The screen still works: a cursor move and a write both land.
         screen.process(b"\x1b[H\x1b[2Jtext");
         assert_eq!(screen.state().row_text(0), "text");
+    }
+
+    #[test]
+    fn the_lines_that_scrolled_off_can_be_read_back() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(3, 20), 100);
+        for line in 1..=10 {
+            screen.process(format!("line {line}\r\n").as_bytes());
+        }
+
+        // Ten lines, each ending the line it was on, printed on a screen
+        // three rows tall: eight have scrolled off, and the last two are in
+        // view above the row the cursor moved to.
+        let lines = screen.scrollback_lines(100);
+        assert_eq!(lines.len(), 8, "{lines:?}");
+        assert_eq!(lines.first().map(String::as_str), Some("line 1"));
+        assert_eq!(lines.last().map(String::as_str), Some("line 8"));
+        assert!(screen.state().text().contains("line 10"));
+    }
+
+    #[test]
+    fn reading_the_scrollback_leaves_the_screen_where_it_was() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(3, 20), 100);
+        for line in 1..=10 {
+            screen.process(format!("line {line}\r\n").as_bytes());
+        }
+
+        let before = screen.state();
+        screen.scrollback_lines(100);
+        assert_eq!(screen.state(), before, "the view is put back");
+    }
+
+    #[test]
+    fn only_the_newest_lines_are_kept_when_a_limit_is_given() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(3, 20), 100);
+        for line in 1..=10 {
+            screen.process(format!("line {line}\r\n").as_bytes());
+        }
+
+        let lines = screen.scrollback_lines(2);
+        assert_eq!(lines, vec!["line 7".to_owned(), "line 8".to_owned()]);
+    }
+
+    #[test]
+    fn a_screen_that_never_scrolled_has_no_scrollback() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(10, 20), 100);
+        screen.process(b"just one line\r\n");
+        assert!(screen.scrollback_lines(100).is_empty());
+        assert!(screen.scrollback_lines(0).is_empty());
+    }
+
+    #[test]
+    fn what_a_pane_has_shown_includes_what_is_still_on_the_screen() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(3, 20), 100);
+        for line in 1..=10 {
+            screen.process(format!("line {line}\r\n").as_bytes());
+        }
+
+        let history = screen.history(100);
+        assert_eq!(history.first().map(String::as_str), Some("line 1"));
+        assert_eq!(
+            history.last().map(String::as_str),
+            Some("line 10"),
+            "the newest line is the one the user can see: {history:?}"
+        );
+        assert_eq!(history.len(), 10, "and nothing is counted twice");
+    }
+
+    #[test]
+    fn blank_rows_below_the_last_line_are_not_kept() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(10, 20), 100);
+        screen.process(b"one\r\ntwo\r\n");
+        assert_eq!(
+            screen.history(100),
+            vec!["one".to_owned(), "two".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_full_screen_program_contributes_nothing_to_what_is_kept() {
+        // What an editor has drawn is a picture it will draw again, not a
+        // record of what happened.
+        let mut screen = Screen::with_scrollback(PaneSize::new(5, 20), 100);
+        screen.process(b"before the editor\r\n");
+        screen.process(b"\x1b[?1049h");
+        screen.process(b"the editor's own drawing\r\n");
+
+        let history = screen.history(100);
+        assert!(
+            !history.iter().any(|line| line.contains("editor's own")),
+            "{history:?}"
+        );
+    }
+
+    #[test]
+    fn only_the_newest_of_what_a_pane_has_shown_is_kept() {
+        let mut screen = Screen::with_scrollback(PaneSize::new(3, 20), 100);
+        for line in 1..=10 {
+            screen.process(format!("line {line}\r\n").as_bytes());
+        }
+        assert_eq!(
+            screen.history(2),
+            vec!["line 9".to_owned(), "line 10".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_pane_that_has_shown_nothing_has_nothing_to_keep() {
+        let mut screen = Screen::new(PaneSize::new(5, 10));
+        assert!(screen.history(100).is_empty());
     }
 }

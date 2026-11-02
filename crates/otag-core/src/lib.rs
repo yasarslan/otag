@@ -16,6 +16,7 @@ pub mod pty;
 pub mod screen;
 pub mod server;
 pub mod session;
+pub mod snapshot;
 pub mod workspace;
 
 pub use error::{Error, Result};

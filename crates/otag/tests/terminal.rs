@@ -335,6 +335,18 @@ impl Terminal {
     fn run(&self, arguments: &[&str]) -> String {
         run_otag(self._home.path(), &self.socket, arguments)
     }
+
+    /// Stop the daemon and wait until it has really gone.
+    ///
+    /// `otag kill-server` is answered before the daemon has finished saving
+    /// and let go of its socket; starting the next one before that would
+    /// reach the daemon on its way out.
+    fn kill_server(&self) {
+        self.run(&["kill-server"]);
+        self.wait_until("the daemon to stop", || {
+            self.run(&["ls"]).contains("no daemon")
+        });
+    }
 }
 
 impl Drop for Terminal {
@@ -761,4 +773,83 @@ fn hiding_the_sidebar_gives_its_columns_to_the_pane() {
     let wide = Chrome::of(terminal.size(), false).content.inset(BORDER);
     assert!(wide.cols > narrow.cols);
     terminal.type_until("stty size", &format!("{} {}", wide.rows, wide.cols));
+}
+
+#[test]
+fn a_session_comes_back_after_the_daemon_is_restarted() {
+    let home = home();
+    let mut first = Terminal::start(Arc::clone(&home), 24, 80);
+    first.wait_for_shell();
+    first.type_line("printf '%s%s\\n' written-before the-restart");
+    first.wait_for("written-beforethe-restart");
+
+    first.command("%");
+    let areas = first.split_areas(Direction::LeftRight);
+    first.type_until_in(
+        areas[1],
+        "printf '%s%s\\n' in-the second-pane",
+        "in-thesecond-pane",
+    );
+
+    // Stopping the daemon takes the client with it, and otag reports no
+    // error: the session is over, not broken.
+    first.kill_server();
+    assert!(
+        first.wait_for_exit(),
+        "otag stops cleanly when the daemon does"
+    );
+
+    // A new daemon starts and puts the session back.
+    let second = Terminal::start(home, 24, 80);
+    second.wait_for_in(areas[0], "written-beforethe-restart");
+    second.wait_for_in(areas[1], "in-thesecond-pane");
+    second.wait_for_in(areas[0], "restored");
+    second.wait_for_in(areas[1], "restored");
+
+    // Both panes are running again, so the restored session can be used.
+    second.type_until_in(
+        areas[1],
+        "printf '%s%s\\n' still working-after-the-restart",
+        "stillworking-after-the-restart",
+    );
+}
+
+#[test]
+fn a_restored_session_keeps_its_tabs_and_which_one_was_shown() {
+    let home = home();
+    let mut first = Terminal::start(Arc::clone(&home), 24, 80);
+    first.wait_for_shell();
+
+    first.command("c");
+    first.wait_for_in(first.tabs_area(), "2:shell");
+    first.type_until("printf '%s%s\\n' on-the-second tab", "on-the-secondtab");
+
+    first.kill_server();
+    assert!(first.wait_for_exit(), "otag stops cleanly");
+
+    let second = Terminal::start(home, 24, 80);
+    second.wait_for_in(second.tabs_area(), "2:shell");
+    second.wait_for_in(second.pane_area(), "on-the-secondtab");
+}
+
+#[test]
+fn a_session_that_ended_is_not_restored() {
+    // The shell exited, so there is nothing to come back to: the next otag
+    // starts a session of its own rather than a dead one.
+    let home = home();
+    let mut first = Terminal::start(Arc::clone(&home), 24, 80);
+    first.wait_for_shell();
+    first.type_line("printf '%s%s\\n' before the-exit");
+    first.wait_for("beforethe-exit");
+    first.type_line("exit");
+    assert!(first.wait_for_exit(), "otag stops when the shell does");
+
+    first.kill_server();
+    let second = Terminal::start(home, 24, 80);
+    second.wait_for_shell();
+    assert!(
+        !second.pane_text().contains("beforethe-exit"),
+        "a session that ended came back.\nscreen:\n{}",
+        second.text()
+    );
 }

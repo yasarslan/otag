@@ -191,20 +191,25 @@ async fn event_loop(
 
     loop {
         tokio::select! {
-            message = reader.receive() => match message? {
-                Response::View { view } => {
+            message = reader.receive() => match message {
+                Ok(Response::View { view }) => {
                     client.apply_view(*view);
                     client.draw(terminal)?;
                 }
-                Response::Frame { pane, frame } => {
+                Ok(Response::Frame { pane, frame }) => {
                     client.apply_frame(pane, &frame);
                     client.draw(terminal)?;
                 }
-                Response::SessionEnded { exit } => return Ok(Outcome::Ended(exit)),
-                Response::Error { message } => bail!("{message}"),
+                Ok(Response::SessionEnded { exit }) => return Ok(Outcome::Ended(exit)),
+                Ok(Response::Error { message }) => bail!("{message}"),
                 // A daemon of another version may send something this build
                 // does not know; ignoring it is better than giving up.
-                other => tracing::debug!(?other, "ignoring a message otag does not know"),
+                Ok(other) => tracing::debug!(?other, "ignoring a message otag does not know"),
+                // The daemon has gone, which is what `otag kill-server` from
+                // another terminal looks like from here: there is nothing
+                // left to draw, and nothing the user did wrong.
+                Err(otag_core::Error::ConnectionClosed) => return Ok(Outcome::Ended(None)),
+                Err(error) => return Err(error.into()),
             },
 
             event = input.recv() => {

@@ -17,7 +17,7 @@
 //! of being sent one they then have to reconcile.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,6 +29,7 @@ use crate::pane::{PaneExit, PaneId, PaneSize, PaneSpec};
 use crate::proto::{PaneView, SessionView, TabView, WorkspaceView};
 use crate::pty::{Pty, PtyEvent};
 use crate::screen::Screen;
+use crate::snapshot::{self, PaneSnapshot, Snapshot, TabSnapshot, WorkspaceSnapshot};
 use crate::workspace::{Tab, TabId, Workspace, WorkspaceId};
 use crate::{Error, Result};
 
@@ -45,6 +46,10 @@ const COMMAND_QUEUE: usize = 64;
 /// What a tab is called before anything better is known about it.
 const SHELL_TITLE: &str = "shell";
 
+/// The line otag draws between what a restored pane used to show and what
+/// its program prints from now on.
+const RESTORED_DIVIDER: &str = "\x1b[2m\u{2500}\u{2500} restored \u{2500}\u{2500}\x1b[0m\r\n";
+
 /// What a client can ask a pane to do.
 #[derive(Debug)]
 enum PaneCommand {
@@ -52,11 +57,13 @@ enum PaneCommand {
     Input(Vec<u8>),
     /// The pane is now this size.
     Resize(PaneSize),
+    /// Report the lines the pane has shown, for a snapshot.
+    History(usize, tokio::sync::oneshot::Sender<Vec<String>>),
 }
 
 /// What a pane publishes to everyone watching it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaneSnapshot {
+pub struct PaneState {
     /// The pane's screen.
     pub screen: ScreenState,
     /// How the program ended, once it has.
@@ -68,7 +75,7 @@ pub struct PaneSnapshot {
 pub struct PaneHandle {
     id: PaneId,
     commands: mpsc::Sender<PaneCommand>,
-    view: watch::Receiver<Arc<PaneSnapshot>>,
+    view: watch::Receiver<Arc<PaneState>>,
 }
 
 impl PaneHandle {
@@ -80,7 +87,7 @@ impl PaneHandle {
 
     /// The pane's current screen and exit state.
     #[must_use]
-    pub fn snapshot(&self) -> Arc<PaneSnapshot> {
+    pub fn snapshot(&self) -> Arc<PaneState> {
         Arc::clone(&self.view.borrow())
     }
 
@@ -92,7 +99,7 @@ impl PaneHandle {
 
     /// A receiver that wakes whenever the pane publishes a new screen.
     #[must_use]
-    pub fn watch(&self) -> watch::Receiver<Arc<PaneSnapshot>> {
+    pub fn watch(&self) -> watch::Receiver<Arc<PaneState>> {
         self.view.clone()
     }
 
@@ -104,6 +111,17 @@ impl PaneHandle {
     /// Tell the pane it has a new size.
     pub async fn resize(&self, size: PaneSize) -> Result<()> {
         self.send(PaneCommand::Resize(size)).await
+    }
+
+    /// The lines the pane has shown, at most `max` of them, oldest first.
+    ///
+    /// Asked of the pane's own task, because that is what owns the emulator.
+    pub async fn history(&self, max: usize) -> Result<Vec<String>> {
+        let (lines_tx, lines_rx) = tokio::sync::oneshot::channel();
+        self.send(PaneCommand::History(max, lines_tx)).await?;
+        lines_rx
+            .await
+            .map_err(|_| Error::PaneGone { id: Some(self.id) })
     }
 
     async fn send(&self, command: PaneCommand) -> Result<()> {
@@ -129,12 +147,28 @@ pub struct PaneSummary {
     pub exit: Option<PaneExit>,
 }
 
+/// Everything needed to start one pane.
+struct Starting<'a> {
+    id: PaneId,
+    workspace: WorkspaceId,
+    cwd: Option<&'a Path>,
+    /// What to run, empty for the user's shell.
+    command: &'a [String],
+    title: &'a str,
+    /// What the pane showed before, when it is being restored.
+    restored: &'a [String],
+}
+
 /// One running pane, with what the interface says about it.
 #[derive(Debug)]
 struct Pane {
     handle: PaneHandle,
     title: String,
     workspace: WorkspaceId,
+    /// Where it was started, so a snapshot can start it there again.
+    cwd: Option<PathBuf>,
+    /// What it was started with, empty for the user's shell.
+    command: Vec<String>,
 }
 
 /// Everything one daemon owns.
@@ -574,6 +608,129 @@ impl Session {
         self.state.lock().ok()?.last_exit.clone()
     }
 
+    /// Everything about the session that is worth keeping, for a snapshot.
+    ///
+    /// What the panes have shown is not part of it: that has to be asked of
+    /// each pane's own task, which [`Session::histories`] does, and is larger
+    /// than the rest, so it is saved on its own schedule.
+    #[must_use]
+    pub fn snapshot(&self) -> Snapshot {
+        let Ok(state) = self.state.lock() else {
+            return Snapshot::default();
+        };
+
+        Snapshot {
+            version: snapshot::VERSION,
+            size: state.size,
+            sidebar: state.sidebar,
+            active_workspace: state.active,
+            workspaces: state
+                .workspaces
+                .iter()
+                .map(|workspace| WorkspaceSnapshot {
+                    id: workspace.id(),
+                    name: workspace.name().to_owned(),
+                    cwd: workspace.cwd().map(Path::to_path_buf),
+                    active_tab: workspace.active(),
+                    tabs: workspace
+                        .tabs()
+                        .iter()
+                        .map(|tab| TabSnapshot {
+                            id: tab.id(),
+                            title: tab.title().to_owned(),
+                            focus: tab.focus(),
+                            layout: tab.layout().clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            panes: state
+                .panes
+                .values()
+                .map(|pane| PaneSnapshot {
+                    id: pane.handle.id(),
+                    title: pane.title.clone(),
+                    cwd: pane.cwd.clone(),
+                    command: pane.command.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The lines each pane has shown, for a snapshot.
+    ///
+    /// A pane that cannot answer is left out rather than holding up the
+    /// others: a snapshot missing one pane's lines still restores the
+    /// session.
+    pub async fn histories(&self, max: usize) -> Vec<(PaneId, Vec<String>)> {
+        let panes = match self.state.lock() {
+            Ok(state) => state
+                .panes
+                .values()
+                .map(|pane| pane.handle.clone())
+                .collect::<Vec<_>>(),
+            Err(_) => return Vec::new(),
+        };
+
+        let mut histories = Vec::with_capacity(panes.len());
+        for handle in panes {
+            match handle.history(max).await {
+                Ok(lines) => histories.push((handle.id(), lines)),
+                Err(error) => {
+                    tracing::debug!(%error, pane = %handle.id(), "cannot read what a pane has shown");
+                }
+            }
+        }
+        histories
+    }
+
+    /// Put a session back together from a snapshot.
+    ///
+    /// Every pane is started again, with the lines `history` has for it
+    /// shown above a divider. A pane that cannot be started is dropped
+    /// from its layout, a tab left with no panes is dropped, and a workspace
+    /// left with no tabs is dropped: a snapshot that is partly unusable
+    /// restores the part that is, rather than nothing.
+    ///
+    /// Does nothing when the session already has panes, or when the snapshot
+    /// is empty or was written by a newer otag.
+    pub async fn restore(
+        self: &Arc<Self>,
+        snapshot: &Snapshot,
+        history: &dyn Fn(PaneId) -> Vec<String>,
+    ) -> Result<()> {
+        {
+            let mut state = self.lock()?;
+            if !state.workspaces.is_empty() {
+                return Ok(());
+            }
+            if !snapshot.is_readable() {
+                tracing::warn!(
+                    version = snapshot.version,
+                    "not restoring a session saved by a newer otag"
+                );
+                return Ok(());
+            }
+            if snapshot.is_empty() {
+                return Ok(());
+            }
+
+            state.size = snapshot.size;
+            state.sidebar = snapshot.sidebar;
+            restore_into(self, &mut state, snapshot, history);
+            if state.workspaces.is_empty() {
+                tracing::warn!("nothing in the saved session could be restored");
+                return Ok(());
+            }
+            state.active = snapshot
+                .active_workspace
+                .min(state.workspaces.len().saturating_sub(1));
+        }
+
+        self.commit(true).await;
+        Ok(())
+    }
+
     /// Take a pane out of the session, dropping a tab or a workspace that is
     /// left with nothing in it.
     async fn close_pane(self: &Arc<Self>, id: PaneId, exit: Option<PaneExit>) {
@@ -622,24 +779,55 @@ impl Session {
         cwd: Option<&Path>,
     ) -> Result<PaneId> {
         let id = state.next_pane;
-        let spec = self.template.clone().with_cwd_opt(cwd);
+        let pane = self.start_pane_as(
+            state,
+            &Starting {
+                id,
+                workspace,
+                cwd,
+                command: &[],
+                title: SHELL_TITLE,
+                restored: &[],
+            },
+        )?;
+        state.next_pane = id.next();
+        state.panes.insert(id, pane);
+        Ok(id)
+    }
+
+    /// Start one pane with everything about it decided by the caller, which
+    /// is what restoring a snapshot needs.
+    ///
+    /// The pane is not put into the session: the caller does that once it
+    /// knows the pane has somewhere to go.
+    fn start_pane_as(self: &Arc<Self>, state: &State, starting: &Starting<'_>) -> Result<Pane> {
+        let spec = if starting.command.is_empty() {
+            self.template.clone().with_cwd_opt(starting.cwd)
+        } else {
+            // A pane restored with a command of its own still needs the
+            // environment otag puts its panes in, so that the agent in it
+            // can report back.
+            let mut spec = PaneSpec::command(starting.command);
+            for (key, value) in self.template.env() {
+                spec = spec.with_env(key, value);
+            }
+            spec.with_cwd_opt(starting.cwd)
+        };
+
         // A pane is started at the size of the whole content area and told
         // its real size as soon as the layout is known, which is one resize
         // before the program has drawn anything.
         let size = state.chrome().content.inset(BORDER).size();
-        let handle = spawn_pane(id, &spec, size)?;
+        let handle = spawn_pane(starting.id, &spec, size, starting.restored)?;
         self.reap(handle.clone());
 
-        state.next_pane = id.next();
-        state.panes.insert(
-            id,
-            Pane {
-                handle,
-                title: SHELL_TITLE.to_owned(),
-                workspace,
-            },
-        );
-        Ok(id)
+        Ok(Pane {
+            handle,
+            title: starting.title.to_owned(),
+            workspace: starting.workspace,
+            cwd: starting.cwd.map(Path::to_path_buf),
+            command: starting.command.to_vec(),
+        })
     }
 
     /// The state, as an error rather than a panic when a holder panicked.
@@ -702,11 +890,24 @@ impl Session {
 }
 
 /// Start a pane and the task driving it.
-fn spawn_pane(id: PaneId, spec: &PaneSpec, size: PaneSize) -> Result<PaneHandle> {
+///
+/// `restored` is what the pane showed before the daemon was last stopped: it
+/// is put on the screen, above a divider, before the program's own output,
+/// so that a restored pane looks like the one it replaces rather than like a
+/// new one.
+fn spawn_pane(
+    id: PaneId,
+    spec: &PaneSpec,
+    size: PaneSize,
+    restored: &[String],
+) -> Result<PaneHandle> {
     let (pty, events) = Pty::spawn(id, spec, size)?;
-    let screen = Screen::new(size);
+    let mut screen = Screen::new(size);
+    if !restored.is_empty() {
+        screen.process(&restored_bytes(restored));
+    }
 
-    let (view_tx, view_rx) = watch::channel(Arc::new(PaneSnapshot {
+    let (view_tx, view_rx) = watch::channel(Arc::new(PaneState {
         screen: screen.state(),
         exit: None,
     }));
@@ -728,7 +929,7 @@ async fn run_pane(
     mut screen: Screen,
     mut events: mpsc::Receiver<PtyEvent>,
     mut commands: mpsc::Receiver<PaneCommand>,
-    view: watch::Sender<Arc<PaneSnapshot>>,
+    view: watch::Sender<Arc<PaneState>>,
 ) {
     let mut ticker = tokio::time::interval(FRAME_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -775,6 +976,12 @@ async fn run_pane(
                         dirty = true;
                     }
                 }
+                Some(PaneCommand::History(max, answer)) => {
+                    // The caller may have given up waiting, which is not a
+                    // problem: a snapshot without this pane's lines is
+                    // better than a pane that stopped reading its program.
+                    let _ = answer.send(screen.history(max));
+                }
                 // Nobody can reach this pane any more. The program is killed
                 // when the pseudo-terminal is dropped.
                 None => return,
@@ -788,9 +995,149 @@ async fn run_pane(
     }
 }
 
+/// Start the panes a snapshot describes and build the workspaces holding
+/// them.
+///
+/// Anything that cannot be started is left out: the point is to restore as
+/// much of the session as still works, not to insist on all of it.
+fn restore_into(
+    session: &Arc<Session>,
+    state: &mut State,
+    snapshot: &Snapshot,
+    history: &dyn Fn(PaneId) -> Vec<String>,
+) {
+    // Identifiers are never reused, so counting carries on above the highest
+    // one the snapshot used.
+    state.next_pane = highest(snapshot.panes.iter().map(|pane| pane.id), PaneId::FIRST).next();
+    state.next_workspace = highest(
+        snapshot.workspaces.iter().map(|workspace| workspace.id),
+        WorkspaceId::FIRST,
+    )
+    .next();
+    state.next_tab = highest(
+        snapshot
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.tabs.iter().map(|tab| tab.id)),
+        TabId::FIRST,
+    )
+    .next();
+
+    for workspace in &snapshot.workspaces {
+        let mut tabs = Vec::with_capacity(workspace.tabs.len());
+
+        for tab in &workspace.tabs {
+            let mut layout = tab.layout.clone();
+            let mut started: Vec<(PaneId, Pane)> = Vec::new();
+            let mut usable = true;
+
+            for pane in layout.panes() {
+                let record = snapshot.pane(pane);
+                let cwd = record
+                    .and_then(|record| record.cwd.clone())
+                    .or_else(|| workspace.cwd.clone());
+                let command = record
+                    .map(|record| record.command.clone())
+                    .unwrap_or_default();
+                let title = record
+                    .map(|record| record.title.as_str())
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or(SHELL_TITLE);
+
+                match session.start_pane_as(
+                    state,
+                    &Starting {
+                        id: pane,
+                        workspace: workspace.id,
+                        cwd: cwd.as_deref(),
+                        command: &command,
+                        title,
+                        restored: &history(pane),
+                    },
+                ) {
+                    Ok(restored) => started.push((pane, restored)),
+                    Err(error) => {
+                        tracing::warn!(%error, %pane, "cannot restore a pane");
+                        // Its space goes to a neighbour; a tab with no
+                        // neighbour left is not worth restoring. Dropping
+                        // the panes already started ends their programs.
+                        usable = layout.close(pane);
+                        if !usable {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !usable || started.is_empty() {
+                continue;
+            }
+            let focus = if layout.contains(tab.focus) {
+                tab.focus
+            } else {
+                // The pane that had the focus could not be restored, so the
+                // focus goes to whatever took its place.
+                match layout.panes().first() {
+                    Some(first) => *first,
+                    None => continue,
+                }
+            };
+
+            for (id, pane) in started {
+                state.panes.insert(id, pane);
+            }
+            let title = if tab.title.is_empty() {
+                SHELL_TITLE
+            } else {
+                &tab.title
+            };
+            tabs.push(Tab::from_parts(tab.id, title, layout, focus));
+        }
+
+        if tabs.is_empty() {
+            continue;
+        }
+        let name = if workspace.name.is_empty() {
+            crate::workspace::name_for(workspace.cwd.as_deref())
+        } else {
+            workspace.name.clone()
+        };
+        state.workspaces.push(Workspace::new_with_tabs(
+            workspace.id,
+            name,
+            workspace.cwd.clone(),
+            tabs,
+            workspace.active_tab,
+        ));
+    }
+}
+
+/// The largest identifier in a snapshot, or `fallback` when it has none.
+fn highest<T: Ord>(ids: impl Iterator<Item = T>, fallback: T) -> T {
+    ids.max().unwrap_or(fallback)
+}
+
+/// What to put on a restored pane's screen before its program starts.
+///
+/// The lines come from a snapshot, so they are treated as text and nothing
+/// else: anything that could move the cursor or change a colour is dropped
+/// rather than acted on.
+fn restored_bytes(lines: &[String]) -> Vec<u8> {
+    let mut text = String::new();
+    for line in lines {
+        text.extend(
+            line.chars()
+                .filter(|character| !character.is_control() || *character == '\t'),
+        );
+        text.push_str("\r\n");
+    }
+    text.push_str(RESTORED_DIVIDER);
+    text.into_bytes()
+}
+
 /// Publish the current screen, but only when it actually changed.
-fn publish(view: &watch::Sender<Arc<PaneSnapshot>>, screen: &Screen, exit: Option<PaneExit>) {
-    let next = PaneSnapshot {
+fn publish(view: &watch::Sender<Arc<PaneState>>, screen: &Screen, exit: Option<PaneExit>) {
+    let next = PaneState {
         screen: screen.state(),
         exit,
     };

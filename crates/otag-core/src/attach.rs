@@ -21,7 +21,7 @@ use crate::frame::ScreenState;
 use crate::pane::{PaneId, PaneSize};
 use crate::proto::{Response, SessionView};
 use crate::server::Outbox;
-use crate::session::{PaneHandle, PaneSnapshot, Session};
+use crate::session::{PaneHandle, PaneState, Session};
 use crate::{Error, Result};
 
 /// How many "this pane drew something" notices may wait for one client.
@@ -213,7 +213,7 @@ impl Following {
 /// Tell one client's stream that a pane drew something.
 async fn notice(
     pane: PaneId,
-    mut updates: watch::Receiver<Arc<PaneSnapshot>>,
+    mut updates: watch::Receiver<Arc<PaneState>>,
     notices: mpsc::Sender<PaneId>,
 ) {
     loop {

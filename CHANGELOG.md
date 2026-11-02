@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sessions survive the daemon. otag saves its workspaces, tabs, layouts and
+  what each pane has shown, and puts them back when it starts again: after a
+  `otag kill-server`, a reboot, or a crash, the panes are running in their
+  own directories again with what they showed above a `── restored ──` line.
+- Closing the terminal still leaves everything running, and `otag` reattaches
+  to it; stopping the daemon now ends an attached otag without reporting an
+  error, because the session is over rather than broken.
 - Panes, tabs and workspaces. `Ctrl-b %` splits the focused pane left and
   right, `Ctrl-b "` splits it top and bottom, and a pane leaves the layout
   when its program ends, giving its space back to its neighbour.

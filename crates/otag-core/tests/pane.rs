@@ -6,14 +6,14 @@ use std::time::Duration;
 use otag_core::layout::{BORDER, Chrome};
 use otag_core::pane::{PaneId, PaneSize, PaneSpec};
 use otag_core::pty::{Pty, PtyEvent};
-use otag_core::session::{PaneHandle, PaneSnapshot, Session};
+use otag_core::session::{PaneHandle, PaneState, Session};
 
 /// How long a test waits for a child process to do its work. Generous: a
 /// loaded machine must not make the suite flaky.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Wait until the pane's screen satisfies `ready`, then return what it is.
-async fn wait_for(handle: &PaneHandle, ready: impl Fn(&PaneSnapshot) -> bool) -> Arc<PaneSnapshot> {
+async fn wait_for(handle: &PaneHandle, ready: impl Fn(&PaneState) -> bool) -> Arc<PaneState> {
     let mut watch = handle.watch();
     let snapshot = tokio::time::timeout(TIMEOUT, async {
         loop {
@@ -45,7 +45,7 @@ async fn wait_for(handle: &PaneHandle, ready: impl Fn(&PaneSnapshot) -> bool) ->
 }
 
 /// Wait until the pane's screen contains `needle`.
-async fn wait_for_text(handle: &PaneHandle, needle: &str) -> Arc<PaneSnapshot> {
+async fn wait_for_text(handle: &PaneHandle, needle: &str) -> Arc<PaneState> {
     wait_for(handle, |snapshot| snapshot.screen.text().contains(needle)).await
 }
 

@@ -53,6 +53,19 @@ impl PaneId {
     pub const fn get(self) -> u64 {
         self.0
     }
+
+    /// The identifier with this number, for a snapshot being restored.
+    ///
+    /// Zero is not an identifier otag hands out, so it is read as the first
+    /// one rather than refused: a snapshot must restore what it can.
+    #[must_use]
+    pub const fn from_number(number: u64) -> Self {
+        if number == 0 {
+            Self::FIRST
+        } else {
+            Self(number)
+        }
+    }
 }
 
 impl fmt::Display for PaneId {

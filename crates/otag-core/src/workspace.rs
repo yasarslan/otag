@@ -44,6 +44,17 @@ macro_rules! counted_id {
             pub const fn get(self) -> u64 {
                 self.0
             }
+
+            /// The identifier with this number, for a snapshot being
+            /// restored. Zero is read as the first one rather than refused.
+            #[must_use]
+            pub const fn from_number(number: u64) -> Self {
+                if number == 0 {
+                    Self::FIRST
+                } else {
+                    Self(number)
+                }
+            }
         }
 
         impl fmt::Display for $name {
@@ -75,6 +86,26 @@ impl Tab {
             title: title.into(),
             layout: Layout::new(pane),
             focus: pane,
+        }
+    }
+
+    /// A tab rebuilt from a snapshot.
+    ///
+    /// The focus is corrected to a pane the layout actually holds, so that a
+    /// snapshot naming a pane that could not be restored still gives a tab
+    /// the user can type into.
+    #[must_use]
+    pub fn from_parts(id: TabId, title: impl Into<String>, layout: Layout, focus: PaneId) -> Self {
+        let focus = if layout.contains(focus) {
+            focus
+        } else {
+            layout.panes().first().copied().unwrap_or(focus)
+        };
+        Self {
+            id,
+            title: title.into(),
+            layout,
+            focus,
         }
     }
 
@@ -206,6 +237,27 @@ impl Workspace {
             cwd,
             tabs: vec![tab],
             active: 0,
+        }
+    }
+
+    /// A workspace rebuilt from a snapshot.
+    ///
+    /// The shown tab is clamped to one that exists.
+    #[must_use]
+    pub fn new_with_tabs(
+        id: WorkspaceId,
+        name: impl Into<String>,
+        cwd: Option<PathBuf>,
+        tabs: Vec<Tab>,
+        active: usize,
+    ) -> Self {
+        let active = active.min(tabs.len().saturating_sub(1));
+        Self {
+            id,
+            name: name.into(),
+            cwd,
+            tabs,
+            active,
         }
     }
 

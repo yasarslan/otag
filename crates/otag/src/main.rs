@@ -6,6 +6,7 @@ mod cli;
 mod client;
 mod daemon;
 mod logging;
+mod persist;
 
 use std::process::ExitCode;
 

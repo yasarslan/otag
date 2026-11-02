@@ -58,12 +58,48 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// A pane's pseudo-terminal could not be created or driven.
+    #[error("{context}: {source}")]
+    Pty {
+        /// What was being attempted.
+        context: String,
+        /// Underlying failure, as reported by the pseudo-terminal layer.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// A request named a pane the daemon does not have.
+    #[error("{}", pane_gone(.id))]
+    PaneGone {
+        /// Pane that was asked for, when the caller named one.
+        id: Option<crate::pane::PaneId>,
+    },
+
     /// A protocol message could not be encoded or decoded.
     #[error("malformed otag protocol message: {0}")]
     Protocol(#[from] serde_json::Error),
 }
 
+fn pane_gone(id: &Option<crate::pane::PaneId>) -> String {
+    match id {
+        Some(id) => format!("pane {id} is no longer running"),
+        None => "that pane is no longer running".to_owned(),
+    }
+}
+
 impl Error {
+    /// Wrap a pseudo-terminal failure with a description of what was being
+    /// attempted.
+    pub fn pty(
+        context: impl Into<String>,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self::Pty {
+            context: context.into(),
+            source: source.into(),
+        }
+    }
+
     /// Wrap an I/O error with a description of what was being attempted.
     pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
         Self::Io {

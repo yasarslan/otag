@@ -31,6 +31,9 @@ pub struct Cli {
 /// Subcommands otag understands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Draw a pane in this terminal, starting the daemon and a pane if
+    /// needed. This is what plain `otag` does.
+    Attach,
     /// Check that the daemon is alive, starting it if it is not.
     Ping,
     /// Run the daemon in the foreground.
@@ -51,9 +54,11 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let socket = cli.socket_path()?;
 
-    match cli.command.unwrap_or(Command::Ping) {
-        // Attaching to the daemon's user interface arrives with the first
-        // pane; until then, bare `otag` does what `otag ping` does.
+    match cli.command.unwrap_or(Command::Attach) {
+        Command::Attach => {
+            logging::init_client(cli.log.as_deref());
+            client_runtime()?.block_on(crate::attach::run(&socket))
+        }
         Command::Ping => {
             logging::init_client(cli.log.as_deref());
             client_runtime()?.block_on(crate::client::ping(&socket))

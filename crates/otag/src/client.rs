@@ -40,13 +40,20 @@ pub async fn kill_server(socket: &Path) -> Result<()> {
     }
 }
 
-/// List workspaces and panes.
+/// List the panes the daemon is running.
 pub async fn ls(socket: &Path) -> Result<()> {
-    // Workspaces and panes arrive with the layout milestones; until then this
-    // command exists so the shape of the interface is fixed.
-    match client::request(socket, &Request::Ping).await {
-        Ok(Response::Pong) => {
-            println!("no workspaces yet");
+    match client::request(socket, &Request::ListPanes).await {
+        Ok(Response::Panes { panes }) => {
+            if panes.is_empty() {
+                println!("no panes yet");
+            }
+            for pane in panes {
+                let state = match &pane.exit {
+                    Some(exit) => exit.to_string(),
+                    None => "running".to_owned(),
+                };
+                println!("{}: {} {}", pane.id, pane.size, state);
+            }
             Ok(())
         }
         Ok(other) => bail!(unexpected(other)),
@@ -72,7 +79,7 @@ pub async fn version(socket: &Path) -> Result<()> {
 }
 
 /// Make sure a daemon is listening on `socket`, spawning one if needed.
-async fn ensure_daemon(socket: &Path) -> Result<()> {
+pub async fn ensure_daemon(socket: &Path) -> Result<()> {
     if client::is_running(socket).await {
         return Ok(());
     }

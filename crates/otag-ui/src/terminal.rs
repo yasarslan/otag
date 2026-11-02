@@ -26,18 +26,27 @@ pub struct Guard {
     restored: bool,
 }
 
+/// Whether otag has a terminal to draw into at all.
+///
+/// Worth checking before any other work: without a terminal there is nothing
+/// to draw into and no keys to read, and starting a daemon for a client that
+/// cannot draw would leave it running for nothing.
+pub fn require() -> io::Result<()> {
+    if io::stdout().is_terminal() {
+        return Ok(());
+    }
+    Err(io::Error::other(
+        "otag needs a terminal to draw into. \
+         Run it from a terminal, not with its output redirected.",
+    ))
+}
+
 impl Guard {
     /// Put the terminal into the state a pane's program needs.
     ///
-    /// Fails when otag is not running in a terminal, because then there is
-    /// nothing to draw into and no keys to read.
+    /// Fails when otag is not running in a terminal.
     pub fn enter() -> io::Result<Self> {
-        if !io::stdout().is_terminal() {
-            return Err(io::Error::other(
-                "otag needs a terminal to draw into. \
-                 Run it from a terminal, not with its output redirected.",
-            ));
-        }
+        require()?;
 
         enable_raw_mode()?;
         let mut stdout = io::stdout();

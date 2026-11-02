@@ -929,12 +929,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "crossterm",
  "otag-core",
+ "otag-ui",
+ "portable-pty",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "vt100",
 ]
 
 [[package]]

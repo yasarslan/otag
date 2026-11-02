@@ -89,16 +89,44 @@ fn text(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn bare_otag_starts_the_daemon_and_prints_pong() {
+fn bare_otag_needs_a_terminal_and_starts_nothing_without_one() {
+    // Bare `otag` draws a pane, which a test has no terminal for. It must
+    // say so instead of hanging, and must not leave a daemon running for a
+    // client that could never draw.
     let sandbox = Sandbox::new();
     assert!(!sandbox.socket().exists());
 
-    let out = succeeds(&mut sandbox.otag());
+    let output = sandbox.otag().output().expect("the otag binary runs");
+    assert!(!output.status.success());
+
+    let message = text(&output.stderr);
+    assert!(message.contains("needs a terminal"), "{message}");
+    assert!(
+        !sandbox.socket().exists(),
+        "no daemon is started for a client that cannot draw"
+    );
+}
+
+#[test]
+fn ping_starts_the_daemon_and_prints_pong() {
+    let sandbox = Sandbox::new();
+    assert!(!sandbox.socket().exists());
+
+    let out = succeeds(sandbox.otag().arg("ping"));
     assert_eq!(out.trim(), "pong");
     assert!(
         sandbox.socket().exists(),
         "the daemon's socket exists after the first run"
     );
+}
+
+#[test]
+fn ls_reports_that_there_are_no_panes_yet() {
+    let sandbox = Sandbox::new();
+    succeeds(sandbox.otag().arg("ping"));
+
+    let listing = succeeds(sandbox.otag().arg("ls"));
+    assert_eq!(listing.trim(), "no panes yet");
 }
 
 #[test]

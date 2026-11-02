@@ -84,6 +84,61 @@ impl Connection {
         self.send(request).await?;
         self.receive().await
     }
+
+    /// Split the connection so that reading and writing can happen at the
+    /// same time.
+    ///
+    /// An attached client needs this: it keeps sending keys while the daemon
+    /// keeps sending frames, and neither direction may wait for the other.
+    #[must_use]
+    pub fn into_split(self) -> (Reader, Writer) {
+        (
+            Reader { lines: self.lines },
+            Writer {
+                write_half: self.write_half,
+            },
+        )
+    }
+}
+
+/// The receiving half of a [`Connection`].
+#[derive(Debug)]
+pub struct Reader {
+    lines: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
+}
+
+impl Reader {
+    /// Read the next message from the daemon.
+    pub async fn receive(&mut self) -> Result<Response> {
+        let line = self
+            .lines
+            .next_line()
+            .await
+            .map_err(|source| Error::io("cannot read from the otag daemon", source))?
+            .ok_or(Error::ConnectionClosed)?;
+        Ok(proto::decode_line(&line)?)
+    }
+}
+
+/// The sending half of a [`Connection`].
+#[derive(Debug)]
+pub struct Writer {
+    write_half: tokio::net::unix::OwnedWriteHalf,
+}
+
+impl Writer {
+    /// Send one request without waiting for an answer.
+    pub async fn send(&mut self, request: &Request) -> Result<()> {
+        let encoded = proto::encode_line(request)?;
+        self.write_half
+            .write_all(encoded.as_bytes())
+            .await
+            .map_err(|source| Error::io("cannot send a request to the otag daemon", source))?;
+        self.write_half
+            .flush()
+            .await
+            .map_err(|source| Error::io("cannot send a request to the otag daemon", source))
+    }
 }
 
 /// Connect, send a single request, and return the response.

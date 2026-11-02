@@ -5,6 +5,7 @@
 //! closing it — or losing it — leaves the pane and its program untouched.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -21,6 +22,17 @@ const PREFIX: KeyEvent = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL
 
 /// How many input events may wait while the client is busy drawing.
 const INPUT_QUEUE: usize = 256;
+
+/// How often the client compares the terminal's size with the pane's.
+///
+/// A terminal announces a resize with a signal, and a signal can go missing:
+/// it is not queued, and a client that is not the foreground process group of
+/// its terminal never receives one at all. A pane left at the wrong size
+/// draws into part of the terminal and tells its program the wrong thing,
+/// which the user can only fix by resizing again. Comparing the sizes on a
+/// slow timer costs one query of the terminal and makes a missed signal heal
+/// itself instead.
+const SIZE_CHECK: Duration = Duration::from_secs(1);
 
 /// Attach to a pane and draw it until the user detaches or it ends.
 pub async fn run(socket: &Path) -> Result<()> {
@@ -87,18 +99,24 @@ async fn attached(socket: &Path) -> Result<Outcome> {
     let input = read_input();
     draw(&mut terminal, &screen)?;
 
-    event_loop(&mut terminal, &mut screen, reader, writer, input).await
+    event_loop(&mut terminal, &mut screen, size, reader, writer, input).await
 }
 
 /// Draw frames, send keys, and keep the pane's size matched to the terminal.
 async fn event_loop(
     terminal: &mut Tui,
     screen: &mut ScreenState,
+    size: PaneSize,
     mut reader: Reader,
     mut writer: Writer,
     mut input: mpsc::Receiver<Event>,
 ) -> Result<Outcome> {
     let mut prefix_held = false;
+    // The size the pane was last told about, so that a resize is sent once
+    // however it was noticed.
+    let mut pane_size = size;
+    let mut size_check = tokio::time::interval(SIZE_CHECK);
+    size_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -144,14 +162,32 @@ async fn event_loop(
                     }
                     Event::Resize(cols, rows) => {
                         let size = PaneSize::new(rows, cols);
-                        writer.send(&Request::Resize { size }).await?;
-                        // The pane answers with a full frame; until it
-                        // arrives, draw what there is at the new size.
-                        draw(terminal, screen)?;
+                        if size != pane_size {
+                            pane_size = size;
+                            writer.send(&Request::Resize { size }).await?;
+                            // The pane answers with a full frame; until it
+                            // arrives, draw what there is at the new size.
+                            draw(terminal, screen)?;
+                        }
                     }
                     // Key releases, focus changes and mouse events are not
                     // forwarded yet.
                     _ => {}
+                }
+            }
+
+            _ = size_check.tick() => {
+                match terminal_size(terminal) {
+                    Ok(size) if size != pane_size => {
+                        tracing::debug!(?pane_size, ?size, "the terminal changed size without saying so");
+                        pane_size = size;
+                        writer.send(&Request::Resize { size }).await?;
+                        draw(terminal, screen)?;
+                    }
+                    Ok(_) => {}
+                    // Without a size there is nothing to compare; the next
+                    // tick tries again rather than ending the session.
+                    Err(error) => tracing::debug!(%error, "cannot read the terminal's size"),
                 }
             }
         }

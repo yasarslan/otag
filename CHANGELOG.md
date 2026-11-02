@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `otag` draws a pane in your terminal: a shell runs inside otag, keys reach
   it, and resizing the terminal resizes the program's view. Full-screen
   programs such as editors and system monitors work.
+- The client also compares the terminal's size with the pane's once a second,
+  so a resize otag was never told about is still picked up.
 - `Ctrl-b d` detaches, leaving the pane and its program running; attaching
   again shows the pane as it was. `Ctrl-b Ctrl-b` sends a literal `Ctrl-b` to
   the pane.

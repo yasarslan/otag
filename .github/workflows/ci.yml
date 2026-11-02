@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -18,7 +19,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Runs on every push and every pull request.
+  # Runs on every pull request and on pushes to main.
   linux:
     name: Linux (stable)
     runs-on: ubuntu-latest
@@ -46,8 +47,8 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-  # Runs on every push and every pull request: the minimum supported Rust
-  # version from `rust-version` in Cargo.toml must still build the workspace.
+  # Runs on every pull request and on pushes to main: the minimum supported
+  # Rust version from `rust-version` in Cargo.toml must still build the workspace.
   msrv:
     name: MSRV build
     runs-on: ubuntu-latest
@@ -74,7 +75,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
 
-  # Runs on every push and every pull request.
+  # Runs on every pull request and on pushes to main.
   deny:
     name: Licenses and advisories
     runs-on: ubuntu-latest

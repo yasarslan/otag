@@ -52,7 +52,15 @@ pub async fn ls(socket: &Path) -> Result<()> {
                     Some(exit) => exit.to_string(),
                     None => "running".to_owned(),
                 };
-                println!("{}: {} {}", pane.id, pane.size, state);
+                let workspace = if pane.workspace.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}: ", pane.workspace)
+                };
+                println!(
+                    "{}: {workspace}{} {} {state}",
+                    pane.id, pane.title, pane.size
+                );
             }
             Ok(())
         }

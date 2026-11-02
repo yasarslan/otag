@@ -7,7 +7,9 @@
 
 use std::io::{self, IsTerminal, Stdout, Write};
 
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -51,8 +53,15 @@ impl Guard {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         // Drawing on the alternate screen keeps whatever the user had in
-        // their terminal: leaving puts it back untouched.
-        crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        // their terminal: leaving puts it back untouched. Mouse events are
+        // captured so that a click can pick out a pane; the ones a pane's
+        // program asked for are passed on to it.
+        crossterm::execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )?;
 
         Ok(Self { restored: false })
     }
@@ -67,7 +76,12 @@ impl Guard {
         self.restored = true;
 
         let mut stdout = io::stdout();
-        let left = crossterm::execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+        let left = crossterm::execute!(
+            stdout,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
         let raw = disable_raw_mode();
         let flushed = stdout.flush();
         left.and(raw).and(flushed)
@@ -92,7 +106,12 @@ pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let mut stdout = io::stdout();
-        let _ = crossterm::execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = crossterm::execute!(
+            stdout,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
         let _ = disable_raw_mode();
         let _ = stdout.flush();
         previous(info);

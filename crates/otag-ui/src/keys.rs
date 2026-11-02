@@ -7,8 +7,11 @@
 //! typing. The daemon sends the current modes with every frame, and this
 //! module applies them, so programs receive what they are waiting for.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use otag_core::frame::InputModes;
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
+use otag_core::frame::{InputModes, MouseEncoding, MouseMode};
 
 /// Start of a paste, when the program asked to be told about pastes.
 const PASTE_START: &[u8] = b"\x1b[200~";
@@ -215,6 +218,120 @@ fn modifier_parameter(modifiers: KeyModifiers) -> Option<u8> {
         held |= 4;
     }
     (held != 0).then_some(held + 1)
+}
+
+/// The bytes a pane's program should receive for a mouse event, if any.
+///
+/// `column` and `row` are counted from zero inside the pane, not in the
+/// client's terminal: a program is told where the mouse is on its own screen.
+///
+/// Returns `None` when the program did not ask for mouse reporting, or did
+/// not ask for events of this kind, in which case the event belongs to otag
+/// itself rather than to the pane.
+#[must_use]
+pub fn encode_mouse(
+    event: MouseEvent,
+    modes: InputModes,
+    column: u16,
+    row: u16,
+) -> Option<Vec<u8>> {
+    if !modes.mouse.is_on() {
+        return None;
+    }
+
+    let (button, release, motion) = match event.kind {
+        MouseEventKind::Down(button) => (mouse_button(button), false, false),
+        MouseEventKind::Up(button) => (mouse_button(button), true, false),
+        MouseEventKind::Drag(button) => (mouse_button(button), false, true),
+        MouseEventKind::Moved => (3, false, true),
+        MouseEventKind::ScrollUp => (64, false, false),
+        MouseEventKind::ScrollDown => (65, false, false),
+        MouseEventKind::ScrollLeft => (66, false, false),
+        MouseEventKind::ScrollRight => (67, false, false),
+    };
+
+    // A program is told only what it asked for. Sending a release to a
+    // program that asked for presses only would be read as something else.
+    let wanted = match modes.mouse {
+        MouseMode::None => false,
+        MouseMode::Press => !release && !motion,
+        MouseMode::PressRelease => !motion,
+        MouseMode::ButtonMotion => !matches!(event.kind, MouseEventKind::Moved),
+        // An unknown mode is a newer one; sending what a terminal sends for
+        // everything is closer to right than sending nothing.
+        MouseMode::AnyMotion | MouseMode::Unknown => true,
+    };
+    if !wanted {
+        return None;
+    }
+
+    let mut code = button;
+    if motion {
+        code += 32;
+    }
+    code += mouse_modifiers(event.modifiers);
+
+    // Coordinates are counted from one in every encoding.
+    let column = column.saturating_add(1);
+    let row = row.saturating_add(1);
+
+    Some(match modes.mouse_encoding {
+        MouseEncoding::Sgr => {
+            let final_byte = if release { 'm' } else { 'M' };
+            format!("\x1b[<{code};{column};{row}{final_byte}").into_bytes()
+        }
+        // The original encoding has one byte per value and no way to say
+        // which button was released, so a release is reported as button 3.
+        MouseEncoding::Default | MouseEncoding::Utf8 | MouseEncoding::Unknown => {
+            let code = if release {
+                3 + mouse_modifiers(event.modifiers)
+            } else {
+                code
+            };
+            vec![
+                0x1b,
+                b'[',
+                b'M',
+                offset_byte(u32::from(code)),
+                offset_byte(u32::from(column)),
+                offset_byte(u32::from(row)),
+            ]
+        }
+    })
+}
+
+/// The number the original mouse encoding uses for a value.
+///
+/// Values start at a printable byte, which leaves room for 223 of them;
+/// anything beyond that cannot be reported, and is clamped rather than
+/// wrapped so that a click far to the right is not reported as one on the
+/// left.
+fn offset_byte(value: u32) -> u8 {
+    u8::try_from(value.saturating_add(32)).unwrap_or(u8::MAX)
+}
+
+/// The number a terminal uses for a mouse button.
+const fn mouse_button(button: MouseButton) -> u8 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+/// What a terminal adds to a button's number for the modifiers held.
+fn mouse_modifiers(modifiers: KeyModifiers) -> u8 {
+    let mut held = 0;
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        held += 4;
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        held += 8;
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        held += 16;
+    }
+    held
 }
 
 /// Put the escape in front that marks a key held with alt.
@@ -561,5 +678,166 @@ mod tests {
         let text = String::from_utf8(pasted).expect("the paste is text");
         assert_eq!(text.matches("\x1b[201~").count(), 1);
         assert!(text.ends_with("\x1b[201~"));
+    }
+
+    fn mouse(kind: MouseEventKind, modifiers: KeyModifiers) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers,
+        }
+    }
+
+    fn mouse_modes(mode: MouseMode, encoding: MouseEncoding) -> InputModes {
+        InputModes {
+            mouse: mode,
+            mouse_encoding: encoding,
+            ..InputModes::default()
+        }
+    }
+
+    #[test]
+    fn a_program_that_did_not_ask_for_the_mouse_is_not_sent_it() {
+        // The event is otag's own then: it is what makes a click focus a
+        // pane instead of reaching the program in it.
+        assert_eq!(
+            encode_mouse(
+                mouse(MouseEventKind::Down(MouseButton::Left), KeyModifiers::NONE),
+                InputModes::default(),
+                0,
+                0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_click_is_reported_in_the_encoding_the_program_asked_for() {
+        let event = mouse(MouseEventKind::Down(MouseButton::Left), KeyModifiers::NONE);
+
+        let sgr = encode_mouse(
+            event,
+            mouse_modes(MouseMode::Press, MouseEncoding::Sgr),
+            4,
+            2,
+        )
+        .expect("a press is reported");
+        assert_eq!(sgr, b"\x1b[<0;5;3M".to_vec(), "counted from one");
+
+        let original = encode_mouse(
+            event,
+            mouse_modes(MouseMode::Press, MouseEncoding::Default),
+            4,
+            2,
+        )
+        .expect("a press is reported");
+        assert_eq!(original, vec![0x1b, b'[', b'M', 32, 32 + 5, 32 + 3]);
+    }
+
+    #[test]
+    fn the_button_and_the_modifiers_are_part_of_the_report() {
+        let modes = mouse_modes(MouseMode::Press, MouseEncoding::Sgr);
+        let right = encode_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Right), KeyModifiers::NONE),
+            modes,
+            0,
+            0,
+        )
+        .expect("a press is reported");
+        assert_eq!(right, b"\x1b[<2;1;1M".to_vec());
+
+        let held = encode_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            modes,
+            0,
+            0,
+        )
+        .expect("a press is reported");
+        assert_eq!(held, b"\x1b[<20;1;1M".to_vec());
+    }
+
+    #[test]
+    fn the_wheel_is_reported_as_the_buttons_terminals_gave_it() {
+        let modes = mouse_modes(MouseMode::Press, MouseEncoding::Sgr);
+        assert_eq!(
+            encode_mouse(
+                mouse(MouseEventKind::ScrollUp, KeyModifiers::NONE),
+                modes,
+                0,
+                0
+            ),
+            Some(b"\x1b[<64;1;1M".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(
+                mouse(MouseEventKind::ScrollDown, KeyModifiers::NONE),
+                modes,
+                0,
+                0
+            ),
+            Some(b"\x1b[<65;1;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn a_program_is_sent_only_the_kinds_of_event_it_asked_for() {
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), KeyModifiers::NONE);
+        let drag = mouse(MouseEventKind::Drag(MouseButton::Left), KeyModifiers::NONE);
+        let moved = mouse(MouseEventKind::Moved, KeyModifiers::NONE);
+
+        for (mode, wanted) in [
+            (MouseMode::Press, [false, false, false]),
+            (MouseMode::PressRelease, [true, false, false]),
+            (MouseMode::ButtonMotion, [true, true, false]),
+            (MouseMode::AnyMotion, [true, true, true]),
+        ] {
+            let modes = mouse_modes(mode, MouseEncoding::Sgr);
+            for (event, wanted) in [release, drag, moved].into_iter().zip(wanted) {
+                assert_eq!(
+                    encode_mouse(event, modes, 0, 0).is_some(),
+                    wanted,
+                    "{mode:?} with {:?}",
+                    event.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_release_is_told_apart_from_a_press() {
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), KeyModifiers::NONE);
+        let modes = mouse_modes(MouseMode::PressRelease, MouseEncoding::Sgr);
+        assert_eq!(
+            encode_mouse(release, modes, 0, 0),
+            Some(b"\x1b[<0;1;1m".to_vec()),
+            "the final byte says it is a release"
+        );
+
+        // The original encoding has no room to say which button it was, so a
+        // release is reported as a button of its own.
+        let modes = mouse_modes(MouseMode::PressRelease, MouseEncoding::Default);
+        assert_eq!(
+            encode_mouse(release, modes, 0, 0),
+            Some(vec![0x1b, b'[', b'M', 32 + 3, 33, 33])
+        );
+    }
+
+    #[test]
+    fn a_position_the_original_encoding_cannot_express_is_clamped() {
+        // Reporting a click far to the right as one on the left would be
+        // worse than reporting it at the edge of what fits.
+        let modes = mouse_modes(MouseMode::Press, MouseEncoding::Default);
+        let bytes = encode_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), KeyModifiers::NONE),
+            modes,
+            u16::MAX,
+            u16::MAX,
+        )
+        .expect("a press is reported");
+        assert_eq!(bytes[3..], [32, u8::MAX, u8::MAX]);
     }
 }

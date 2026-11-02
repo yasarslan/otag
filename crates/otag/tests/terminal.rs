@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use otag_core::layout::{Area, BORDER, Chrome, Direction, Layout};
+use otag_core::pane::{PaneId, PaneSize};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use tempfile::TempDir;
 
@@ -121,43 +123,138 @@ impl Terminal {
         self.screen.lock().expect("the screen").screen().contents()
     }
 
-    /// Everything on the screen, with rows that continue one another joined
-    /// back into the line they came from.
+    /// The size of the terminal otag is drawing into.
+    fn size(&self) -> PaneSize {
+        let screen = self.screen.lock().expect("the screen");
+        let (rows, cols) = screen.screen().size();
+        PaneSize::new(rows.get(), cols.get())
+    }
+
+    /// Where the single pane of a fresh session is drawn, inside its border.
     ///
-    /// A line longer than the pane is split across rows, so searching the
-    /// screen for text that happens to land on a break would fail even
-    /// though the user sees it. A row that fills its last column continues
-    /// on the next one: otag draws each row where it belongs rather than
-    /// letting the terminal wrap, so that, and not the terminal's own wrap
-    /// flag, is what says where a line goes on.
-    fn joined_text(&self) -> String {
+    /// otag's own sidebar and tab bar take part of the terminal, so a test
+    /// that reads what a program drew has to read the part of the screen
+    /// that belongs to the program.
+    fn pane_area(&self) -> Area {
+        Chrome::of(self.size(), true).content.inset(BORDER)
+    }
+
+    /// Where each pane of a session split this way is drawn, inside its
+    /// borders.
+    ///
+    /// Computed with otag's own layout, so the test looks where otag puts
+    /// the panes rather than repeating the arithmetic.
+    fn split_areas(&self, direction: Direction) -> Vec<Area> {
+        let mut layout = Layout::new(PaneId::FIRST);
+        assert!(layout.split(PaneId::FIRST, direction, PaneId::FIRST.next()));
+        layout
+            .areas(Chrome::of(self.size(), true).content)
+            .into_iter()
+            .map(|(_, area)| area.inset(BORDER))
+            .collect()
+    }
+
+    /// The text of one rectangle of the screen, with rows that continue one
+    /// another joined back into the line they came from.
+    ///
+    /// A line longer than a pane is split across rows, so searching for text
+    /// that happens to land on a break would fail even though the user sees
+    /// it. A row that fills its last column continues on the next one: otag
+    /// draws each row where it belongs rather than letting the terminal
+    /// wrap, so that, and not the terminal's own wrap flag, is what says
+    /// where a line goes on.
+    fn region(&self, area: Area) -> String {
         let screen = self.screen.lock().expect("the screen");
         let screen = screen.screen();
-        let (rows, _) = screen.size();
         let mut text = String::new();
-        for row in 0..rows.get() {
-            let contents = row_text(screen, row, false);
-            if screen.row_wrapped(row) || !contents.ends_with(' ') {
-                text.push_str(&contents);
-            } else {
+        for row in area.y..area.bottom() {
+            let contents = cells(screen, row, area.x, area.right());
+            if contents.ends_with(' ') {
                 text.push_str(contents.trim_end());
                 text.push('\n');
+            } else {
+                text.push_str(&contents);
             }
         }
         text
     }
 
-    /// One row of the screen, with trailing blanks removed.
-    fn row(&self, row: u16) -> String {
-        let screen = self.screen.lock().expect("the screen");
-        row_text(screen.screen(), row, true)
+    /// What the program in the session's only pane has drawn.
+    fn pane_text(&self) -> String {
+        self.region(self.pane_area())
+    }
+
+    /// Where otag lists the workspaces.
+    fn sidebar_area(&self) -> Area {
+        Chrome::of(self.size(), true).sidebar
+    }
+
+    /// Where otag draws the tab bar.
+    fn tabs_area(&self) -> Area {
+        Chrome::of(self.size(), true).tabs
+    }
+
+    /// Wait until one rectangle of the screen contains `needle`.
+    fn wait_for_in(&self, area: Area, needle: &str) {
+        self.wait_until(&format!("{needle:?} in {area:?}"), || {
+            self.region(area).contains(needle)
+        });
+    }
+
+    /// Run a command in the focused pane until its output shows up in
+    /// `area`, asking again on a timer.
+    fn type_until_in(&self, area: Area, line: &str, needle: &str) {
+        let deadline = Instant::now() + TIMEOUT;
+        while Instant::now() < deadline {
+            self.type_line(line);
+            let until = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < until {
+                if self.region(area).contains(needle) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        panic!(
+            "{line:?} never showed {needle:?} in {area:?} within {TIMEOUT:?}.\nscreen:\n{}",
+            self.text()
+        );
+    }
+
+    /// Press the prefix key followed by `key`, which is how every otag
+    /// command is given.
+    fn command(&self, key: &str) {
+        self.type_bytes(PREFIX);
+        self.type_bytes(key.as_bytes());
+    }
+
+    /// Whether `needle` is anywhere the user could read it: in the pane, or
+    /// on the screen outside it — otag's own sidebar and tab bar, or plain
+    /// text printed once otag has given the terminal back.
+    fn shows(&self, needle: &str) -> bool {
+        self.pane_text().contains(needle) || self.text().contains(needle)
+    }
+
+    /// Wait until `ready` holds, or fail with the screen in the message.
+    fn wait_until(&self, what: &str, ready: impl Fn() -> bool) {
+        let deadline = Instant::now() + TIMEOUT;
+        while Instant::now() < deadline {
+            if ready() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!(
+            "never saw {what} within {TIMEOUT:?}.\nscreen:\n{}",
+            self.text()
+        );
     }
 
     /// Wait until the screen contains `needle`.
     fn wait_for(&self, needle: &str) {
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
-            if self.joined_text().contains(needle) {
+            if self.shows(needle) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(25));
@@ -190,7 +287,7 @@ impl Terminal {
             self.type_line(line);
             let until = Instant::now() + Duration::from_millis(500);
             while Instant::now() < until {
-                if self.joined_text().contains(needle) {
+                if self.shows(needle) {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(25));
@@ -252,21 +349,14 @@ impl Drop for Terminal {
     }
 }
 
-/// The text of one row, optionally with its trailing blanks removed.
-fn row_text(screen: &vt100::Screen, row: u16, trim: bool) -> String {
-    let (_, cols) = screen.size();
+/// The text of part of one row.
+fn cells(screen: &vt100::Screen, row: u16, from: u16, to: u16) -> String {
     let mut text = String::new();
-    for col in 0..cols.get() {
+    for col in from..to {
         if let Some(cell) = screen.cell(row, col) {
-            if cell.is_wide_continuation() {
-                continue;
-            }
             let contents = cell.contents();
             text.push_str(if contents.is_empty() { " " } else { contents });
         }
-    }
-    if trim {
-        text.truncate(text.trim_end().len());
     }
     text
 }
@@ -391,23 +481,30 @@ fn a_program_is_told_the_terminal_it_is_running_in() {
 }
 
 #[test]
-fn a_program_is_told_the_size_of_the_pane() {
+fn a_program_is_told_the_size_of_the_pane_and_not_of_the_terminal() {
     let terminal = Terminal::start(home(), 24, 80);
     terminal.wait_for_shell();
 
+    // otag's sidebar, tab bar and the pane's border take part of the
+    // terminal; the program is told what is left for it.
+    let pane = terminal.pane_area();
+    assert!(pane.cols < 80 && pane.rows < 24, "{pane:?}");
+
     terminal.type_line("stty size");
-    terminal.wait_for("24 80");
+    terminal.wait_for(&format!("{} {}", pane.rows, pane.cols));
 }
 
 #[test]
 fn resizing_the_terminal_resizes_the_program() {
     let terminal = Terminal::start(home(), 24, 80);
     terminal.wait_for_shell();
+    let before = terminal.pane_area();
     terminal.type_line("stty size");
-    terminal.wait_for("24 80");
+    terminal.wait_for(&format!("{} {}", before.rows, before.cols));
 
     terminal.resize(30, 100);
-    terminal.type_until("stty size", "30 100");
+    let after = terminal.pane_area();
+    terminal.type_until("stty size", &format!("{} {}", after.rows, after.cols));
 }
 
 #[test]
@@ -423,13 +520,15 @@ fn a_full_screen_program_draws_and_leaves_the_screen_as_it_found_it() {
     terminal.type_line("printf '\\033[?1049h\\033[2J\\033[5;10H%s%s' drawn onscreen");
     terminal.wait_for("drawnonscreen");
 
-    // The program addressed row 5, column 10, counting from one. It has to
-    // land exactly there, which it only does if cursor addressing survives
-    // the emulator, the frame and the renderer.
+    // The program addressed row 5, column 10 of its own screen, counting
+    // from one. It has to land exactly there inside the pane, which it only
+    // does if cursor addressing survives the emulator, the frame and the
+    // renderer.
     // The shell may add a marker of its own after output that did not end
     // in a newline, so the row has to start with what the program drew
     // rather than consist only of it.
-    let row = terminal.row(4);
+    let pane = terminal.pane_area();
+    let row = terminal.region(Area::new(pane.x, pane.y + 4, pane.cols, 1));
     assert!(
         row.starts_with(&format!("{}drawnonscreen", " ".repeat(9))),
         "the program drew at the wrong place: {row:?}\nscreen:\n{}",
@@ -465,22 +564,13 @@ fn the_up_arrow_recalls_a_command_from_the_shell_s_history() {
     terminal.type_bytes(b"\x1b[A");
     terminal.type_bytes(b"\r");
 
-    let deadline = Instant::now() + TIMEOUT;
-    while Instant::now() < deadline {
-        if terminal
-            .joined_text()
+    terminal.wait_until("the command run a second time", || {
+        terminal
+            .pane_text()
             .matches("recalledby-the-up-arrow")
             .count()
             >= 2
-        {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    panic!(
-        "the up arrow did not recall the command.\nscreen:\n{}",
-        terminal.text()
-    );
+    });
 }
 
 #[test]
@@ -531,8 +621,10 @@ fn otag_stops_when_the_pane_s_program_ends() {
         "otag stops cleanly when the shell exits"
     );
 
+    // A pane leaves the session when its program ends, so there is nothing
+    // left to list.
     let listing = terminal.run(&["ls"]);
-    assert!(listing.contains("exited"), "{listing}");
+    assert!(listing.contains("no panes"), "{listing}");
 }
 
 #[test]
@@ -547,4 +639,126 @@ fn a_program_that_fails_is_reported_after_the_terminal_is_restored() {
     // otag itself did what it was asked, so it reports success: the
     // program's own status is reported in words instead.
     assert!(terminal.wait_for_exit(), "otag stops cleanly");
+}
+
+#[test]
+fn splitting_a_pane_shows_both_of_them_and_keys_go_to_the_new_one() {
+    let terminal = Terminal::start(home(), 24, 80);
+    terminal.wait_for_shell();
+    terminal.type_line("printf '%s%s\\n' in-the first-pane");
+    terminal.wait_for("in-thefirst-pane");
+
+    terminal.command("%");
+
+    let areas = terminal.split_areas(Direction::LeftRight);
+    let (left, right) = (areas[0], areas[1]);
+    assert!(right.x > left.x, "side by side: {areas:?}");
+
+    // What the first pane printed is still on it, now in half the width.
+    terminal.wait_for_in(left, "in-thefirst-pane");
+
+    // The new pane has the focus, so what is typed reaches it and not the
+    // one it was split from.
+    terminal.type_until_in(
+        right,
+        "printf '%s%s\\n' in-the second-pane",
+        "in-thesecond-pane",
+    );
+    assert!(
+        !terminal.region(left).contains("in-thesecond-pane"),
+        "the first pane received the keys.\nscreen:\n{}",
+        terminal.text()
+    );
+}
+
+#[test]
+fn splitting_the_other_way_stacks_the_panes() {
+    let terminal = Terminal::start(home(), 24, 80);
+    terminal.wait_for_shell();
+    terminal.type_line("printf '%s%s\\n' stacked above");
+    terminal.wait_for("stackedabove");
+
+    terminal.command("\"");
+
+    let areas = terminal.split_areas(Direction::TopBottom);
+    let (top, bottom) = (areas[0], areas[1]);
+    assert!(bottom.y > top.y, "stacked: {areas:?}");
+
+    terminal.wait_for_in(top, "stackedabove");
+    terminal.type_until_in(bottom, "printf '%s%s\\n' stacked below", "stackedbelow");
+}
+
+#[test]
+fn the_focus_moves_back_to_the_pane_that_was_split() {
+    let terminal = Terminal::start(home(), 24, 80);
+    terminal.wait_for_shell();
+    terminal.command("%");
+
+    let areas = terminal.split_areas(Direction::LeftRight);
+    let (left, right) = (areas[0], areas[1]);
+    // The new pane's shell has to be ready before the focus leaves it, so
+    // that nothing typed afterwards is swallowed by a shell still starting.
+    terminal.type_until_in(
+        right,
+        "printf '%s%s\\n' right-pane -ready",
+        "right-pane-ready",
+    );
+
+    terminal.command("h");
+    terminal.type_until_in(
+        left,
+        "printf '%s%s\\n' back-on-the -left",
+        "back-on-the-left",
+    );
+}
+
+#[test]
+fn a_new_tab_is_listed_and_the_first_one_can_be_chosen_again() {
+    let terminal = Terminal::start(home(), 24, 80);
+    terminal.wait_for_shell();
+    terminal.type_line("printf '%s%s\\n' on-the-first tab");
+    terminal.wait_for("on-the-firsttab");
+
+    terminal.command("c");
+
+    // Both tabs are listed, numbered from one, with the new one shown.
+    terminal.wait_for_in(terminal.tabs_area(), "2:shell");
+    let pane = terminal.pane_area();
+    terminal.wait_until("the first tab's output to be hidden", || {
+        !terminal.region(pane).contains("on-the-firsttab")
+    });
+
+    terminal.command("1");
+    terminal.wait_for_in(pane, "on-the-firsttab");
+}
+
+#[test]
+fn a_new_workspace_is_listed_in_the_sidebar() {
+    let terminal = Terminal::start(home(), 24, 80);
+    terminal.wait_for_shell();
+
+    // One workspace, and it is the one being shown.
+    let sidebar = terminal.sidebar_area();
+    terminal.wait_for_in(sidebar, "workspaces");
+    terminal.wait_for_in(sidebar, "\u{25cf}");
+    assert!(!terminal.region(sidebar).contains('\u{25cb}'));
+
+    terminal.command("w");
+
+    // The one that was there is still listed, no longer marked as shown.
+    terminal.wait_for_in(sidebar, "\u{25cb}");
+}
+
+#[test]
+fn hiding_the_sidebar_gives_its_columns_to_the_pane() {
+    let terminal = Terminal::start(home(), 24, 80);
+    terminal.wait_for_shell();
+    let narrow = terminal.pane_area();
+    terminal.type_until("stty size", &format!("{} {}", narrow.rows, narrow.cols));
+
+    terminal.command("z");
+
+    let wide = Chrome::of(terminal.size(), false).content.inset(BORDER);
+    assert!(wide.cols > narrow.cols);
+    terminal.type_until("stty size", &format!("{} {}", wide.rows, wide.cols));
 }

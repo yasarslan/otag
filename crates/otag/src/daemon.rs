@@ -1,11 +1,11 @@
 //! The daemon: owns the socket, the panes, and the programs running on them.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use otag_core::attach;
-use otag_core::pane::{PaneId, PaneSize, PaneSpec};
+use otag_core::pane::{PaneSize, PaneSpec};
 use otag_core::paths::{Dirs, SOCKET_ENV};
 use otag_core::proto::{PaneInfo, Request, Response};
 use otag_core::server::{Handler, Outbox, Server};
@@ -41,8 +41,9 @@ async fn serve(socket: &Path) -> Result<()> {
 
     tracing::info!(version = otag_core::VERSION, "otag daemon started");
     let daemon = Daemon {
-        session: Arc::new(Session::new()),
-        socket: socket.to_path_buf(),
+        // Every pane runs the user's shell, told how to reach otag so that
+        // agent hooks inside it can report back.
+        session: Session::new(PaneSpec::shell().with_env(SOCKET_ENV, socket)),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
     tracing::info!("otag daemon stopped");
@@ -52,14 +53,15 @@ async fn serve(socket: &Path) -> Result<()> {
 /// Everything one daemon owns.
 struct Daemon {
     session: Arc<Session>,
-    socket: PathBuf,
 }
 
 impl Handler for Daemon {
-    /// Answer the requests this milestone supports.
+    /// Answer a client's request.
     ///
     /// `Shutdown` and `Detach` never reach here: the server handles its own
-    /// lifecycle.
+    /// lifecycle. Nothing in here may fail in a way that stops the daemon:
+    /// a request that cannot be carried out is logged and answered, and the
+    /// session keeps running.
     async fn handle(&self, request: Request, outbox: &Outbox) -> Option<Response> {
         match request {
             Request::Ping => Some(Response::Pong),
@@ -74,15 +76,15 @@ impl Handler for Daemon {
                     .map(|pane| PaneInfo {
                         id: pane.id,
                         size: pane.size,
+                        workspace: pane.workspace,
+                        title: pane.title,
                         exit: pane.exit,
                     })
                     .collect(),
             }),
             Request::Attach { size, cwd } => Some(self.attach(outbox, size, cwd.as_deref()).await),
             Request::Input { bytes } => {
-                if let Some(pane) = self.attached_pane()
-                    && let Err(error) = attach::input(&self.session, pane, bytes).await
-                {
+                if let Err(error) = self.session.input(bytes).await {
                     // A key pressed as a program exits has nowhere to go.
                     // The client learns the pane ended from its own stream.
                     tracing::debug!(%error, "cannot deliver input to a pane");
@@ -90,11 +92,43 @@ impl Handler for Daemon {
                 None
             }
             Request::Resize { size } => {
-                if let Some(pane) = self.attached_pane()
-                    && let Err(error) = attach::resize(&self.session, pane, size).await
-                {
-                    tracing::debug!(%error, "cannot resize a pane");
-                }
+                self.session.resize(size).await;
+                None
+            }
+            Request::Split { direction } => {
+                self.report("split a pane", self.session.split(direction).await)
+            }
+            Request::NewTab => self.report("add a tab", self.session.new_tab().await),
+            Request::SelectTab { index } => {
+                self.session.select_tab(index).await;
+                None
+            }
+            Request::NewWorkspace { cwd } => self.report(
+                "add a workspace",
+                self.session.new_workspace(cwd.as_deref()).await,
+            ),
+            Request::SelectWorkspace { index } => {
+                self.session.select_workspace(index).await;
+                None
+            }
+            Request::FocusPane { pane } => {
+                self.session.focus_pane(pane).await;
+                None
+            }
+            Request::FocusSide { side } => {
+                self.session.focus_side(side).await;
+                None
+            }
+            Request::FocusNext => {
+                self.session.focus_next().await;
+                None
+            }
+            Request::ResizePane { side, cells } => {
+                self.session.resize_pane(side, cells).await;
+                None
+            }
+            Request::ToggleSidebar => {
+                self.session.toggle_sidebar().await;
                 None
             }
             Request::Shutdown | Request::Detach | Request::Unknown => Some(Response::error(
@@ -105,36 +139,29 @@ impl Handler for Daemon {
 }
 
 impl Daemon {
-    /// Attach a client to a pane, starting one if there is none.
+    /// Attach a client, starting a workspace and a pane if there is none.
     async fn attach(&self, outbox: &Outbox, size: PaneSize, cwd: Option<&Path>) -> Response {
-        let spec = self.pane_spec(cwd);
-        match attach::start(&self.session, outbox, &spec, size).await {
+        match attach::start(&self.session, outbox, size, cwd).await {
             Ok(response) => response,
             Err(error) => {
-                tracing::warn!(%error, "cannot attach a client to a pane");
+                tracing::warn!(%error, "cannot attach a client to the session");
                 Response::error(error.to_string())
             }
         }
     }
 
-    /// What a new pane runs: the user's shell, told how to reach otag.
-    fn pane_spec(&self, cwd: Option<&Path>) -> PaneSpec {
-        PaneSpec::shell()
-            .with_cwd_opt(cwd)
-            .with_env(SOCKET_ENV, &self.socket)
-    }
-
-    /// The pane a client's keys belong to.
+    /// Turn a failed structural change into an answer the user can act on.
     ///
-    /// This milestone runs one pane, so there is nothing to choose between.
-    /// Once a layout can hold several, the pane a client is attached to
-    /// becomes part of the connection instead of being looked up here.
-    fn attached_pane(&self) -> Option<PaneId> {
-        self.session
-            .summaries()
-            .into_iter()
-            .find(|pane| pane.exit.is_none())
-            .map(|pane| pane.id)
+    /// A change that worked needs no answer: every attached client is sent
+    /// the new view anyway.
+    fn report(&self, what: &str, result: otag_core::Result<()>) -> Option<Response> {
+        match result {
+            Ok(()) => None,
+            Err(error) => {
+                tracing::warn!(%error, what, "cannot carry out a request");
+                Some(Response::error(format!("cannot {what}: {error}")))
+            }
+        }
     }
 }
 

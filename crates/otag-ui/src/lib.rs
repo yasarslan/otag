@@ -7,4 +7,6 @@
 
 pub mod keys;
 pub mod render;
+pub mod session;
 pub mod terminal;
+pub mod theme;

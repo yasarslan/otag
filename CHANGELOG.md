@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Panes, tabs and workspaces. `Ctrl-b %` splits the focused pane left and
+  right, `Ctrl-b "` splits it top and bottom, and a pane leaves the layout
+  when its program ends, giving its space back to its neighbour.
+- `Ctrl-b c` adds a tab and `Ctrl-b n`, `Ctrl-b p` and `Ctrl-b 1`-`9` choose
+  one; `Ctrl-b w` adds a workspace for the directory otag was started in and
+  `Ctrl-b (`, `Ctrl-b )` step between them.
+- `Ctrl-b h`/`j`/`k`/`l` or the arrow keys move the focus to the pane on that
+  side, `Ctrl-b o` to the next one, and `Ctrl-b H`/`J`/`K`/`L` move the
+  focused pane's edges.
+- A sidebar listing the workspaces and a bar listing the open tabs, both of
+  which a click can choose from, as can a click on a pane. `Ctrl-b z` hides
+  the sidebar and gives its columns to the panes.
+- Mouse events reach the program in the focused pane when it has asked for
+  them, so scrolling and clicking inside a full-screen program still work.
+- A calm theme: muted colours, and the focused pane marked by the colour of
+  its border rather than by anything bright.
+- `otag ls` now also reports each pane's workspace and what it is running.
 - `otag` draws a pane in your terminal: a shell runs inside otag, keys reach
   it, and resizing the terminal resizes the program's view. Full-screen
   programs such as editors and system monitors work.

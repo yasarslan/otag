@@ -8,6 +8,7 @@ pub mod attach;
 pub mod client;
 pub mod error;
 pub mod frame;
+pub mod layout;
 pub mod pane;
 pub mod paths;
 pub mod proto;
@@ -15,6 +16,7 @@ pub mod pty;
 pub mod screen;
 pub mod server;
 pub mod session;
+pub mod workspace;
 
 pub use error::{Error, Result};
 

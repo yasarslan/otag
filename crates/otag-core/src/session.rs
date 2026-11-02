@@ -1,4 +1,4 @@
-//! The panes a daemon is running.
+//! Everything one daemon is running: workspaces, tabs, panes.
 //!
 //! Each pane owns a task that reads its pseudo-terminal, feeds the emulator
 //! and publishes the resulting screen. Clients never touch a pane directly:
@@ -10,17 +10,26 @@
 //! newest screen. A client that cannot keep up therefore skips intermediate
 //! screens instead of queueing them, and still receives a correct picture:
 //! every client diffs against the last screen it was actually sent.
+//!
+//! Above the panes sits the structure a client draws: workspaces, their tabs,
+//! and each tab's layout. A change to any of it bumps a generation counter
+//! that clients watch, which is how they learn to ask for a new view instead
+//! of being sent one they then have to reconcile.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 
 use crate::frame::ScreenState;
+use crate::layout::{self, Area, BORDER, Chrome, Direction, Side};
 use crate::pane::{PaneExit, PaneId, PaneSize, PaneSpec};
+use crate::proto::{PaneView, SessionView, TabView, WorkspaceView};
 use crate::pty::{Pty, PtyEvent};
 use crate::screen::Screen;
+use crate::workspace::{Tab, TabId, Workspace, WorkspaceId};
 use crate::{Error, Result};
 
 /// Shortest time between two published screens.
@@ -33,6 +42,9 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// How many commands may wait for a pane before a sender has to wait.
 const COMMAND_QUEUE: usize = 64;
 
+/// What a tab is called before anything better is known about it.
+const SHELL_TITLE: &str = "shell";
+
 /// What a client can ask a pane to do.
 #[derive(Debug)]
 enum PaneCommand {
@@ -44,7 +56,7 @@ enum PaneCommand {
 
 /// What a pane publishes to everyone watching it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaneView {
+pub struct PaneSnapshot {
     /// The pane's screen.
     pub screen: ScreenState,
     /// How the program ended, once it has.
@@ -56,7 +68,7 @@ pub struct PaneView {
 pub struct PaneHandle {
     id: PaneId,
     commands: mpsc::Sender<PaneCommand>,
-    view: watch::Receiver<Arc<PaneView>>,
+    view: watch::Receiver<Arc<PaneSnapshot>>,
 }
 
 impl PaneHandle {
@@ -68,7 +80,7 @@ impl PaneHandle {
 
     /// The pane's current screen and exit state.
     #[must_use]
-    pub fn view(&self) -> Arc<PaneView> {
+    pub fn snapshot(&self) -> Arc<PaneSnapshot> {
         Arc::clone(&self.view.borrow())
     }
 
@@ -80,7 +92,7 @@ impl PaneHandle {
 
     /// A receiver that wakes whenever the pane publishes a new screen.
     #[must_use]
-    pub fn watch(&self) -> watch::Receiver<Arc<PaneView>> {
+    pub fn watch(&self) -> watch::Receiver<Arc<PaneSnapshot>> {
         self.view.clone()
     }
 
@@ -109,62 +121,419 @@ pub struct PaneSummary {
     pub id: PaneId,
     /// Its current size.
     pub size: PaneSize,
+    /// Name of the workspace it belongs to.
+    pub workspace: String,
+    /// What it is running.
+    pub title: String,
     /// How its program ended, if it has.
     pub exit: Option<PaneExit>,
 }
 
-/// Every pane one daemon is running.
-///
-/// This milestone runs a single pane; the type is already a collection so
-/// that splits and workspaces do not change how clients reach a pane.
-#[derive(Debug, Default)]
-pub struct Session {
-    state: Mutex<SessionState>,
+/// One running pane, with what the interface says about it.
+#[derive(Debug)]
+struct Pane {
+    handle: PaneHandle,
+    title: String,
+    workspace: WorkspaceId,
 }
 
-#[derive(Debug, Default)]
-struct SessionState {
-    panes: BTreeMap<PaneId, PaneHandle>,
-    next_id: Option<PaneId>,
+/// Everything one daemon owns.
+#[derive(Debug)]
+pub struct Session {
+    /// What every new pane runs, and the environment it runs in.
+    template: PaneSpec,
+    /// Bumped on every structural change, so clients know to ask for a view.
+    changes: watch::Sender<u64>,
+    state: Mutex<State>,
+}
+
+#[derive(Debug)]
+struct State {
+    workspaces: Vec<Workspace>,
+    active: usize,
+    panes: BTreeMap<PaneId, Pane>,
+    next_pane: PaneId,
+    next_workspace: WorkspaceId,
+    next_tab: TabId,
+    /// Size of the terminal the panes are laid out for.
+    size: PaneSize,
+    /// Whether the sidebar takes columns from the panes.
+    sidebar: bool,
+    generation: u64,
+    /// How the pane that ended most recently ended, for the client's last
+    /// word on a session that is over.
+    last_exit: Option<PaneExit>,
+}
+
+impl State {
+    /// Where otag's furniture goes and what is left for panes.
+    fn chrome(&self) -> Chrome {
+        Chrome::of(self.size, self.sidebar)
+    }
+
+    /// The workspace that is shown.
+    fn workspace(&self) -> Option<&Workspace> {
+        self.workspaces.get(self.active)
+    }
+
+    /// The workspace that is shown, to change.
+    fn workspace_mut(&mut self) -> Option<&mut Workspace> {
+        self.workspaces.get_mut(self.active)
+    }
+
+    /// The tab that is shown.
+    fn tab(&self) -> Option<&Tab> {
+        self.workspace().and_then(Workspace::tab)
+    }
+
+    /// The tab that is shown, to change.
+    fn tab_mut(&mut self) -> Option<&mut Tab> {
+        self.workspace_mut().and_then(Workspace::tab_mut)
+    }
+
+    /// Where the visible panes are, border included.
+    fn areas(&self) -> Vec<(PaneId, Area)> {
+        let content = self.chrome().content;
+        self.tab()
+            .map(|tab| tab.layout().areas(content))
+            .unwrap_or_default()
+    }
+
+    /// The pane the user is typing into.
+    fn focus(&self) -> Option<PaneId> {
+        self.tab().map(Tab::focus)
+    }
+
+    /// Panes whose program is being told the wrong size, and the size they
+    /// should be told instead.
+    ///
+    /// Only the visible panes are resized: a pane in another tab keeps the
+    /// size it was drawn at until it is shown again, which is also what its
+    /// program is expecting.
+    fn pending_resizes(&self) -> Vec<(PaneHandle, PaneSize)> {
+        self.areas()
+            .into_iter()
+            .filter_map(|(id, area)| {
+                let pane = self.panes.get(&id)?;
+                let size = area.inset(BORDER).size();
+                (pane.handle.snapshot().screen.size() != size).then(|| (pane.handle.clone(), size))
+            })
+            .collect()
+    }
+
+    /// Names of the workspaces, for giving a new one a name of its own.
+    fn names(&self) -> Vec<String> {
+        self.workspaces
+            .iter()
+            .map(|workspace| workspace.name().to_owned())
+            .collect()
+    }
 }
 
 impl Session {
-    /// A daemon with no panes.
+    /// A daemon with no panes, whose panes will run `template`.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(template: PaneSpec) -> Arc<Self> {
+        Arc::new(Self {
+            template,
+            changes: watch::Sender::new(0),
+            state: Mutex::new(State {
+                workspaces: Vec::new(),
+                active: 0,
+                panes: BTreeMap::new(),
+                next_pane: PaneId::FIRST,
+                next_workspace: WorkspaceId::FIRST,
+                next_tab: TabId::FIRST,
+                size: PaneSize::DEFAULT,
+                sidebar: true,
+                generation: 0,
+                last_exit: None,
+            }),
+        })
     }
 
-    /// The pane a client should attach to, starting one if there is none.
-    ///
-    /// A pane whose program has ended is replaced, so that attaching after a
-    /// shell exited gives a working pane rather than a dead one.
-    pub fn attach_pane(&self, spec: &PaneSpec, size: PaneSize) -> Result<PaneHandle> {
-        let Ok(mut state) = self.state.lock() else {
-            return Err(Error::PaneGone { id: None });
-        };
+    /// A receiver that wakes on every structural change.
+    #[must_use]
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
 
-        if let Some(handle) = state
-            .panes
-            .values()
-            .find(|handle| !handle.is_finished())
-            .cloned()
+    /// Attach a client: lay the session out for its terminal, starting a
+    /// workspace with one pane if the daemon has none.
+    pub async fn attach(self: &Arc<Self>, size: PaneSize, cwd: Option<&Path>) -> Result<()> {
         {
-            return Ok(handle);
+            let mut state = self.lock()?;
+            state.size = size;
+            if state.workspaces.is_empty() {
+                self.start_workspace(&mut state, cwd)?;
+            }
         }
-        state.panes.retain(|_, handle| !handle.is_finished());
+        // Always committed, even when nothing was started: the client's
+        // terminal decides the sizes, and it may differ from the last one's.
+        self.commit(true).await;
+        Ok(())
+    }
 
-        let id = state.next_id.unwrap_or(PaneId::FIRST);
-        let handle = spawn_pane(id, spec, size)?;
-        state.next_id = Some(id.next());
-        state.panes.insert(id, handle.clone());
-        Ok(handle)
+    /// Lay the session out for a terminal of a new size.
+    pub async fn resize(self: &Arc<Self>, size: PaneSize) {
+        let changed = match self.lock() {
+            Ok(mut state) => {
+                let changed = state.size != size;
+                state.size = size;
+                changed
+            }
+            Err(_) => false,
+        };
+        self.commit(changed).await;
+    }
+
+    /// Show or hide the sidebar, giving its columns to the panes or taking
+    /// them back.
+    pub async fn toggle_sidebar(self: &Arc<Self>) {
+        if let Ok(mut state) = self.lock() {
+            state.sidebar = !state.sidebar;
+        }
+        self.commit(true).await;
+    }
+
+    /// Divide the focused pane and start a pane in the new half.
+    pub async fn split(self: &Arc<Self>, direction: Direction) -> Result<()> {
+        {
+            let mut state = self.lock()?;
+            let Some(workspace) = state.workspace().map(|workspace| workspace.id()) else {
+                return Err(Error::PaneGone { id: None });
+            };
+            let cwd = state
+                .workspace()
+                .and_then(|workspace| workspace.cwd().map(Path::to_path_buf));
+
+            let pane = self.start_pane(&mut state, workspace, cwd.as_deref())?;
+            let placed = state
+                .tab_mut()
+                .is_some_and(|tab| tab.split(direction, pane));
+            if !placed {
+                // The focused pane went missing between the split being
+                // asked for and being carried out, so the new pane has
+                // nowhere to go. Dropping its handle ends its program.
+                state.panes.remove(&pane);
+                return Err(Error::NoPanes);
+            }
+        }
+        self.commit(true).await;
+        Ok(())
+    }
+
+    /// Add a tab with one pane to the active workspace, and show it.
+    pub async fn new_tab(self: &Arc<Self>) -> Result<()> {
+        {
+            let mut state = self.lock()?;
+            let Some(workspace) = state.workspace().map(|workspace| workspace.id()) else {
+                return Err(Error::PaneGone { id: None });
+            };
+            let cwd = state
+                .workspace()
+                .and_then(|workspace| workspace.cwd().map(Path::to_path_buf));
+
+            let pane = self.start_pane(&mut state, workspace, cwd.as_deref())?;
+            let id = state.next_tab;
+            state.next_tab = id.next();
+            let tab = Tab::new(id, SHELL_TITLE, pane);
+            if let Some(workspace) = state.workspace_mut() {
+                workspace.add_tab(tab);
+            }
+        }
+        self.commit(true).await;
+        Ok(())
+    }
+
+    /// Add a workspace with one tab and one pane, and show it.
+    pub async fn new_workspace(self: &Arc<Self>, cwd: Option<&Path>) -> Result<()> {
+        {
+            let mut state = self.lock()?;
+            self.start_workspace(&mut state, cwd)?;
+        }
+        self.commit(true).await;
+        Ok(())
+    }
+
+    /// Show the tab at `index` of the active workspace.
+    pub async fn select_tab(self: &Arc<Self>, index: usize) {
+        let changed = self
+            .lock()
+            .ok()
+            .and_then(|mut state| {
+                state
+                    .workspace_mut()
+                    .map(|workspace| workspace.select(index))
+            })
+            .unwrap_or(false);
+        self.commit(changed).await;
+    }
+
+    /// Show the workspace at `index`.
+    pub async fn select_workspace(self: &Arc<Self>, index: usize) {
+        let changed = match self.lock() {
+            Ok(mut state) if index < state.workspaces.len() && index != state.active => {
+                state.active = index;
+                true
+            }
+            _ => false,
+        };
+        self.commit(changed).await;
+    }
+
+    /// Type into `pane` from now on, if the active tab holds it.
+    pub async fn focus_pane(self: &Arc<Self>, pane: PaneId) {
+        let changed = self
+            .lock()
+            .ok()
+            .and_then(|mut state| state.tab_mut().map(|tab| tab.focus_pane(pane)))
+            .unwrap_or(false);
+        // Nothing moves, but every client has to redraw the borders.
+        self.commit(changed).await;
+    }
+
+    /// Focus the pane on `side` of the focused one.
+    pub async fn focus_side(self: &Arc<Self>, side: Side) {
+        let changed = match self.lock() {
+            Ok(mut state) => {
+                let content = state.chrome().content;
+                state
+                    .tab_mut()
+                    .is_some_and(|tab| tab.focus_side(side, content))
+            }
+            Err(_) => false,
+        };
+        self.commit(changed).await;
+    }
+
+    /// Focus the next pane of the active tab, wrapping around.
+    pub async fn focus_next(self: &Arc<Self>) {
+        if let Ok(mut state) = self.lock()
+            && let Some(tab) = state.tab_mut()
+        {
+            tab.focus_next();
+        }
+        self.commit(true).await;
+    }
+
+    /// Move the focused pane's edge on `side` outwards by `cells` cells.
+    pub async fn resize_pane(self: &Arc<Self>, side: Side, cells: u16) {
+        let changed = match self.lock() {
+            Ok(mut state) => {
+                let content = state.chrome().content;
+                let along = match side.axis() {
+                    Direction::TopBottom => content.rows,
+                    Direction::LeftRight | Direction::Unknown => content.cols,
+                };
+                let amount = layout::weight_per_cell(along).saturating_mul(u32::from(cells.max(1)));
+                state.tab_mut().is_some_and(|tab| tab.resize(side, amount))
+            }
+            Err(_) => false,
+        };
+        self.commit(changed).await;
+    }
+
+    /// Write bytes to the focused pane's program.
+    pub async fn input(&self, bytes: Vec<u8>) -> Result<()> {
+        let pane = self.focused_pane().ok_or(Error::NoPanes)?;
+        pane.input(bytes).await
+    }
+
+    /// Write bytes to one pane's program.
+    pub async fn input_to(&self, id: PaneId, bytes: Vec<u8>) -> Result<()> {
+        self.pane(id)
+            .ok_or(Error::PaneGone { id: Some(id) })?
+            .input(bytes)
+            .await
     }
 
     /// The pane with this identifier, if the daemon has it.
     #[must_use]
     pub fn pane(&self, id: PaneId) -> Option<PaneHandle> {
-        self.state.lock().ok()?.panes.get(&id).cloned()
+        let state = self.state.lock().ok()?;
+        state.panes.get(&id).map(|pane| pane.handle.clone())
+    }
+
+    /// The pane the user is typing into.
+    #[must_use]
+    pub fn focused_pane(&self) -> Option<PaneHandle> {
+        let state = self.state.lock().ok()?;
+        let focus = state.focus()?;
+        state.panes.get(&focus).map(|pane| pane.handle.clone())
+    }
+
+    /// The panes of the active tab, in the order they are drawn.
+    #[must_use]
+    pub fn visible_panes(&self) -> Vec<PaneId> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+        state.areas().into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Everything a client has to draw.
+    #[must_use]
+    pub fn view(&self) -> SessionView {
+        let Ok(state) = self.state.lock() else {
+            // A poisoned lock means a holder panicked. An empty view says
+            // there is nothing to draw, which is better than a panic in
+            // every client that asks.
+            return SessionView::default();
+        };
+
+        let chrome = state.chrome();
+        let panes = state
+            .areas()
+            .into_iter()
+            .filter_map(|(id, area)| {
+                let pane = state.panes.get(&id)?;
+                let snapshot = pane.handle.snapshot();
+                Some(PaneView {
+                    id,
+                    area,
+                    title: pane.title.clone(),
+                    frame: Some(snapshot.screen.to_frame()),
+                    exit: snapshot.exit.clone(),
+                })
+            })
+            .collect();
+
+        SessionView {
+            generation: state.generation,
+            size: state.size,
+            sidebar: chrome.sidebar,
+            tabs_area: chrome.tabs,
+            content: chrome.content,
+            workspaces: state
+                .workspaces
+                .iter()
+                .map(|workspace| WorkspaceView {
+                    id: workspace.id(),
+                    name: workspace.name().to_owned(),
+                    tabs: workspace.tabs().len(),
+                    panes: workspace.panes().len(),
+                })
+                .collect(),
+            active_workspace: state.active,
+            tabs: state
+                .workspace()
+                .map(|workspace| {
+                    workspace
+                        .tabs()
+                        .iter()
+                        .map(|tab| TabView {
+                            id: tab.id(),
+                            title: tab.title().to_owned(),
+                            panes: tab.panes().len(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            active_tab: state.workspace().map_or(0, Workspace::active),
+            panes,
+            focus: state.focus(),
+        }
     }
 
     /// Every pane, in creation order.
@@ -176,12 +545,18 @@ impl Session {
         state
             .panes
             .values()
-            .map(|handle| {
-                let view = handle.view();
+            .map(|pane| {
+                let snapshot = pane.handle.snapshot();
                 PaneSummary {
-                    id: handle.id(),
-                    size: view.screen.size(),
-                    exit: view.exit.clone(),
+                    id: pane.handle.id(),
+                    size: snapshot.screen.size(),
+                    workspace: state
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.id() == pane.workspace)
+                        .map_or_else(String::new, |workspace| workspace.name().to_owned()),
+                    title: pane.title.clone(),
+                    exit: snapshot.exit.clone(),
                 }
             })
             .collect()
@@ -192,6 +567,138 @@ impl Session {
     pub fn is_empty(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.panes.is_empty())
     }
+
+    /// How the pane that ended most recently ended.
+    #[must_use]
+    pub fn last_exit(&self) -> Option<PaneExit> {
+        self.state.lock().ok()?.last_exit.clone()
+    }
+
+    /// Take a pane out of the session, dropping a tab or a workspace that is
+    /// left with nothing in it.
+    async fn close_pane(self: &Arc<Self>, id: PaneId, exit: Option<PaneExit>) {
+        {
+            let Ok(mut state) = self.lock() else { return };
+            if state.panes.remove(&id).is_none() {
+                return;
+            }
+            if exit.is_some() {
+                state.last_exit = exit;
+            }
+            state
+                .workspaces
+                .retain_mut(|workspace| workspace.close_pane(id));
+            state.active = state.active.min(state.workspaces.len().saturating_sub(1));
+        }
+        self.commit(true).await;
+    }
+
+    /// Start a workspace with one tab and one pane, and show it.
+    fn start_workspace(self: &Arc<Self>, state: &mut State, cwd: Option<&Path>) -> Result<()> {
+        let id = state.next_workspace;
+        state.next_workspace = id.next();
+        let name = crate::workspace::unique_name(&crate::workspace::name_for(cwd), &state.names());
+
+        let pane = self.start_pane(state, id, cwd)?;
+        let tab_id = state.next_tab;
+        state.next_tab = tab_id.next();
+
+        let workspace = Workspace::new(
+            id,
+            name,
+            cwd.map(Path::to_path_buf),
+            Tab::new(tab_id, SHELL_TITLE, pane),
+        );
+        state.workspaces.push(workspace);
+        state.active = state.workspaces.len().saturating_sub(1);
+        Ok(())
+    }
+
+    /// Start a pane, and the task that notices when its program ends.
+    fn start_pane(
+        self: &Arc<Self>,
+        state: &mut State,
+        workspace: WorkspaceId,
+        cwd: Option<&Path>,
+    ) -> Result<PaneId> {
+        let id = state.next_pane;
+        let spec = self.template.clone().with_cwd_opt(cwd);
+        // A pane is started at the size of the whole content area and told
+        // its real size as soon as the layout is known, which is one resize
+        // before the program has drawn anything.
+        let size = state.chrome().content.inset(BORDER).size();
+        let handle = spawn_pane(id, &spec, size)?;
+        self.reap(handle.clone());
+
+        state.next_pane = id.next();
+        state.panes.insert(
+            id,
+            Pane {
+                handle,
+                title: SHELL_TITLE.to_owned(),
+                workspace,
+            },
+        );
+        Ok(id)
+    }
+
+    /// The state, as an error rather than a panic when a holder panicked.
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>> {
+        self.state.lock().map_err(|_| Error::PaneGone { id: None })
+    }
+
+    /// Tell the panes their new sizes, then tell the clients to redraw.
+    ///
+    /// Sizes go out first so that a client drawing the new view is drawing
+    /// panes that have already been told how large they are.
+    async fn commit(self: &Arc<Self>, changed: bool) {
+        if !changed {
+            return;
+        }
+
+        let resizes = self
+            .lock()
+            .map(|state| state.pending_resizes())
+            .unwrap_or_default();
+        for (handle, size) in resizes {
+            if let Err(error) = handle.resize(size).await {
+                tracing::debug!(%error, pane = %handle.id(), "cannot resize a pane");
+            }
+        }
+
+        let generation = match self.lock() {
+            Ok(mut state) => {
+                state.generation = state.generation.saturating_add(1);
+                state.generation
+            }
+            Err(_) => return,
+        };
+        // Watching clients learn there is a new view to ask for. A send that
+        // reaches nobody is not a problem: the view stays available.
+        self.changes.send_replace(generation);
+    }
+
+    /// Watch a pane and take it out of the session when its program ends.
+    fn reap(self: &Arc<Self>, handle: PaneHandle) {
+        let session = Arc::clone(self);
+        let mut updates = handle.watch();
+        tokio::spawn(async move {
+            let exit = loop {
+                // The borrow is dropped before the await: holding it across
+                // one would block the pane's own task.
+                let exit = updates.borrow_and_update().exit.clone();
+                if let Some(exit) = exit {
+                    break Some(exit);
+                }
+                if updates.changed().await.is_err() {
+                    // The pane's task is gone without having reported an
+                    // exit, which happens while the daemon shuts down.
+                    break None;
+                }
+            };
+            session.close_pane(handle.id(), exit).await;
+        });
+    }
 }
 
 /// Start a pane and the task driving it.
@@ -199,7 +706,7 @@ fn spawn_pane(id: PaneId, spec: &PaneSpec, size: PaneSize) -> Result<PaneHandle>
     let (pty, events) = Pty::spawn(id, spec, size)?;
     let screen = Screen::new(size);
 
-    let (view_tx, view_rx) = watch::channel(Arc::new(PaneView {
+    let (view_tx, view_rx) = watch::channel(Arc::new(PaneSnapshot {
         screen: screen.state(),
         exit: None,
     }));
@@ -221,7 +728,7 @@ async fn run_pane(
     mut screen: Screen,
     mut events: mpsc::Receiver<PtyEvent>,
     mut commands: mpsc::Receiver<PaneCommand>,
-    view: watch::Sender<Arc<PaneView>>,
+    view: watch::Sender<Arc<PaneSnapshot>>,
 ) {
     let mut ticker = tokio::time::interval(FRAME_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -282,8 +789,8 @@ async fn run_pane(
 }
 
 /// Publish the current screen, but only when it actually changed.
-fn publish(view: &watch::Sender<Arc<PaneView>>, screen: &Screen, exit: Option<PaneExit>) {
-    let next = PaneView {
+fn publish(view: &watch::Sender<Arc<PaneSnapshot>>, screen: &Screen, exit: Option<PaneExit>) {
+    let next = PaneSnapshot {
         screen: screen.state(),
         exit,
     };

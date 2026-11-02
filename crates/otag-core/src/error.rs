@@ -75,6 +75,10 @@ pub enum Error {
         id: Option<crate::pane::PaneId>,
     },
 
+    /// A request needed a pane to work on and the session has none.
+    #[error("the otag session has no panes. Run `otag` to start one.")]
+    NoPanes,
+
     /// A protocol message could not be encoded or decoded.
     #[error("malformed otag protocol message: {0}")]
     Protocol(#[from] serde_json::Error),

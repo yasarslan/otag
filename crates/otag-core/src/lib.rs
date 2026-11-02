@@ -4,6 +4,7 @@
 //! Agent-specific knowledge never belongs here; it lives in `otag-agents`.
 #![forbid(unsafe_code)]
 
+pub mod attach;
 pub mod client;
 pub mod error;
 pub mod frame;

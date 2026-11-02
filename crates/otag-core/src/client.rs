@@ -49,8 +49,11 @@ impl Connection {
         })
     }
 
-    /// Send one request and read its response.
-    pub async fn request(&mut self, request: &Request) -> Result<Response> {
+    /// Send one request without waiting for an answer.
+    ///
+    /// Used for the requests the daemon does not answer, such as a key press
+    /// on an attached pane.
+    pub async fn send(&mut self, request: &Request) -> Result<()> {
         let encoded = proto::encode_line(request)?;
         self.write_half
             .write_all(encoded.as_bytes())
@@ -59,15 +62,27 @@ impl Connection {
         self.write_half
             .flush()
             .await
-            .map_err(|source| Error::io("cannot send a request to the otag daemon", source))?;
+            .map_err(|source| Error::io("cannot send a request to the otag daemon", source))
+    }
 
+    /// Read the next message from the daemon.
+    ///
+    /// Once attached, these arrive on their own: the daemon sends a frame
+    /// whenever the pane's screen changes.
+    pub async fn receive(&mut self) -> Result<Response> {
         let line = self
             .lines
             .next_line()
             .await
-            .map_err(|source| Error::io("cannot read the otag daemon's answer", source))?
+            .map_err(|source| Error::io("cannot read from the otag daemon", source))?
             .ok_or(Error::ConnectionClosed)?;
         Ok(proto::decode_line(&line)?)
+    }
+
+    /// Send one request and read its answer.
+    pub async fn request(&mut self, request: &Request) -> Result<Response> {
+        self.send(request).await?;
+        self.receive().await
     }
 }
 

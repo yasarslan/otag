@@ -1,11 +1,15 @@
-//! The daemon: owns the socket and, from the next milestone on, every pane.
+//! The daemon: owns the socket, the panes, and the programs running on them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use otag_core::paths::Dirs;
-use otag_core::proto::{Request, Response};
-use otag_core::server::Server;
+use otag_core::attach;
+use otag_core::pane::{PaneId, PaneSize, PaneSpec};
+use otag_core::paths::{Dirs, SOCKET_ENV};
+use otag_core::proto::{PaneInfo, Request, Response};
+use otag_core::server::{Handler, Outbox, Server};
+use otag_core::session::Session;
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -36,23 +40,101 @@ async fn serve(socket: &Path) -> Result<()> {
         .with_context(|| format!("cannot start the otag daemon on {}", socket.display()))?;
 
     tracing::info!(version = otag_core::VERSION, "otag daemon started");
-    let result = server.run_until(handle, terminate_signal()).await;
+    let daemon = Daemon {
+        session: Arc::new(Session::new()),
+        socket: socket.to_path_buf(),
+    };
+    let result = server.run_until(daemon, terminate_signal()).await;
     tracing::info!("otag daemon stopped");
     result.context("the otag daemon stopped with an error")
 }
 
-/// Answer the requests this milestone supports.
-///
-/// `Shutdown` never reaches here: the server handles its own lifecycle.
-fn handle(request: Request) -> Response {
-    match request {
-        Request::Ping => Response::Pong,
-        Request::Version => Response::Version {
-            version: otag_core::VERSION.to_owned(),
-        },
-        Request::Shutdown | Request::Unknown => {
-            Response::error("this otag daemon cannot carry out that request yet")
+/// Everything one daemon owns.
+struct Daemon {
+    session: Arc<Session>,
+    socket: PathBuf,
+}
+
+impl Handler for Daemon {
+    /// Answer the requests this milestone supports.
+    ///
+    /// `Shutdown` and `Detach` never reach here: the server handles its own
+    /// lifecycle.
+    async fn handle(&self, request: Request, outbox: &Outbox) -> Option<Response> {
+        match request {
+            Request::Ping => Some(Response::Pong),
+            Request::Version => Some(Response::Version {
+                version: otag_core::VERSION.to_owned(),
+            }),
+            Request::ListPanes => Some(Response::Panes {
+                panes: self
+                    .session
+                    .summaries()
+                    .into_iter()
+                    .map(|pane| PaneInfo {
+                        id: pane.id,
+                        size: pane.size,
+                        exit: pane.exit,
+                    })
+                    .collect(),
+            }),
+            Request::Attach { size, cwd } => Some(self.attach(outbox, size, cwd.as_deref()).await),
+            Request::Input { bytes } => {
+                if let Some(pane) = self.attached_pane()
+                    && let Err(error) = attach::input(&self.session, pane, bytes).await
+                {
+                    // A key pressed as a program exits has nowhere to go.
+                    // The client learns the pane ended from its own stream.
+                    tracing::debug!(%error, "cannot deliver input to a pane");
+                }
+                None
+            }
+            Request::Resize { size } => {
+                if let Some(pane) = self.attached_pane()
+                    && let Err(error) = attach::resize(&self.session, pane, size).await
+                {
+                    tracing::debug!(%error, "cannot resize a pane");
+                }
+                None
+            }
+            Request::Shutdown | Request::Detach | Request::Unknown => Some(Response::error(
+                "this otag daemon cannot carry out that request yet",
+            )),
         }
+    }
+}
+
+impl Daemon {
+    /// Attach a client to a pane, starting one if there is none.
+    async fn attach(&self, outbox: &Outbox, size: PaneSize, cwd: Option<&Path>) -> Response {
+        let spec = self.pane_spec(cwd);
+        match attach::start(&self.session, outbox, &spec, size).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(%error, "cannot attach a client to a pane");
+                Response::error(error.to_string())
+            }
+        }
+    }
+
+    /// What a new pane runs: the user's shell, told how to reach otag.
+    fn pane_spec(&self, cwd: Option<&Path>) -> PaneSpec {
+        PaneSpec::shell()
+            .with_cwd_opt(cwd)
+            .with_env(SOCKET_ENV, &self.socket)
+    }
+
+    /// The pane a client's keys belong to.
+    ///
+    /// This milestone runs one pane, so there is nothing to choose between.
+    /// Once a layout can hold several, the pane a client is attached to
+    /// becomes part of the connection instead of being looked up here.
+    fn attached_pane(&self) -> Option<PaneId> {
+        self.session
+            .summaries()
+            .into_iter()
+            .find(|pane| pane.exit.is_none())
+            .map(|pane| pane.id)
     }
 }
 

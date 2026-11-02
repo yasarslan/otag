@@ -174,19 +174,30 @@ impl Terminal {
     /// may still be echoing before otag takes over cannot be mistaken for a
     /// shell that has answered.
     fn wait_for_shell(&self) {
+        self.type_until("printf '%s%s\\n' otag-ready -marker", "otag-ready-marker");
+    }
+
+    /// Run a command until the screen shows `needle`, asking again on a
+    /// timer.
+    ///
+    /// For an answer that depends on something still on its way — a resize
+    /// travelling to the daemon and back — asking once races with it: the
+    /// shell would answer about the terminal as it was, and that answer
+    /// stands. Asking again until the answer changes does not.
+    fn type_until(&self, line: &str, needle: &str) {
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
-            self.type_line("printf '%s%s\\n' otag-ready -marker");
+            self.type_line(line);
             let until = Instant::now() + Duration::from_millis(500);
             while Instant::now() < until {
-                if self.joined_text().contains("otag-ready-marker") {
+                if self.joined_text().contains(needle) {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
         }
         panic!(
-            "no shell appeared within {TIMEOUT:?}.\nscreen:\n{}",
+            "{line:?} never showed {needle:?} within {TIMEOUT:?}.\nscreen:\n{}",
             self.text()
         );
     }
@@ -396,8 +407,7 @@ fn resizing_the_terminal_resizes_the_program() {
     terminal.wait_for("24 80");
 
     terminal.resize(30, 100);
-    terminal.type_line("stty size");
-    terminal.wait_for("30 100");
+    terminal.type_until("stty size", "30 100");
 }
 
 #[test]

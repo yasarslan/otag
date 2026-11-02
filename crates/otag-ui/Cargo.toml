@@ -10,3 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+otag-core = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+tracing = { workspace = true }

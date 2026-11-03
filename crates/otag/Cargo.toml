@@ -17,13 +17,14 @@ name = "otag"
 path = "src/main.rs"
 
 [dependencies]
+otag-agents = { workspace = true }
 otag-core = { workspace = true }
 otag-persist = { workspace = true }
 otag-ui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 crossterm = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "signal", "process"] }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }

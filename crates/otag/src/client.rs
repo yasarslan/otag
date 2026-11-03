@@ -57,8 +57,16 @@ pub async fn ls(socket: &Path) -> Result<()> {
                 } else {
                     format!("{}: ", pane.workspace)
                 };
+                let agent = match pane.agent {
+                    Some(agent) => format!(" [{agent} {}]", pane.status),
+                    None => String::new(),
+                };
+                let session = match &pane.session {
+                    Some(session) => format!(" session {session}"),
+                    None => String::new(),
+                };
                 println!(
-                    "{}: {workspace}{} {} {state}",
+                    "{}: {workspace}{} {} {state}{agent}{session}",
                     pane.id, pane.title, pane.size
                 );
             }

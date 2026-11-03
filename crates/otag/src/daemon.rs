@@ -1,17 +1,18 @@
 //! The daemon: owns the socket, the panes, and the programs running on them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use otag_agents::{AgentKind, SessionRef, claude, hooks};
 use otag_core::attach;
-use otag_core::pane::{PaneSize, PaneSpec};
+use otag_core::pane::{PaneId, PaneSize, PaneSpec};
 use otag_core::paths::{Dirs, SOCKET_ENV};
 use otag_core::proto::{PaneInfo, Request, Response};
 use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 
-use crate::persist;
+use crate::{agents, persist};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -60,10 +61,15 @@ async fn serve(socket: &Path) -> Result<()> {
         None => None,
     };
 
+    // Agents are noticed whether or not the user installed otag's hooks, so
+    // this runs for every daemon.
+    let watching = tokio::spawn(agents::keep_watching(Arc::clone(&session)));
+
     let daemon = Daemon {
         session: Arc::clone(&session),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
+    watching.abort();
 
     // The panes are about to be killed with the daemon, so what they show
     // now is what a restart has to put back.
@@ -129,6 +135,9 @@ impl Handler for Daemon {
                         size: pane.size,
                         workspace: pane.workspace,
                         title: pane.title,
+                        agent: pane.agent,
+                        status: pane.status,
+                        session: pane.session,
                         exit: pane.exit,
                     })
                     .collect(),
@@ -182,6 +191,14 @@ impl Handler for Daemon {
                 self.session.toggle_sidebar().await;
                 None
             }
+            Request::Hook {
+                event,
+                pane,
+                payload,
+            } => {
+                self.hook(&event, pane, &payload).await;
+                None
+            }
             Request::Shutdown | Request::Detach | Request::Unknown => Some(Response::error(
                 "this otag daemon cannot carry out that request yet",
             )),
@@ -190,6 +207,81 @@ impl Handler for Daemon {
 }
 
 impl Daemon {
+    /// Act on what an agent's hook, or its status line, reported.
+    ///
+    /// A hook is the agent speaking for itself, so what it says outweighs
+    /// any guess from its screen. Nothing here is trusted blindly: a payload
+    /// that cannot be read, or one for a pane this daemon does not have, is
+    /// logged at debug level and dropped.
+    async fn hook(&self, event: &str, pane: Option<PaneId>, payload: &str) {
+        let Some(pane) = pane else {
+            // An agent started outside otag, or one whose environment was
+            // not inherited. There is no pane to attribute this to.
+            tracing::debug!(event, "a hook arrived without a pane");
+            return;
+        };
+        if self.session.pane(pane).is_none() {
+            tracing::debug!(event, %pane, "a hook arrived for a pane that is gone");
+            return;
+        }
+
+        if event == hooks::STATUS_LINE {
+            self.status_line(pane, payload).await;
+            return;
+        }
+
+        let Some(hook) = hooks::HookPayload::parse(payload) else {
+            tracing::debug!(event, %pane, "a hook payload could not be read");
+            return;
+        };
+        if let Some(status) = hook.status(event) {
+            self.session.set_status(pane, status, true).await;
+        }
+        if let Some(id) = hook.session_id.clone() {
+            self.remember_session(pane, id, hook.transcript_path, hook.cwd)
+                .await;
+        }
+    }
+
+    /// Act on what the status line otag registered reported.
+    ///
+    /// It says nothing about what the agent is doing, but it is the one
+    /// place the session identifier and the account's usage arrive from
+    /// without otag having to read the agent's files.
+    async fn status_line(&self, pane: PaneId, payload: &str) {
+        let Some(line) = claude::StatusLine::parse(payload) else {
+            tracing::debug!(%pane, "a status line payload could not be read");
+            return;
+        };
+        if let Some(id) = line.session_id.clone() {
+            self.remember_session(pane, id, line.transcript_path, line.cwd)
+                .await;
+        }
+    }
+
+    /// Record which session a pane is running, and how to continue it.
+    async fn remember_session(
+        &self,
+        pane: PaneId,
+        id: String,
+        transcript: Option<PathBuf>,
+        cwd: Option<PathBuf>,
+    ) {
+        if !self.session.set_session_id(pane, id.clone()).await {
+            // Already known, so the restore command is already right.
+            return;
+        }
+
+        // Only Claude Code has hooks, so this is the agent that sent them.
+        let reference = SessionRef {
+            id,
+            path: transcript.unwrap_or_default(),
+            cwd,
+        };
+        let resume = AgentKind::Claude.adapter().resume_command(&reference);
+        self.session.set_restore_command(pane, resume).await;
+    }
+
     /// Attach a client, starting a workspace and a pane if there is none.
     async fn attach(&self, outbox: &Outbox, size: PaneSize, cwd: Option<&Path>) -> Response {
         match attach::start(&self.session, outbox, size, cwd).await {
@@ -242,5 +334,128 @@ async fn terminate_signal() {
     tokio::select! {
         _ = interrupt.recv() => tracing::info!("SIGINT received"),
         _ = terminate.recv() => tracing::info!("SIGTERM received"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use otag_agents::PaneStatus;
+    use otag_core::pane::PaneSize;
+
+    use super::*;
+
+    /// A daemon with one pane, which is what a hook needs to report against.
+    async fn with_one_pane() -> (Daemon, PaneId) {
+        let session = Session::new(PaneSpec::command(["sleep", "30"]));
+        session
+            .attach(PaneSize::new(24, 80), None)
+            .await
+            .expect("a pane");
+        let pane = session
+            .visible_panes()
+            .first()
+            .copied()
+            .expect("the pane is there");
+        (Daemon { session }, pane)
+    }
+
+    #[tokio::test]
+    async fn a_hook_says_what_the_agent_is_doing() {
+        let (daemon, pane) = with_one_pane().await;
+
+        daemon
+            .hook("Notification", Some(pane), r#"{"message":"Needs your ok"}"#)
+            .await;
+
+        let panes = daemon.session.agent_panes();
+        let found = panes.first().expect("the pane");
+        assert_eq!(found.status, PaneStatus::NeedsApproval);
+        assert!(
+            !found.trusts_the_screen,
+            "an agent reporting for itself outranks its screen"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hook_that_carries_a_session_makes_the_pane_resume_it() {
+        let (daemon, pane) = with_one_pane().await;
+
+        daemon
+            .hook(
+                "SessionStart",
+                Some(pane),
+                r#"{"session_id":"abc-123","source":"startup"}"#,
+            )
+            .await;
+
+        let summary = daemon
+            .session
+            .summaries()
+            .into_iter()
+            .next()
+            .expect("the pane");
+        assert_eq!(summary.session.as_deref(), Some("abc-123"));
+        assert!(
+            daemon
+                .session
+                .snapshot()
+                .panes
+                .iter()
+                .any(|pane| pane.command == ["claude", "--resume", "abc-123"]),
+            "the pane comes back by continuing the session"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_status_line_carries_the_session_too() {
+        let (daemon, pane) = with_one_pane().await;
+
+        daemon
+            .hook(
+                otag_agents::hooks::STATUS_LINE,
+                Some(pane),
+                r#"{"session_id":"from-status-line","model":{"id":"x"}}"#,
+            )
+            .await;
+
+        let summary = daemon
+            .session
+            .summaries()
+            .into_iter()
+            .next()
+            .expect("the pane");
+        assert_eq!(summary.session.as_deref(), Some("from-status-line"));
+    }
+
+    #[tokio::test]
+    async fn a_hook_for_an_unknown_pane_changes_nothing() {
+        let (daemon, pane) = with_one_pane().await;
+        let unknown = pane.next().next();
+
+        daemon.hook("Stop", Some(unknown), "{}").await;
+        daemon.hook("Stop", None, "{}").await;
+
+        let panes = daemon.session.agent_panes();
+        assert_eq!(
+            panes.first().map(|pane| pane.status),
+            Some(PaneStatus::Idle)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payload_that_is_not_json_is_dropped_rather_than_believed() {
+        let (daemon, pane) = with_one_pane().await;
+
+        daemon
+            .hook("Stop", Some(pane), "<html>not json</html>")
+            .await;
+        daemon
+            .hook(otag_agents::hooks::STATUS_LINE, Some(pane), "")
+            .await;
+
+        let panes = daemon.session.agent_panes();
+        let found = panes.first().expect("the pane");
+        assert_eq!(found.status, PaneStatus::Idle);
+        assert_eq!(found.session_id, None);
     }
 }

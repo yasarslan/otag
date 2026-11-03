@@ -45,6 +45,37 @@ pub enum Command {
     KillServer,
     /// List workspaces and panes.
     Ls,
+    /// Report an agent event to the daemon. Agents run this themselves.
+    ///
+    /// The event is the name otag registered the command under; the payload
+    /// arrives on standard input. Exits cleanly and quickly whatever
+    /// happens, so that a hook can never hold an agent up.
+    Hook {
+        /// Which event this is, or `statusline` for the status line.
+        #[arg(value_name = "EVENT")]
+        event: String,
+    },
+    /// Register otag's hooks and status line in Claude Code's settings.
+    ///
+    /// Says what it would change and asks before changing it, and keeps a
+    /// copy of the file as it was.
+    InstallHooks {
+        /// The settings file to change. Defaults to Claude Code's own.
+        #[arg(long, value_name = "PATH")]
+        settings: Option<PathBuf>,
+        /// Do not ask; change the file.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Take otag's hooks and status line out again.
+    UninstallHooks {
+        /// The settings file to change. Defaults to Claude Code's own.
+        #[arg(long, value_name = "PATH")]
+        settings: Option<PathBuf>,
+        /// Do not ask; change the file.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Print the version of this binary and of the running daemon.
     Version,
 }
@@ -71,6 +102,24 @@ pub fn run() -> Result<()> {
         Command::Ls => {
             logging::init_client(cli.log.as_deref());
             client_runtime()?.block_on(crate::client::ls(&socket))
+        }
+        Command::Hook { event } => {
+            // A hook is logged nowhere by default: it runs inside an agent's
+            // turn, several times a minute, and its output would be the
+            // agent's own.
+            client_runtime()?.block_on(crate::hook::run(
+                &socket,
+                &event,
+                crate::install::hook_state_dir().as_deref(),
+            ))
+        }
+        Command::InstallHooks { settings, yes } => {
+            logging::init_client(cli.log.as_deref());
+            crate::install::install(settings, yes)
+        }
+        Command::UninstallHooks { settings, yes } => {
+            logging::init_client(cli.log.as_deref());
+            crate::install::uninstall(settings, yes)
         }
         Command::Version => {
             logging::init_client(cli.log.as_deref());

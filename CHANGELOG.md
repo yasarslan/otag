@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- otag notices the agents in its panes. A pane running Claude Code or Codex
+  gets the agent's name on its border, and a mark saying whether it is
+  working, done, looping, failing or waiting for permission — in the pane's
+  border, in the tab bar and in the sidebar, so a workspace shows the pane
+  that most wants you without opening it.
+- `otag install-hooks` registers otag with Claude Code: a command on the
+  events otag needs, and a status line. It says what it would change, asks
+  before changing it, keeps a copy of the file as it was, and keeps your own
+  status line working by running it and printing what it prints.
+  `otag uninstall-hooks` takes otag's entries out again and puts your status
+  line back.
+- `otag hook <event>` is what the agents call. It reports what the agent is
+  doing and exits immediately, whether or not otag is running, so it can
+  never hold an agent up.
+- Agent sessions are remembered, so a pane that comes back after a restart
+  continues its conversation instead of starting a new one.
+- `otag ls` says which agent is in a pane, what it is doing, and which
+  session it would continue.
 - Sessions survive the daemon. otag saves its workspaces, tabs, layouts and
   what each pane has shown, and puts them back when it starts again: after a
   `otag kill-server`, a reboot, or a crash, the panes are running in their

@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use tokio::sync::{mpsc, watch};
 
@@ -32,6 +32,7 @@ use crate::screen::Screen;
 use crate::snapshot::{self, PaneSnapshot, Snapshot, TabSnapshot, WorkspaceSnapshot};
 use crate::workspace::{Tab, TabId, Workspace, WorkspaceId};
 use crate::{Error, Result};
+use otag_agents::{AgentKind, PaneStatus};
 
 /// Shortest time between two published screens.
 ///
@@ -45,6 +46,13 @@ const COMMAND_QUEUE: usize = 64;
 
 /// What a tab is called before anything better is known about it.
 const SHELL_TITLE: &str = "shell";
+
+/// How long a hook's word on what an agent is doing outlasts the words on
+/// its screen.
+///
+/// An agent with hooks installed reports what it is really doing; the screen
+/// is read only for agents that have none, or once the hooks have gone quiet.
+const HOOK_TRUST: Duration = Duration::from_secs(15);
 
 /// The line otag draws between what a restored pane used to show and what
 /// its program prints from now on.
@@ -143,8 +151,37 @@ pub struct PaneSummary {
     pub workspace: String,
     /// What it is running.
     pub title: String,
+    /// The agent otag has noticed in it.
+    pub agent: Option<AgentKind>,
+    /// What that agent is doing.
+    pub status: PaneStatus,
+    /// The agent session otag would resume.
+    pub session: Option<String>,
     /// How its program ended, if it has.
     pub exit: Option<PaneExit>,
+}
+
+/// What otag knows about one pane, for the task watching the agents.
+#[derive(Debug, Clone)]
+pub struct AgentPane {
+    /// Which pane this is.
+    pub id: PaneId,
+    /// The program on its pseudo-terminal, which an agent runs below.
+    pub pid: Option<u32>,
+    /// Where it is working.
+    pub cwd: Option<PathBuf>,
+    /// When it started.
+    pub started_at: SystemTime,
+    /// The agent otag has noticed in it.
+    pub agent: Option<AgentKind>,
+    /// What that agent is doing.
+    pub status: PaneStatus,
+    /// The agent session otag would resume.
+    pub session_id: Option<String>,
+    /// Whether a guess from the screen may set the status.
+    pub trusts_the_screen: bool,
+    /// What is on the screen, for the guess.
+    pub screen: String,
 }
 
 /// Everything needed to start one pane.
@@ -169,6 +206,30 @@ struct Pane {
     cwd: Option<PathBuf>,
     /// What it was started with, empty for the user's shell.
     command: Vec<String>,
+    /// Identifier of the program on its pseudo-terminal, for finding the
+    /// agent a user started inside the shell.
+    pid: Option<u32>,
+    /// When it started, so that a session older than the pane is not taken
+    /// for the pane's own.
+    started_at: SystemTime,
+    /// The agent running in it, once otag has noticed one.
+    agent: Option<AgentKind>,
+    /// What that agent is doing.
+    status: PaneStatus,
+    /// The agent session otag would resume.
+    session_id: Option<String>,
+    /// When a hook last said what the agent is doing.
+    ///
+    /// Hooks report what the agent is actually doing; the words on its
+    /// screen are a guess. While hooks are arriving, the guess is not used.
+    last_hook: Option<Instant>,
+}
+
+impl Pane {
+    /// Whether a guess from the pane's screen may set its status.
+    fn trusts_the_screen(&self) -> bool {
+        self.last_hook.is_none_or(|at| at.elapsed() > HOOK_TRUST)
+    }
 }
 
 /// Everything one daemon owns.
@@ -253,6 +314,17 @@ impl State {
                 (pane.handle.snapshot().screen.size() != size).then(|| (pane.handle.clone(), size))
             })
             .collect()
+    }
+
+    /// What a group of panes is doing, taken from the one that most wants
+    /// the user.
+    fn status_of(&self, panes: &[PaneId]) -> PaneStatus {
+        panes
+            .iter()
+            .filter_map(|pane| self.panes.get(pane))
+            .map(|pane| pane.status)
+            .max()
+            .unwrap_or_default()
     }
 
     /// Names of the workspaces, for giving a new one a name of its own.
@@ -527,6 +599,8 @@ impl Session {
                     id,
                     area,
                     title: pane.title.clone(),
+                    agent: pane.agent,
+                    status: pane.status,
                     frame: Some(snapshot.screen.to_frame()),
                     exit: snapshot.exit.clone(),
                 })
@@ -547,6 +621,7 @@ impl Session {
                     name: workspace.name().to_owned(),
                     tabs: workspace.tabs().len(),
                     panes: workspace.panes().len(),
+                    status: state.status_of(&workspace.panes()),
                 })
                 .collect(),
             active_workspace: state.active,
@@ -560,6 +635,7 @@ impl Session {
                             id: tab.id(),
                             title: tab.title().to_owned(),
                             panes: tab.panes().len(),
+                            status: state.status_of(&tab.panes()),
                         })
                         .collect()
                 })
@@ -584,6 +660,9 @@ impl Session {
                 PaneSummary {
                     id: pane.handle.id(),
                     size: snapshot.screen.size(),
+                    agent: pane.agent,
+                    status: pane.status,
+                    session: pane.session_id.clone(),
                     workspace: state
                         .workspaces
                         .iter()
@@ -606,6 +685,117 @@ impl Session {
     #[must_use]
     pub fn last_exit(&self) -> Option<PaneExit> {
         self.state.lock().ok()?.last_exit.clone()
+    }
+
+    /// What otag knows about the panes, for whatever is watching them.
+    ///
+    /// One call rather than one per pane, so that a scan of the processes or
+    /// of the agents' session files sees the panes as they were at one
+    /// moment.
+    #[must_use]
+    pub fn agent_panes(&self) -> Vec<AgentPane> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+        state
+            .panes
+            .values()
+            .map(|pane| AgentPane {
+                id: pane.handle.id(),
+                pid: pane.pid,
+                cwd: pane.cwd.clone(),
+                started_at: pane.started_at,
+                agent: pane.agent,
+                status: pane.status,
+                session_id: pane.session_id.clone(),
+                trusts_the_screen: pane.trusts_the_screen(),
+                screen: pane.handle.snapshot().screen.text(),
+            })
+            .collect()
+    }
+
+    /// Record that a pane is running an agent.
+    ///
+    /// The pane's title becomes the agent's name, so that a tab shows what
+    /// is in it rather than what started it.
+    pub async fn set_agent(self: &Arc<Self>, pane: PaneId, agent: Option<AgentKind>) {
+        let changed = self.change(pane, |pane| {
+            if pane.agent == agent {
+                return false;
+            }
+            pane.agent = agent;
+            pane.title = agent.map_or_else(|| SHELL_TITLE.to_owned(), |agent| agent.to_string());
+            if agent.is_none() {
+                // Whatever the agent was doing, it is not doing it now.
+                pane.status = PaneStatus::default();
+                pane.session_id = None;
+            }
+            true
+        });
+        self.commit(changed).await;
+    }
+
+    /// Record what the agent in a pane is doing.
+    ///
+    /// `from_hook` says the agent reported this itself, which is worth more
+    /// than a guess from its screen and silences the guessing for a while.
+    pub async fn set_status(
+        self: &Arc<Self>,
+        pane: PaneId,
+        status: PaneStatus,
+        from_hook: bool,
+    ) -> bool {
+        let changed = self.change(pane, |pane| {
+            if from_hook {
+                pane.last_hook = Some(Instant::now());
+            } else if !pane.trusts_the_screen() {
+                // The agent is reporting for itself; its screen is not
+                // needed and may be a turn behind.
+                return false;
+            }
+            let changed = pane.status != status;
+            pane.status = status;
+            changed
+        });
+        self.commit(changed).await;
+        changed
+    }
+
+    /// Record which of an agent's sessions a pane is running.
+    pub async fn set_session_id(self: &Arc<Self>, pane: PaneId, session_id: String) -> bool {
+        let changed = self.change(pane, |pane| {
+            if pane.session_id.as_deref() == Some(session_id.as_str()) {
+                return false;
+            }
+            pane.session_id = Some(session_id.clone());
+            true
+        });
+        self.commit(changed).await;
+        changed
+    }
+
+    /// Record the command that would bring a pane back as it is now.
+    ///
+    /// A pane running an agent comes back by resuming that agent's session,
+    /// which is what makes a restored agent carry on rather than start over.
+    pub async fn set_restore_command(self: &Arc<Self>, pane: PaneId, command: Vec<String>) {
+        let changed = self.change(pane, |pane| {
+            if pane.command == command {
+                return false;
+            }
+            pane.command = command.clone();
+            true
+        });
+        // Nothing a client can see changed, but the next snapshot differs.
+        self.commit(changed).await;
+    }
+
+    /// Change one pane, reporting whether anything did change.
+    fn change(&self, pane: PaneId, edit: impl FnOnce(&mut Pane) -> bool) -> bool {
+        self.lock()
+            .ok()
+            .and_then(|mut state| state.panes.get_mut(&pane).map(edit))
+            .unwrap_or(false)
     }
 
     /// Everything about the session that is worth keeping, for a snapshot.
@@ -818,7 +1008,7 @@ impl Session {
         // its real size as soon as the layout is known, which is one resize
         // before the program has drawn anything.
         let size = state.chrome().content.inset(BORDER).size();
-        let handle = spawn_pane(starting.id, &spec, size, starting.restored)?;
+        let (handle, pid) = spawn_pane(starting.id, &spec, size, starting.restored)?;
         self.reap(handle.clone());
 
         Ok(Pane {
@@ -827,6 +1017,12 @@ impl Session {
             workspace: starting.workspace,
             cwd: starting.cwd.map(Path::to_path_buf),
             command: starting.command.to_vec(),
+            pid,
+            started_at: SystemTime::now(),
+            agent: None,
+            status: PaneStatus::default(),
+            session_id: None,
+            last_hook: None,
         })
     }
 
@@ -900,8 +1096,9 @@ fn spawn_pane(
     spec: &PaneSpec,
     size: PaneSize,
     restored: &[String],
-) -> Result<PaneHandle> {
+) -> Result<(PaneHandle, Option<u32>)> {
     let (pty, events) = Pty::spawn(id, spec, size)?;
+    let pid = pty.pid();
     let mut screen = Screen::new(size);
     if !restored.is_empty() {
         screen.process(&restored_bytes(restored));
@@ -915,11 +1112,14 @@ fn spawn_pane(
 
     tokio::spawn(run_pane(id, pty, screen, events, commands_rx, view_tx));
 
-    Ok(PaneHandle {
-        id,
-        commands: commands_tx,
-        view: view_rx,
-    })
+    Ok((
+        PaneHandle {
+            id,
+            commands: commands_tx,
+            view: view_rx,
+        },
+        pid,
+    ))
 }
 
 /// Drive one pane until its program ends or every client is gone.

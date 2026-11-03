@@ -17,6 +17,7 @@ use crate::frame::ScreenFrame;
 use crate::layout::{Area, Direction, Side};
 use crate::pane::{PaneExit, PaneId, PaneSize};
 use crate::workspace::{TabId, WorkspaceId};
+use otag_agents::{AgentKind, PaneStatus};
 
 /// A command sent from a client to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +106,24 @@ pub enum Request {
     },
     /// Show or hide the workspace sidebar.
     ToggleSidebar,
+    /// What an agent's hook, or its statusLine command, reported.
+    ///
+    /// Not answered: the hook command runs inside the agent's own turn and
+    /// has to be gone again in milliseconds, so it writes this and exits
+    /// without waiting.
+    Hook {
+        /// The event otag registered the command under, which is more
+        /// trustworthy than the name inside the payload.
+        event: String,
+        /// The pane the agent is running in, from the environment otag puts
+        /// its panes in. Missing when the agent was not started by otag.
+        #[serde(default)]
+        pane: Option<PaneId>,
+        /// Exactly what the agent wrote on the command's standard input,
+        /// carried as text so that this request stays comparable and the
+        /// daemon decides how to read it.
+        payload: String,
+    },
     /// Stop watching the session and close the connection. Answered with
     /// [`Response::Ok`]. The panes and their programs keep running.
     Detach,
@@ -178,6 +197,15 @@ pub struct PaneInfo {
     /// What it is running.
     #[serde(default)]
     pub title: String,
+    /// The agent otag has noticed in it.
+    #[serde(default)]
+    pub agent: Option<AgentKind>,
+    /// What that agent is doing.
+    #[serde(default)]
+    pub status: PaneStatus,
+    /// The agent session otag would resume.
+    #[serde(default)]
+    pub session: Option<String>,
     /// How its program ended, if it has.
     #[serde(default)]
     pub exit: Option<PaneExit>,
@@ -194,6 +222,10 @@ pub struct WorkspaceView {
     pub tabs: usize,
     /// How many panes it has, across all its tabs.
     pub panes: usize,
+    /// What its agents are doing, taken from the pane that most wants the
+    /// user.
+    #[serde(default)]
+    pub status: PaneStatus,
 }
 
 /// One tab of the active workspace, as the tab bar shows it.
@@ -205,6 +237,10 @@ pub struct TabView {
     pub title: String,
     /// How many panes it holds.
     pub panes: usize,
+    /// What its agents are doing, taken from the pane that most wants the
+    /// user.
+    #[serde(default)]
+    pub status: PaneStatus,
 }
 
 /// One visible pane: where it is, and what is on it.
@@ -217,6 +253,12 @@ pub struct PaneView {
     /// What its border says it is running.
     #[serde(default)]
     pub title: String,
+    /// The agent otag has noticed in it.
+    #[serde(default)]
+    pub agent: Option<AgentKind>,
+    /// What that agent is doing.
+    #[serde(default)]
+    pub status: PaneStatus,
     /// Its whole screen, when the daemon is sending a full view.
     #[serde(default)]
     pub frame: Option<ScreenFrame>,
@@ -377,18 +419,22 @@ mod tests {
                 name: "app".to_owned(),
                 tabs: 1,
                 panes: 1,
+                status: PaneStatus::Working,
             }],
             active_workspace: 0,
             tabs: vec![TabView {
                 id: TabId::FIRST,
                 title: "shell".to_owned(),
                 panes: 1,
+                status: PaneStatus::Working,
             }],
             active_tab: 0,
             panes: vec![PaneView {
                 id: PaneId::FIRST,
                 area: Area::new(16, 1, 64, 23),
-                title: "shell".to_owned(),
+                title: "claude".to_owned(),
+                agent: Some(AgentKind::Claude),
+                status: PaneStatus::Working,
                 frame: Some(frame()),
                 exit: None,
             }],
@@ -482,6 +528,9 @@ mod tests {
                     size: PaneSize::DEFAULT,
                     workspace: "app".to_owned(),
                     title: "shell".to_owned(),
+                    agent: None,
+                    status: PaneStatus::Idle,
+                    session: None,
                     exit: None,
                 }],
             },
@@ -491,6 +540,9 @@ mod tests {
                     size: PaneSize::DEFAULT,
                     workspace: "app".to_owned(),
                     title: "shell".to_owned(),
+                    agent: Some(AgentKind::Claude),
+                    status: PaneStatus::Working,
+                    session: Some("a-session".to_owned()),
                     exit: Some(PaneExit {
                         code: Some(0),
                         signal: None,

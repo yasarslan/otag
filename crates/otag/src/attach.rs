@@ -517,6 +517,7 @@ fn read_input() -> mpsc::Receiver<Event> {
 
 #[cfg(test)]
 mod tests {
+    use otag_agents::PaneStatus;
     use otag_core::frame::{CursorState, InputModes, MouseEncoding, MouseMode, ScreenFrame};
     use otag_core::layout::Area;
     use otag_core::pane::PaneId;
@@ -552,12 +553,14 @@ mod tests {
                     name: "app".to_owned(),
                     tabs: 2,
                     panes: 2,
+                    status: PaneStatus::default(),
                 },
                 WorkspaceView {
                     id: WorkspaceId::FIRST.next(),
                     name: "api".to_owned(),
                     tabs: 1,
                     panes: 1,
+                    status: PaneStatus::default(),
                 },
             ],
             active_workspace: 0,
@@ -566,11 +569,13 @@ mod tests {
                     id: TabId::FIRST,
                     title: "shell".to_owned(),
                     panes: 2,
+                    status: PaneStatus::default(),
                 },
                 TabView {
                     id: TabId::FIRST.next(),
                     title: "build".to_owned(),
                     panes: 1,
+                    status: PaneStatus::default(),
                 },
             ],
             active_tab: 0,
@@ -579,6 +584,8 @@ mod tests {
                     id: pane_id(1),
                     area: Area::new(16, 1, 32, 23),
                     title: "shell".to_owned(),
+                    agent: None,
+                    status: PaneStatus::default(),
                     frame: None,
                     exit: None,
                 },
@@ -586,6 +593,8 @@ mod tests {
                     id: pane_id(2),
                     area: Area::new(48, 1, 32, 23),
                     title: "shell".to_owned(),
+                    agent: None,
+                    status: PaneStatus::default(),
                     frame: None,
                     exit: None,
                 },

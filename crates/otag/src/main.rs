@@ -1,10 +1,13 @@
 //! The `otag` binary: command-line interface, client, and daemon entry point.
 #![forbid(unsafe_code)]
 
+mod agents;
 mod attach;
 mod cli;
 mod client;
 mod daemon;
+mod hook;
+mod install;
 mod logging;
 mod persist;
 

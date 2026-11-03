@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use otag_agents::PaneStatus;
 use otag_core::frame::ScreenState;
 use otag_core::layout::Area;
 use otag_core::pane::PaneId;
@@ -31,6 +32,35 @@ const INACTIVE_MARK: &str = "\u{25cb}";
 
 /// Blank columns between two tabs in the tab bar.
 const TAB_GAP: u16 = 1;
+
+/// What otag draws for what an agent is doing.
+///
+/// An idle agent is marked with nothing at all: a sidebar of symbols that
+/// are always there says nothing, and the point of these is to be noticed.
+#[must_use]
+pub const fn status_mark(status: PaneStatus) -> Option<&'static str> {
+    match status {
+        PaneStatus::Idle => None,
+        PaneStatus::Working => Some("\u{25d0}"),
+        PaneStatus::Done => Some("\u{2713}"),
+        PaneStatus::Looping => Some("\u{21bb}"),
+        PaneStatus::Error => Some("\u{00d7}"),
+        PaneStatus::NeedsApproval => Some("?"),
+    }
+}
+
+/// The colour a status is drawn in: the attention colour for what wants the
+/// user, and nothing loud for anything else.
+fn status_style(status: PaneStatus, theme: Theme) -> Style {
+    match status {
+        PaneStatus::Error => Style::new().fg(theme.error).bg(theme.background),
+        PaneStatus::NeedsApproval | PaneStatus::Looping => {
+            Style::new().fg(theme.attention).bg(theme.background)
+        }
+        PaneStatus::Done => Style::new().fg(theme.accent).bg(theme.background),
+        PaneStatus::Idle | PaneStatus::Working => theme.dim(),
+    }
+}
 
 /// The screens a client is drawing, by pane.
 pub type Screens = HashMap<PaneId, ScreenState>;
@@ -60,19 +90,26 @@ pub fn draw(frame: &mut Frame, view: &SessionView, screens: &Screens, theme: The
         let area = rect(pane.area);
         let focused = view.focus == Some(pane.id);
 
-        frame.render_widget(
-            Block::new()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(theme.pane_border(focused))
-                .title(format!(" {} ", pane.title))
-                .title_style(if focused {
-                    theme.picked_out()
-                } else {
-                    theme.dim()
-                }),
-            area,
-        );
+        let mut block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(theme.pane_border(focused))
+            .title(format!(" {} ", pane.title))
+            .title_style(if focused {
+                theme.picked_out()
+            } else {
+                theme.dim()
+            });
+        if let Some(mark) = status_mark(pane.status) {
+            // On the right of the border, so the pane's own name stays
+            // where the eye expects it.
+            block = block
+                .title_top(
+                    ratatui::text::Line::from(format!(" {mark} {} ", pane.status)).right_aligned(),
+                )
+                .title_style(status_style(pane.status, theme));
+        }
+        frame.render_widget(block, area);
 
         let inside = rect(pane.area.inset(otag_core::layout::BORDER));
         if inside.is_empty() {
@@ -117,13 +154,24 @@ impl Widget for Sidebar<'_> {
             } else {
                 self.theme.plain()
             };
-            buffer.set_stringn(
-                area.x,
-                y,
-                format!("{mark} {}", workspace.name),
-                width,
-                style,
-            );
+            let written = buffer
+                .set_stringn(
+                    area.x,
+                    y,
+                    format!("{mark} {}", workspace.name),
+                    width,
+                    style,
+                )
+                .0;
+            if let Some(status) = status_mark(workspace.status) {
+                buffer.set_stringn(
+                    written.saturating_add(1),
+                    y,
+                    status,
+                    usize::from(area.right().saturating_sub(written)),
+                    status_style(workspace.status, self.theme),
+                );
+            }
         }
     }
 }
@@ -206,7 +254,10 @@ fn tab_spans(view: &SessionView) -> Vec<(usize, String, Rect)> {
     let mut x = area.x;
 
     for (index, tab) in view.tabs.iter().enumerate() {
-        let label = format!("{}:{}", index + 1, tab.title);
+        let mark = status_mark(tab.status)
+            .map(|mark| format!(" {mark}"))
+            .unwrap_or_default();
+        let label = format!("{}:{}{mark}", index + 1, tab.title);
         let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
         spans.push((
             index,
@@ -283,12 +334,14 @@ mod tests {
                     name: "my-app".to_owned(),
                     tabs: 2,
                     panes: 2,
+                    status: PaneStatus::Working,
                 },
                 WorkspaceView {
                     id: WorkspaceId::FIRST.next(),
                     name: "api".to_owned(),
                     tabs: 1,
                     panes: 1,
+                    status: PaneStatus::NeedsApproval,
                 },
             ],
             active_workspace: 0,
@@ -297,11 +350,13 @@ mod tests {
                     id: TabId::FIRST,
                     title: "shell".to_owned(),
                     panes: 2,
+                    status: PaneStatus::Idle,
                 },
                 TabView {
                     id: TabId::FIRST.next(),
                     title: "build".to_owned(),
                     panes: 1,
+                    status: PaneStatus::Idle,
                 },
             ],
             active_tab: 0,
@@ -310,6 +365,8 @@ mod tests {
                     id: pane_id(1),
                     area: left,
                     title: "shell".to_owned(),
+                    agent: None,
+                    status: PaneStatus::Idle,
                     frame: None,
                     exit: None,
                 },
@@ -317,6 +374,8 @@ mod tests {
                     id: pane_id(2),
                     area: right,
                     title: "claude".to_owned(),
+                    agent: Some(otag_agents::AgentKind::Claude),
+                    status: PaneStatus::Working,
                     frame: None,
                     exit: None,
                 },
@@ -449,6 +508,8 @@ mod tests {
             id: pane_id(1),
             area: Area::new(16, 1, 64, 1),
             title: "shell".to_owned(),
+            agent: None,
+            status: PaneStatus::Idle,
             frame: None,
             exit: None,
         }];
@@ -467,5 +528,77 @@ mod tests {
         };
         let buffer = render(&view, &Screens::new());
         assert_eq!(row(&buffer, 0), " ".repeat(10));
+    }
+
+    #[test]
+    fn a_pane_s_border_says_what_its_agent_is_doing() {
+        let buffer = render(&view(), &Screens::new());
+        // The right-hand pane runs an agent that is working.
+        let border = row(&buffer, 1);
+        assert!(border.contains(" claude "), "got {border:?}");
+        assert!(
+            border.contains("working"),
+            "the pane does not say what it is doing: {border:?}"
+        );
+    }
+
+    #[test]
+    fn an_idle_pane_is_marked_with_nothing() {
+        // A row of symbols that are always there says nothing.
+        let mut view = view();
+        for pane in &mut view.panes {
+            pane.status = PaneStatus::Idle;
+        }
+        let buffer = render(&view, &Screens::new());
+        let border = row(&buffer, 1);
+        assert!(!border.contains("idle"), "got {border:?}");
+        assert_eq!(status_mark(PaneStatus::Idle), None);
+    }
+
+    #[test]
+    fn the_sidebar_marks_a_workspace_whose_agents_want_the_user() {
+        let buffer = render(&view(), &Screens::new());
+        // The second workspace has a pane waiting for permission.
+        let line = row(&buffer, 2);
+        assert!(
+            line.contains('?'),
+            "the sidebar does not mark the workspace: {line:?}"
+        );
+
+        let theme = Theme::default();
+        let marked = (0..16)
+            .filter_map(|x| buffer.cell((x, 2)))
+            .find(|cell| cell.symbol() == "?")
+            .expect("the mark is drawn");
+        assert_eq!(marked.fg, theme.attention);
+    }
+
+    #[test]
+    fn the_tab_bar_marks_a_tab_without_moving_what_a_click_finds() {
+        let mut view = view();
+        view.tabs[0].status = PaneStatus::NeedsApproval;
+
+        let buffer = render(&view, &Screens::new());
+        let bar = row(&buffer, 0);
+        assert!(bar.contains("1:shell ?"), "got {bar:?}");
+
+        // The mark is part of the tab's own label, so a click on it still
+        // chooses that tab.
+        assert_eq!(tab_at(&view, 24, 0), Some(0));
+        assert_eq!(tab_at(&view, 26, 0), Some(1));
+    }
+
+    #[test]
+    fn every_status_that_wants_the_user_is_drawn_in_a_colour_that_says_so() {
+        let theme = Theme::default();
+        for status in [PaneStatus::NeedsApproval, PaneStatus::Looping] {
+            assert_eq!(status_style(status, theme).fg, Some(theme.attention));
+        }
+        assert_eq!(status_style(PaneStatus::Error, theme).fg, Some(theme.error));
+        assert_eq!(
+            status_style(PaneStatus::Working, theme).fg,
+            Some(theme.muted),
+            "working is not worth the eye"
+        );
     }
 }

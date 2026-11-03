@@ -43,6 +43,7 @@ pub struct Pty {
     input: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     size: PaneSize,
+    pid: Option<u32>,
 }
 
 impl Pty {
@@ -76,6 +77,9 @@ impl Pty {
             .take_writer()
             .map_err(|source| Error::pty("cannot write to a new pane", source))?;
         let killer = child.clone_killer();
+        // Kept so that otag can look at what the pane is running: an agent
+        // started inside the shell is a descendant of this process.
+        let pid = child.process_id();
 
         let (events_tx, events_rx) = mpsc::channel(OUTPUT_QUEUE);
         let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
@@ -88,6 +92,7 @@ impl Pty {
                 input: input_tx,
                 killer,
                 size,
+                pid,
             },
             events_rx,
         ))
@@ -97,6 +102,12 @@ impl Pty {
     #[must_use]
     pub const fn size(&self) -> PaneSize {
         self.size
+    }
+
+    /// Identifier of the process started on it, when the system gave one.
+    #[must_use]
+    pub const fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// Send `bytes` to the program's input.

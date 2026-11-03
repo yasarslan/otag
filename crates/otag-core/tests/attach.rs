@@ -39,7 +39,7 @@ impl Handler for TestDaemon {
                 }
             }
             Request::Input { bytes } => {
-                if let Err(error) = self.session.input(bytes).await {
+                if let Err(error) = self.session.input(bytes.into_vec()).await {
                     tracing::debug!(%error, "input went nowhere");
                 }
                 None
@@ -345,7 +345,7 @@ async fn keys_sent_over_the_socket_reach_the_focused_pane() {
 
         client
             .send(&Request::Input {
-                bytes: b"abc\r".to_vec(),
+                bytes: b"abc\r".to_vec().into(),
             })
             .await;
         client.read_until_text("typed abc").await;
@@ -406,7 +406,7 @@ async fn splitting_puts_the_new_pane_beside_the_old_one_and_focuses_it() {
         // Typing goes to the new pane and not to the old one.
         client
             .send(&Request::Input {
-                bytes: b"second\r".to_vec(),
+                bytes: b"second\r".to_vec().into(),
             })
             .await;
         client
@@ -464,7 +464,7 @@ async fn the_focus_moves_between_panes_and_the_keys_follow_it() {
 
         client
             .send(&Request::Input {
-                bytes: b"leftwards\r".to_vec(),
+                bytes: b"leftwards\r".to_vec().into(),
             })
             .await;
         client
@@ -560,7 +560,7 @@ async fn a_pane_whose_program_ends_gives_its_space_to_the_other() {
             // The focused pane is the new one; ending it leaves the first.
             client
                 .send(&Request::Input {
-                    bytes: b"bye\r".to_vec(),
+                    bytes: b"bye\r".to_vec().into(),
                 })
                 .await;
             client.read_until_panes(1).await;
@@ -728,7 +728,7 @@ async fn two_clients_attached_to_one_session_both_see_it() {
         // The second client typing is seen by the first.
         second
             .send(&Request::Input {
-                bytes: b"by the second\r".to_vec(),
+                bytes: b"by the second\r".to_vec().into(),
             })
             .await;
         first.read_until_text("typed by the second").await;

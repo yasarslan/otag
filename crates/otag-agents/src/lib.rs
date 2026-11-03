@@ -12,6 +12,7 @@
 //! into whatever part of them is understood.
 #![forbid(unsafe_code)]
 
+pub mod approval;
 pub mod claude;
 pub mod codex;
 pub mod hooks;
@@ -240,6 +241,18 @@ pub trait AgentAdapter: Send + Sync {
     /// `exe` is the program's name without its directory; `argv` is what it
     /// was started with, including the program itself.
     fn matches_process(&self, exe: &str, argv: &[String]) -> bool;
+
+    /// Whether this agent's screen is asking the user for permission.
+    ///
+    /// Narrower than [`Self::detect_status`]: a pane can need the user for
+    /// other reasons, and only a prompt may be answered with keys.
+    fn is_asking(&self, screen: &str) -> bool;
+
+    /// What to type into the agent's prompt to answer it.
+    ///
+    /// Only sent to a pane whose screen is asking, and only once per
+    /// question; see [`crate::approval`].
+    fn answer_keys(&self, answer: approval::Answer) -> Vec<u8>;
 
     /// What the agent's screen says it is doing, when it says anything.
     ///

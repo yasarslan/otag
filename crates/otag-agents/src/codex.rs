@@ -66,6 +66,21 @@ impl AgentAdapter for Codex {
         is_program(exe, argv, PROGRAM)
     }
 
+    fn is_asking(&self, screen: &str) -> bool {
+        ASKING.iter().any(|marker| screen.contains(marker))
+    }
+
+    fn answer_keys(&self, answer: crate::approval::Answer) -> Vec<u8> {
+        // Unverified against a running Codex, like the words above: its
+        // prompt is a list whose first entry is the plain yes, and `esc`
+        // refuses. Nothing is typed unless the screen is asking, and the
+        // sender checks afterwards that the prompt is gone.
+        match answer {
+            crate::approval::Answer::Allow => crate::approval::FIRST_OPTION.to_vec(),
+            crate::approval::Answer::Deny => crate::approval::ESCAPE.to_vec(),
+        }
+    }
+
     fn detect_status(&self, screen: &str) -> Option<PaneStatus> {
         if ASKING.iter().any(|marker| screen.contains(marker)) {
             return Some(PaneStatus::NeedsApproval);

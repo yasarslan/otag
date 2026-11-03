@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A second way to watch a pane, for clients that run a terminal emulator of
+  their own: `attach_pane` answers with the escape sequences that recreate
+  the pane's screen and then forwards the program's output unchanged, and
+  sends the screen again rather than a stream with a hole in it when a client
+  falls behind or the pane is resized.
+- One subscription that pushes everything a client needs to know — panes and
+  their statuses, usage, questions from the agents, handoffs — instead of
+  polling for it.
+- An inbox of what the agents are waiting for, and answering one of those
+  questions without going to its pane. otag types only the keys the agent's
+  own prompt offers, only while that prompt is on screen, and then checks
+  that it is gone: an answer it cannot confirm is reported as not delivered
+  rather than assumed.
+- Bytes on the socket now travel as base64, which is a third of the size of
+  the list of numbers they used to be. A list of numbers is still read.
+
 ### Fixed
 
 - otag no longer paints a background of its own. Everything it draws keeps

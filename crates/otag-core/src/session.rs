@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::frame::ScreenState;
 use crate::layout::{self, Area, BORDER, Chrome, Direction, Side};
@@ -44,6 +44,12 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 /// How many commands may wait for a pane before a sender has to wait.
 const COMMAND_QUEUE: usize = 64;
+
+/// How many chunks of a pane's raw output are kept for clients watching it.
+///
+/// A client that falls this far behind is told to start again from a fresh
+/// snapshot rather than being sent output with a hole in it.
+const OUTPUT_QUEUE: usize = 256;
 
 /// What a tab is called before anything better is known about it.
 const SHELL_TITLE: &str = "shell";
@@ -68,6 +74,25 @@ enum PaneCommand {
     Resize(PaneSize),
     /// Report the lines the pane has shown, for a snapshot.
     History(usize, tokio::sync::oneshot::Sender<Vec<String>>),
+    /// Report what is on the screen as terminal output, together with a
+    /// receiver of everything the program writes from that moment on.
+    ///
+    /// Both come from the pane's own task so that they fit together: a
+    /// client that replayed the screen and then applied the receiver's
+    /// chunks sees neither a gap nor the same output twice.
+    Attach(tokio::sync::oneshot::Sender<RawAttach>),
+}
+
+/// What a client that emulates the terminal itself needs to start.
+#[derive(Debug)]
+pub struct RawAttach {
+    /// Escape sequences that put the pane's current screen onto an empty
+    /// terminal of `size`.
+    pub snapshot: Vec<u8>,
+    /// The size those sequences assume.
+    pub size: PaneSize,
+    /// Everything the program writes from now on.
+    pub output: broadcast::Receiver<Arc<[u8]>>,
 }
 
 /// What a pane publishes to everyone watching it.
@@ -110,6 +135,21 @@ impl PaneHandle {
     #[must_use]
     pub fn watch(&self) -> watch::Receiver<Arc<PaneState>> {
         self.view.clone()
+    }
+
+    /// What a client that emulates the terminal itself needs to start
+    /// following this pane: the screen as escape sequences, and the output
+    /// from that moment on.
+    ///
+    /// A receiver that falls far enough behind that otag has dropped output
+    /// it never received is told it lagged, and the only correct answer to
+    /// that is to ask for this again.
+    pub async fn attach_raw(&self) -> Result<RawAttach> {
+        let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
+        self.send(PaneCommand::Attach(attach_tx)).await?;
+        attach_rx
+            .await
+            .map_err(|_| Error::PaneGone { id: Some(self.id) })
     }
 
     /// Write bytes to the program's input.
@@ -234,6 +274,14 @@ struct Pane {
     /// Hooks report what the agent is actually doing; the words on its
     /// screen are a guess. While hooks are arriving, the guess is not used.
     last_hook: Option<Instant>,
+    /// The size a client that draws this pane in a window of its own has
+    /// asked for.
+    ///
+    /// otag's own layout decides how large a pane is *inside* otag. A client
+    /// that draws the pane somewhere else — the macOS app, which gives each
+    /// pane its own view — knows better, so once such a client has said how
+    /// large the pane is on its screen, the layout stops resizing it.
+    size_override: Option<PaneSize>,
 }
 
 impl Pane {
@@ -319,12 +367,16 @@ impl State {
     ///
     /// Only the visible panes are resized: a pane in another tab keeps the
     /// size it was drawn at until it is shown again, which is also what its
-    /// program is expecting.
+    /// program is expecting. A pane a client draws in a window of its own
+    /// keeps the size that client asked for.
     fn pending_resizes(&self) -> Vec<(PaneHandle, PaneSize)> {
         self.areas()
             .into_iter()
             .filter_map(|(id, area)| {
                 let pane = self.panes.get(&id)?;
+                if pane.size_override.is_some() {
+                    return None;
+                }
                 let size = area.inset(BORDER).size();
                 (pane.handle.snapshot().screen.size() != size).then(|| (pane.handle.clone(), size))
             })
@@ -608,6 +660,24 @@ impl Session {
             .ok_or(Error::PaneGone { id: Some(id) })?
             .input(bytes)
             .await
+    }
+
+    /// Give one pane the size the client drawing it has.
+    ///
+    /// This is for a client that draws the pane in a window of its own
+    /// rather than inside otag's layout: from here on the layout leaves that
+    /// pane's size alone, because the client is the only one that knows it.
+    pub async fn resize_pane_to(&self, id: PaneId, size: PaneSize) -> Result<()> {
+        let handle = {
+            let mut state = self.lock()?;
+            let pane = state
+                .panes
+                .get_mut(&id)
+                .ok_or(Error::PaneGone { id: Some(id) })?;
+            pane.size_override = Some(size);
+            pane.handle.clone()
+        };
+        handle.resize(size).await
     }
 
     /// The pane with this identifier, if the daemon has it.
@@ -897,6 +967,15 @@ impl Session {
         self.commit(changed).await;
     }
 
+    /// How much of the agents' limits is used, as the daemon last worked it
+    /// out.
+    #[must_use]
+    pub fn usage(&self) -> Report {
+        self.lock()
+            .map(|state| state.usage.clone())
+            .unwrap_or_default()
+    }
+
     /// What each pane has spent, for attributing usage to an agent.
     #[must_use]
     pub fn pane_usage(&self) -> Vec<(PaneId, Option<AgentKind>, Tokens)> {
@@ -1176,6 +1255,7 @@ impl Session {
             session_path: None,
             tokens: Tokens::default(),
             last_hook: None,
+            size_override: None,
         })
     }
 
@@ -1262,8 +1342,19 @@ fn spawn_pane(
         exit: None,
     }));
     let (commands_tx, commands_rx) = mpsc::channel(COMMAND_QUEUE);
+    // The pane's own task owns the only sender: once it ends, everything
+    // watching the pane's output learns that no more is coming.
+    let (output_tx, _) = broadcast::channel(OUTPUT_QUEUE);
 
-    tokio::spawn(run_pane(id, pty, screen, events, commands_rx, view_tx));
+    tokio::spawn(run_pane(
+        id,
+        pty,
+        screen,
+        events,
+        commands_rx,
+        view_tx,
+        output_tx,
+    ));
 
     Ok((
         PaneHandle {
@@ -1283,6 +1374,7 @@ async fn run_pane(
     mut events: mpsc::Receiver<PtyEvent>,
     mut commands: mpsc::Receiver<PaneCommand>,
     view: watch::Sender<Arc<PaneState>>,
+    output: broadcast::Sender<Arc<[u8]>>,
 ) {
     let mut ticker = tokio::time::interval(FRAME_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1292,6 +1384,11 @@ async fn run_pane(
         tokio::select! {
             event = events.recv() => match event {
                 Some(PtyEvent::Output(bytes)) => {
+                    // Clients that emulate the terminal themselves get the
+                    // bytes as they are, before anything is made of them. An
+                    // error here only means nobody is watching.
+                    let _ = output.send(Arc::from(bytes.as_slice()));
+
                     screen.process(&bytes);
                     dirty = true;
 
@@ -1333,6 +1430,16 @@ async fn run_pane(
                         screen.resize(size);
                         dirty = true;
                     }
+                }
+                Some(PaneCommand::Attach(answer)) => {
+                    // Built here, in the task that owns both the screen and
+                    // the output, so that the snapshot and the subscription
+                    // describe the same moment.
+                    let _ = answer.send(RawAttach {
+                        snapshot: crate::replay::snapshot(&screen.state()),
+                        size: screen.state().size(),
+                        output: output.subscribe(),
+                    });
                 }
                 Some(PaneCommand::History(max, answer)) => {
                     // The caller may have given up waiting, which is not a

@@ -8,8 +8,16 @@
 //! a catch-all variant, so a client and a daemon of different versions degrade
 //! to a clear error instead of a parse failure, and unknown object fields are
 //! ignored rather than rejected.
+//!
+//! There are two ways to watch a session. A client that lets the daemon draw
+//! asks for [`Request::Attach`] and receives views and frames; a client with
+//! a terminal of its own — the macOS app — asks for
+//! [`Request::AttachPane`] and receives the pane's bytes. Either way the
+//! daemon owns the pane, and both kinds of client may watch the same one at
+//! the same time.
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +25,9 @@ use crate::frame::ScreenFrame;
 use crate::layout::{Area, Direction, Side};
 use crate::pane::{PaneExit, PaneId, PaneSize};
 use crate::workspace::{TabId, WorkspaceId};
+use otag_agents::approval::Answer;
 use otag_agents::{AgentKind, PaneStatus, Tokens};
+use otag_features::inbox::{Ask, AskId};
 use otag_features::usage::Report;
 
 /// A command sent from a client to the daemon.
@@ -57,7 +67,7 @@ pub enum Request {
     /// is visible in the next frame.
     Input {
         /// Exactly what the program should receive.
-        bytes: Vec<u8>,
+        bytes: Bytes,
     },
     /// The client's terminal changed size.
     ///
@@ -135,6 +145,69 @@ pub enum Request {
         /// carried as text so that this request stays comparable and the
         /// daemon decides how to read it.
         payload: String,
+    },
+    /// Watch one pane as a stream of bytes, for a client that does its own
+    /// terminal emulation.
+    ///
+    /// Answered with [`Response::PaneScreen`], whose bytes put the pane's
+    /// current screen onto an empty terminal; after that the daemon sends a
+    /// [`Response::Output`] for every chunk the program writes, unchanged
+    /// and in order. A client that falls too far behind is sent a new
+    /// [`Response::PaneScreen`] and carries on from there.
+    ///
+    /// `size` is how large the client is drawing the pane. Giving one means
+    /// the client owns that pane's size from then on: otag's own layout
+    /// stops resizing it, because only the client knows how much room it
+    /// has.
+    AttachPane {
+        /// The pane to watch.
+        pane: PaneId,
+        /// How large the client is drawing it.
+        #[serde(default)]
+        size: Option<PaneSize>,
+    },
+    /// Stop watching one pane. Answered with [`Response::Ok`]; the pane and
+    /// its program keep running.
+    DetachPane {
+        /// The pane to stop watching.
+        pane: PaneId,
+    },
+    /// Write these bytes to one pane's input, named rather than focused:
+    /// a client with windows of its own has no single focused pane.
+    ///
+    /// Not answered, for the same reason as [`Request::Input`].
+    PaneInput {
+        /// The pane to type into.
+        pane: PaneId,
+        /// Exactly what the program should receive.
+        bytes: Bytes,
+    },
+    /// Tell one pane how large the client is drawing it.
+    ///
+    /// Not answered. As with [`Request::AttachPane`], this hands that pane's
+    /// size to the client.
+    PaneResize {
+        /// The pane that changed size.
+        pane: PaneId,
+        /// Its new size.
+        size: PaneSize,
+    },
+    /// Be told about everything that happens in the session, without asking
+    /// again: statuses, usage, questions and handoffs.
+    ///
+    /// Answered with [`Response::Ok`], after which the daemon pushes a
+    /// [`Response::Event`] whenever something happens, until the connection
+    /// ends.
+    Subscribe,
+    /// List what the agents are waiting for the user to answer. Answered
+    /// with [`Response::Inbox`].
+    Inbox,
+    /// Answer one of those questions. Answered with [`Response::Answered`].
+    Answer {
+        /// The question, as [`AskView::id`] gave it.
+        ask: u64,
+        /// What to answer.
+        answer: Answer,
     },
     /// Stop watching the session and close the connection. Answered with
     /// [`Response::Ok`]. The panes and their programs keep running.
@@ -217,6 +290,58 @@ pub enum Response {
         #[serde(default)]
         exit: Option<PaneExit>,
     },
+    /// Everything a pane has on its screen, as terminal output.
+    ///
+    /// The answer to [`Request::AttachPane`], and sent again whenever the
+    /// daemon cannot give a client the bytes in between — a client that fell
+    /// behind, or a pane that was resized. Writing these bytes into an empty
+    /// terminal of the pane's size reproduces the screen; a client replaces
+    /// whatever it had rather than appending.
+    PaneScreen {
+        /// The pane this is.
+        pane: PaneId,
+        /// Its size, which is the size the bytes assume.
+        size: PaneSize,
+        /// The escape sequences that recreate the screen.
+        bytes: Bytes,
+    },
+    /// A chunk of a pane's output, exactly as its program wrote it.
+    Output {
+        /// The pane that wrote it.
+        pane: PaneId,
+        /// What it wrote.
+        bytes: Bytes,
+    },
+    /// A pane a client was watching in raw mode has ended, and nothing more
+    /// will come from it.
+    PaneEnded {
+        /// The pane that ended.
+        pane: PaneId,
+        /// How its program ended, when that is known.
+        #[serde(default)]
+        exit: Option<PaneExit>,
+    },
+    /// Something happened that a subscribed client wants to know about.
+    Event {
+        /// What happened.
+        event: Event,
+    },
+    /// Answer to [`Request::Inbox`].
+    Inbox {
+        /// What the agents are waiting for, oldest first.
+        asks: Vec<AskView>,
+    },
+    /// Answer to [`Request::Answer`].
+    Answered {
+        /// The question that was answered.
+        ask: u64,
+        /// Whether the agent took the answer: otag types it into the pane
+        /// and then checks that the prompt is gone.
+        delivered: bool,
+        /// One line saying what happened, for the user.
+        #[serde(default)]
+        summary: String,
+    },
     /// Answer to [`Request::Handoff`].
     HandoffDone {
         /// The pane the work carries on in.
@@ -236,6 +361,183 @@ pub enum Response {
     /// A response this build does not know about.
     #[serde(other)]
     Unknown,
+}
+
+/// Something the daemon tells a subscribed client about.
+///
+/// Every event is a complete statement rather than a difference, so a client
+/// that misses one — or arrives late — is never left with a wrong picture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum Event {
+    /// The panes, or something about them, changed: a pane opened or
+    /// closed, an agent was noticed, a status moved.
+    Panes {
+        /// Every pane the daemon is running.
+        panes: Vec<PaneInfo>,
+    },
+    /// New numbers for how much of the agents' limits is used.
+    Usage {
+        /// How much of each agent's windows is used.
+        report: Box<Report>,
+    },
+    /// An agent is waiting for an answer.
+    Asked {
+        /// What it is asking.
+        ask: AskView,
+    },
+    /// A question is no longer waiting, because it was answered — from the
+    /// inbox or in the pane itself — or because the pane is gone.
+    Resolved {
+        /// The question that is gone.
+        ask: u64,
+        /// What it was answered with, when otag answered it.
+        #[serde(default)]
+        answer: Option<Answer>,
+    },
+    /// A handoff finished.
+    Handoff {
+        /// The pane the work carries on in.
+        pane: PaneId,
+        /// The package that was written, when the handoff wrote one.
+        #[serde(default)]
+        package: Option<PathBuf>,
+        /// One line saying what happened.
+        #[serde(default)]
+        summary: String,
+    },
+    /// Something worth telling the user, in one line.
+    Notice {
+        /// The pane it is about, when it is about one.
+        #[serde(default)]
+        pane: Option<PaneId>,
+        /// What to say.
+        text: String,
+    },
+    /// An event this build does not know about.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One question waiting for the user, as a client sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskView {
+    /// Which question this is, for [`Request::Answer`].
+    pub id: u64,
+    /// The pane whose agent is asking.
+    pub pane: PaneId,
+    /// The agent asking, when otag knows which one it is.
+    #[serde(default)]
+    pub agent: Option<AgentKind>,
+    /// The tool it wants to use, in its own words.
+    #[serde(default)]
+    pub tool: Option<String>,
+    /// One line saying what is waiting.
+    #[serde(default)]
+    pub summary: String,
+    /// When it started waiting, in seconds since the epoch.
+    #[serde(default)]
+    pub asked_at: Option<u64>,
+}
+
+impl AskView {
+    /// The client's form of one question.
+    #[must_use]
+    pub fn of(ask: &Ask) -> Self {
+        Self {
+            id: ask.id.get(),
+            pane: PaneId::from_number(ask.pane),
+            agent: ask.agent,
+            tool: ask.tool.clone(),
+            summary: ask.summary.clone(),
+            asked_at: ask
+                .asked_at
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()
+                .map(|since| since.as_secs()),
+        }
+    }
+
+    /// The question's identifier, as the inbox knows it.
+    #[must_use]
+    pub const fn ask_id(&self) -> AskId {
+        AskId::from_number(self.id)
+    }
+}
+
+/// Bytes on their way across the socket.
+///
+/// JSON has no bytes of its own. A sequence of numbers would work and is
+/// what the protocol used first, so it is still accepted, but a pane's
+/// output is sent often and in quantity: base64 is a third of the size and
+/// far cheaper to read. Everything otag sends is base64.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bytes(pub Vec<u8>);
+
+impl Bytes {
+    /// The bytes themselves.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Take the bytes out.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// Whether there are no bytes at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<Vec<u8>> for Bytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<&[u8]> for Bytes {
+    fn from(bytes: &[u8]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl Serialize for Bytes {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use base64::Engine as _;
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Bytes {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        /// Either form: base64 text, or the sequence of numbers the protocol
+        /// used before.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Text(String),
+            Numbers(Vec<u8>),
+        }
+
+        use base64::Engine as _;
+        match Either::deserialize(deserializer)? {
+            Either::Text(text) => base64::engine::general_purpose::STANDARD
+                .decode(text.as_bytes())
+                .map(Self)
+                .map_err(serde::de::Error::custom),
+            Either::Numbers(numbers) => Ok(Self(numbers)),
+        }
+    }
 }
 
 /// What the daemon reports about one pane.
@@ -533,7 +835,7 @@ mod tests {
             cwd: Some(PathBuf::from("/some/project")),
         });
         roundtrip_request(Request::Input {
-            bytes: vec![0x1b, b'[', b'A'],
+            bytes: Bytes(vec![0x1b, b'[', b'A']),
         });
         roundtrip_request(Request::Resize {
             size: PaneSize::new(24, 80),
@@ -561,6 +863,80 @@ mod tests {
             cells: 2,
         });
         roundtrip_request(Request::ToggleSidebar);
+    }
+
+    #[test]
+    fn the_requests_a_client_with_its_own_terminal_sends_roundtrip() {
+        roundtrip_request(Request::AttachPane {
+            pane: PaneId::FIRST,
+            size: Some(PaneSize::new(30, 100)),
+        });
+        roundtrip_request(Request::AttachPane {
+            pane: PaneId::FIRST,
+            size: None,
+        });
+        roundtrip_request(Request::DetachPane {
+            pane: PaneId::FIRST,
+        });
+        roundtrip_request(Request::PaneInput {
+            pane: PaneId::FIRST,
+            bytes: Bytes(b"ls\r".to_vec()),
+        });
+        roundtrip_request(Request::PaneResize {
+            pane: PaneId::FIRST,
+            size: PaneSize::new(24, 80),
+        });
+        roundtrip_request(Request::Subscribe);
+        roundtrip_request(Request::Inbox);
+        roundtrip_request(Request::Answer {
+            ask: 7,
+            answer: Answer::Allow,
+        });
+        roundtrip_request(Request::Answer {
+            ask: 8,
+            answer: Answer::Deny,
+        });
+    }
+
+    #[test]
+    fn bytes_travel_as_base64_and_are_also_read_as_numbers() {
+        // base64 is a third of the size of a list of numbers, and a pane's
+        // output is the one message otag sends in quantity.
+        let encoded = serde_json::to_string(&Bytes(vec![0x1b, b'[', b'A'])).expect("encodes");
+        assert_eq!(encoded, r#""G1tB""#);
+
+        let from_text: Bytes = serde_json::from_str(r#""G1tB""#).expect("decodes base64");
+        assert_eq!(from_text.as_slice(), [0x1b, b'[', b'A']);
+
+        // The protocol used a list of numbers first, so one still decodes.
+        let from_numbers: Bytes = serde_json::from_str("[27,91,65]").expect("decodes numbers");
+        assert_eq!(from_numbers, from_text);
+    }
+
+    #[test]
+    fn bytes_that_are_not_base64_are_refused_rather_than_guessed_at() {
+        assert!(serde_json::from_str::<Bytes>(r#""not base64!""#).is_err());
+    }
+
+    #[test]
+    fn an_answer_otag_does_not_understand_is_refused() {
+        // Typing a guess into a running agent is worse than an error.
+        assert!(
+            decode_line::<Request>(r#"{"type":"answer","ask":1,"answer":"maybe"}"#).is_err(),
+            "an unknown answer has no catch-all"
+        );
+    }
+
+    #[test]
+    fn an_unknown_event_decodes_rather_than_failing() {
+        let decoded: Response =
+            decode_line(r#"{"type":"event","event":{"event":"invented_later"}}"#).expect("decodes");
+        assert_eq!(
+            decoded,
+            Response::Event {
+                event: Event::Unknown
+            }
+        );
     }
 
     #[test]

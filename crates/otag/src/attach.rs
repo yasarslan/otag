@@ -267,7 +267,7 @@ async fn event_loop(
                         mouse_command(mouse, &client.view, &client.screens)
                     }
                     Event::Paste(text) => Command::Ask(Request::Input {
-                        bytes: keys::encode_paste(&text, focused_modes(client)),
+                        bytes: keys::encode_paste(&text, focused_modes(client)).into(),
                     }),
                     Event::Resize(cols, rows) => {
                         let size = PaneSize::new(rows, cols);
@@ -292,7 +292,7 @@ async fn event_loop(
                     }
                     Command::Send(key) => {
                         if let Some(bytes) = keys::encode(key, focused_modes(client)) {
-                            writer.send(&Request::Input { bytes }).await?;
+                            writer.send(&Request::Input { bytes: bytes.into() }).await?;
                         }
                     }
                     Command::NewWorkspace => {
@@ -528,7 +528,9 @@ fn mouse_command(event: MouseEvent, view: &SessionView, screens: &Screens) -> Co
         .map(ScreenState::modes)
         .unwrap_or_default();
     match keys::encode_mouse(event, modes, x - area.x, y - area.y) {
-        Some(bytes) => Command::Ask(Request::Input { bytes }),
+        Some(bytes) => Command::Ask(Request::Input {
+            bytes: bytes.into(),
+        }),
         None => Command::Ignore,
     }
 }
@@ -940,7 +942,7 @@ mod tests {
             panic!("expected the click to reach the program");
         };
         assert_eq!(
-            String::from_utf8(bytes).expect("the report is text"),
+            String::from_utf8(bytes.into_vec()).expect("the report is text"),
             "\x1b[<0;4;3M",
             "counted from one inside the pane, not in the terminal"
         );

@@ -18,6 +18,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -38,6 +39,13 @@ const DIR_MODE: u32 = 0o700;
 /// instead of growing the daemon's memory.
 const OUTBOX_QUEUE: usize = 64;
 
+/// Hands out the identifier of each connection.
+///
+/// Counting up is enough: an identifier is only ever compared with another,
+/// and a daemon would have to accept a connection every nanosecond for
+/// longer than it will run to come near the limit.
+static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
+
 /// How long a finished connection waits for what is already queued to be
 /// written before the writing task is dropped.
 ///
@@ -54,11 +62,23 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 /// to write to.
 #[derive(Debug, Clone)]
 pub struct Outbox {
+    /// Which connection this is, so that a handler keeping something per
+    /// client — a pane a client is watching, say — can tell them apart.
+    id: u64,
     messages: mpsc::Sender<Response>,
     finished: watch::Receiver<bool>,
 }
 
 impl Outbox {
+    /// Which connection this outbox belongs to.
+    ///
+    /// Unique within a daemon run, and never reused, so a handler may use it
+    /// as the key of anything it keeps for one client.
+    #[must_use]
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
     /// Queue a message, waiting while the client is behind.
     ///
     /// Returns `false` once the client is gone, which is the signal for a
@@ -258,6 +278,7 @@ async fn serve_connection<H: Handler>(
     let (messages_tx, messages_rx) = mpsc::channel(OUTBOX_QUEUE);
     let (finished_tx, finished_rx) = watch::channel(false);
     let outbox = Outbox {
+        id: NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed),
         messages: messages_tx,
         finished: finished_rx,
     };

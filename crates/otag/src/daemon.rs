@@ -4,15 +4,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use otag_agents::approval::Answer;
 use otag_agents::{AgentKind, SessionRef, claude, hooks};
 use otag_core::attach;
 use otag_core::pane::{PaneId, PaneSize, PaneSpec};
 use otag_core::paths::{Dirs, SOCKET_ENV};
-use otag_core::proto::{Handoff as ProtoHandoff, PaneInfo, PaneUsage, Request, Response};
+use otag_core::proto::{AskView, Event, Handoff as ProtoHandoff, PaneUsage, Request, Response};
+use otag_core::raw;
 use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
+use otag_features::inbox::{AskId, Inbox};
 
-use crate::{agents, handoff, notify, persist, usage};
+use crate::{agents, events, handoff, inbox, notify, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -84,6 +87,9 @@ async fn serve(socket: &Path) -> Result<()> {
     let daemon = Daemon {
         session: Arc::clone(&session),
         usage: Arc::clone(&shared_usage),
+        events: events::Bus::new(),
+        attachments: raw::Attachments::new(),
+        inbox: Arc::new(std::sync::Mutex::new(Inbox::new())),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
     watching.abort();
@@ -130,6 +136,12 @@ fn open_snapshots() -> Option<persist::Snapshots> {
 struct Daemon {
     session: Arc<Session>,
     usage: Arc<usage::Shared>,
+    /// Carries events to the clients that asked to be told about them.
+    events: events::Bus,
+    /// The panes clients are watching as streams of bytes.
+    attachments: raw::Attachments,
+    /// What the agents are waiting for the user to answer.
+    inbox: Arc<std::sync::Mutex<Inbox>>,
 }
 
 impl Handler for Daemon {
@@ -146,22 +158,7 @@ impl Handler for Daemon {
                 version: otag_core::VERSION.to_owned(),
             }),
             Request::ListPanes => Some(Response::Panes {
-                panes: self
-                    .session
-                    .summaries()
-                    .into_iter()
-                    .map(|pane| PaneInfo {
-                        id: pane.id,
-                        size: pane.size,
-                        workspace: pane.workspace,
-                        title: pane.title,
-                        agent: pane.agent,
-                        status: pane.status,
-                        session: pane.session,
-                        tokens: pane.tokens,
-                        exit: pane.exit,
-                    })
-                    .collect(),
+                panes: events::panes_of(&self.session),
             }),
             Request::Usage => Some(Response::Usage {
                 report: Box::new(self.usage.report()),
@@ -178,7 +175,7 @@ impl Handler for Daemon {
             }),
             Request::Attach { size, cwd } => Some(self.attach(outbox, size, cwd.as_deref()).await),
             Request::Input { bytes } => {
-                if let Err(error) = self.session.input(bytes).await {
+                if let Err(error) = self.session.input(bytes.into_vec()).await {
                     // A key pressed as a program exits has nowhere to go.
                     // The client learns the pane ended from its own stream.
                     tracing::debug!(%error, "cannot deliver input to a pane");
@@ -225,6 +222,28 @@ impl Handler for Daemon {
                 self.session.toggle_sidebar().await;
                 None
             }
+            Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
+            Request::DetachPane { pane } => {
+                self.attachments.remove(outbox.id(), pane);
+                Some(Response::Ok)
+            }
+            Request::PaneInput { pane, bytes } => {
+                if let Err(error) = self.session.input_to(pane, bytes.into_vec()).await {
+                    tracing::debug!(%error, %pane, "cannot deliver input to a pane");
+                }
+                None
+            }
+            Request::PaneResize { pane, size } => {
+                if let Err(error) = self.session.resize_pane_to(pane, size).await {
+                    tracing::debug!(%error, %pane, "cannot resize a pane");
+                }
+                None
+            }
+            Request::Subscribe => Some(events::start(&self.session, &self.events, outbox).await),
+            Request::Inbox => Some(Response::Inbox { asks: self.asks() }),
+            Request::Answer { ask, answer } => {
+                Some(self.answer(AskId::from_number(ask), answer).await)
+            }
             Request::Handoff { pane, handoff } => Some(self.handoff(pane, handoff).await),
             Request::Hook {
                 event,
@@ -242,6 +261,55 @@ impl Handler for Daemon {
 }
 
 impl Daemon {
+    /// Everything the agents are waiting for, as a client sees it.
+    fn asks(&self) -> Vec<AskView> {
+        self.inbox
+            .lock()
+            .map(|inbox| inbox.asks().iter().map(AskView::of).collect())
+            .unwrap_or_default()
+    }
+
+    /// Watch one pane as a stream of bytes.
+    async fn attach_pane(&self, outbox: &Outbox, pane: PaneId, size: Option<PaneSize>) -> Response {
+        match raw::attach_pane(&self.session, &self.attachments, outbox, pane, size).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::debug!(%error, %pane, "cannot attach a client to a pane");
+                Response::error(error.to_string())
+            }
+        }
+    }
+
+    /// Answer what an agent is waiting for, from outside its pane.
+    ///
+    /// Answered either way, and never optimistically: otag types the keys
+    /// the agent's own prompt offers and then checks that the prompt is
+    /// gone. A question that cannot be answered this way says so, so that
+    /// the user goes to the pane instead of believing it was handled.
+    async fn answer(&self, ask: AskId, answer: Answer) -> Response {
+        let taken = self.inbox.lock().ok().and_then(|mut inbox| inbox.take(ask));
+        let Some(waiting) = taken else {
+            return Response::Answered {
+                ask: ask.get(),
+                delivered: false,
+                summary: "that question is not waiting any more".to_owned(),
+            };
+        };
+
+        let pane = PaneId::from_number(waiting.pane);
+        let outcome = inbox::deliver(&self.session, pane, waiting.agent, answer).await;
+        self.events.publish(Event::Resolved {
+            ask: ask.get(),
+            answer: Some(answer),
+        });
+
+        Response::Answered {
+            ask: ask.get(),
+            delivered: outcome.delivered,
+            summary: outcome.summary,
+        }
+    }
+
     /// Carry a pane's work over to another agent, or another model.
     ///
     /// Answered either way: a handoff is something the user asked for and
@@ -300,10 +368,51 @@ impl Daemon {
         if let Some(status) = hook.status(event) {
             self.session.set_status(pane, status, true).await;
         }
+        self.collect_question(event, pane, &hook);
         if let Some(id) = hook.session_id.clone() {
             self.remember_session(pane, id, hook.transcript_path, hook.cwd)
                 .await;
         }
+    }
+
+    /// Put what an agent is asking into the inbox, or take it out again
+    /// because the agent has moved on.
+    fn collect_question(&self, event: &str, pane: PaneId, hook: &hooks::HookPayload) {
+        let asking = matches!(
+            hook.status(event),
+            Some(otag_agents::PaneStatus::NeedsApproval)
+        );
+        let Ok(mut inbox) = self.inbox.lock() else {
+            return;
+        };
+
+        if asking {
+            let agent = self
+                .session
+                .agent_panes()
+                .into_iter()
+                .find(|known| known.id == pane)
+                .and_then(|known| known.agent);
+            let summary = hook.summary().unwrap_or_else(|| "needs you".to_owned());
+            let id = inbox.ask(pane.get(), agent, hook.tool_name.clone(), summary);
+            if let Some(ask) = inbox.get(id) {
+                self.events.publish(Event::Asked {
+                    ask: AskView::of(ask),
+                });
+            }
+            return;
+        }
+
+        // Anything else from the same pane means it is not waiting any
+        // more: the user answered in the pane, or the agent gave up asking.
+        let Some(waiting) = inbox.of_pane(pane.get()).map(|ask| ask.id) else {
+            return;
+        };
+        inbox.clear_pane(pane.get());
+        self.events.publish(Event::Resolved {
+            ask: waiting.get(),
+            answer: None,
+        });
     }
 
     /// Act on what the status line otag registered reported.
@@ -433,6 +542,9 @@ mod tests {
             Daemon {
                 session,
                 usage: usage::Shared::new(),
+                events: events::Bus::new(),
+                attachments: raw::Attachments::new(),
+                inbox: Arc::new(std::sync::Mutex::new(Inbox::new())),
             },
             pane,
         )

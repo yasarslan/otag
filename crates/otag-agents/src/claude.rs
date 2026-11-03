@@ -63,6 +63,20 @@ impl AgentAdapter for Claude {
         is_program(exe, argv, PROGRAM)
     }
 
+    fn is_asking(&self, screen: &str) -> bool {
+        ASKING.iter().any(|marker| screen.contains(marker))
+    }
+
+    fn answer_keys(&self, answer: crate::approval::Answer) -> Vec<u8> {
+        // The prompt is a list whose first entry is the plain yes, and it
+        // names `esc` as the way to refuse — "No, and tell Claude what to do
+        // differently (esc)".
+        match answer {
+            crate::approval::Answer::Allow => crate::approval::FIRST_OPTION.to_vec(),
+            crate::approval::Answer::Deny => crate::approval::ESCAPE.to_vec(),
+        }
+    }
+
     fn detect_status(&self, screen: &str) -> Option<PaneStatus> {
         // Asked first: a question is on screen while the agent is also
         // showing how to interrupt it, and the question is what matters.

@@ -13,6 +13,8 @@ pub mod pane;
 pub mod paths;
 pub mod proto;
 pub mod pty;
+pub mod raw;
+pub mod replay;
 pub mod screen;
 pub mod server;
 pub mod session;

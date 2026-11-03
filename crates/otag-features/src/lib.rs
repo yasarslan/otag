@@ -7,4 +7,5 @@
 #![forbid(unsafe_code)]
 
 pub mod handoff;
+pub mod inbox;
 pub mod usage;

@@ -82,18 +82,32 @@ async fn serve(socket: &Path) -> Result<()> {
     // Reaching the user when the terminal is not in front of them is the
     // reason otag exists; it is also entirely optional, and silent when the
     // system offers no way to do it.
-    let notifying = tokio::spawn(notify::keep_watching(Arc::clone(&session)));
+    let bus = events::Bus::new();
+    let notifying = tokio::spawn({
+        let bus = bus.clone();
+        notify::keep_watching(Arc::clone(&session), move || bus.has_subscribers())
+    });
+
+    // The inbox follows the panes whether or not the agents have hooks, so
+    // it runs for every daemon too.
+    let inbox = Arc::new(std::sync::Mutex::new(Inbox::new()));
+    let collecting = tokio::spawn(inbox::keep_in_step(
+        Arc::clone(&session),
+        Arc::clone(&inbox),
+        bus.clone(),
+    ));
 
     let daemon = Daemon {
         session: Arc::clone(&session),
         usage: Arc::clone(&shared_usage),
-        events: events::Bus::new(),
+        events: bus,
         attachments: raw::Attachments::new(),
-        inbox: Arc::new(std::sync::Mutex::new(Inbox::new())),
+        inbox,
     };
     let result = server.run_until(daemon, terminate_signal()).await;
     watching.abort();
     notifying.abort();
+    collecting.abort();
 
     // The panes are about to be killed with the daemon, so what they show
     // now is what a restart has to put back.

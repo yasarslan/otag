@@ -84,6 +84,26 @@ public final class SessionStore {
         panes.first { $0.id == id }
     }
 
+    /// Answer what an agent is waiting for.
+    ///
+    /// The question leaves the list at once — it has been dealt with either
+    /// way — and the daemon's answer says whether the agent took it. One it
+    /// could not deliver is kept in `answerProblem`, because an answer that
+    /// silently did nothing is the worst outcome there is.
+    public func answer(_ ask: AskView, with answer: Answer) {
+        asks.removeAll { $0.id == ask.id }
+        answerProblem = nil
+        send(.answer(ask: ask.id, answer: answer))
+    }
+
+    /// The last answer otag could not deliver, for the user to see.
+    public var answerProblem: String?
+
+    /// Forget the last failed answer.
+    public func clearAnswerProblem() {
+        answerProblem = nil
+    }
+
     /// Connect to the daemon — starting it if it is not running — and keep
     /// the state up to date until `disconnect()`.
     public func start() {
@@ -156,8 +176,13 @@ public final class SessionStore {
             self.asks = asks
         case let .version(version):
             daemonVersion = version
-        case let .answered(ask, _, _):
+        case let .answered(ask, delivered, summary):
             asks.removeAll { $0.id == ask }
+            if !delivered {
+                answerProblem = summary.isEmpty
+                    ? "otag could not answer that agent. Look at the session."
+                    : summary
+            }
         case let .error(message):
             state = .failed(message)
         case .pong, .ok, .paneScreen, .output, .paneEnded, .handoffDone, .sessionEnded,

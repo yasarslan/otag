@@ -12,6 +12,14 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
+            // Above the sessions, because a question is the one thing in
+            // this window that is actually waiting for the user.
+            if !store.asks.isEmpty {
+                Section("Waiting for you") {
+                    InboxView(store: store) { pane in selection = pane }
+                }
+            }
+
             ForEach(store.workspaces) { workspace in
                 Section {
                     ForEach(workspace.panes) { pane in
@@ -30,7 +38,12 @@ struct SidebarView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            ConnectionFooter(store: store)
+            VStack(spacing: 0) {
+                if let problem = store.answerProblem {
+                    AnswerProblemView(problem: problem) { store.clearAnswerProblem() }
+                }
+                ConnectionFooter(store: store)
+            }
         }
     }
 }
@@ -110,8 +123,7 @@ private struct EmptySidebar: View {
             } else {
                 Text("No sessions")
                     .font(.headline)
-                Text("Start one in a terminal with `otag`, or create one here once the\n"
-                    + "new-session sheet lands.")
+                Text("Press ⌘N to start one, or run `otag` in a terminal.")
                     .font(.caption)
                     .multilineTextAlignment(.center)
             }
@@ -126,6 +138,8 @@ private struct EmptySidebar: View {
 /// The usage widget belongs here too and arrives with the rest of the usage
 /// work; until then this is where the connection is reported, which is the
 /// one thing a user cannot otherwise see.
+///
+/// The menu bar item carries the same numbers for when the window is closed.
 private struct ConnectionFooter: View {
     let store: SessionStore
 

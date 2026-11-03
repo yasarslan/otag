@@ -35,7 +35,14 @@ const TITLE: &str = "otag";
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Watch the panes and notify when one starts wanting the user.
-pub async fn keep_watching(session: Arc<Session>) {
+///
+/// `handled_elsewhere` is asked before every notification: a client with a
+/// user interface of its own — the macOS app — subscribes to the daemon's
+/// events and notifies from there, with buttons on the notification. Two
+/// notifications for one question is worse than one, so the daemon stands
+/// down for as long as such a client is connected, and takes over again the
+/// moment it is not.
+pub async fn keep_watching(session: Arc<Session>, handled_elsewhere: impl Fn() -> bool) {
     if is_disabled() {
         tracing::info!("desktop notifications are off ({DISABLE_ENV} is set)");
         return;
@@ -49,8 +56,14 @@ pub async fn keep_watching(session: Arc<Session>) {
     let mut known: HashMap<PaneId, PaneStatus> = HashMap::new();
 
     loop {
-        for message in worth_telling(&session, &mut known) {
-            sender.send(&message).await;
+        let messages = worth_telling(&session, &mut known);
+        // The statuses are taken in either case, so that a client
+        // disconnecting does not make the daemon repeat what it has already
+        // shown.
+        if !handled_elsewhere() {
+            for message in messages {
+                sender.send(&message).await;
+            }
         }
         if changes.changed().await.is_err() {
             // The session is gone, which means the daemon is stopping.

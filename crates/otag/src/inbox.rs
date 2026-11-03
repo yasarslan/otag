@@ -12,13 +12,17 @@
 //!   it saw. An answer that cannot be confirmed is reported as not
 //!   delivered, so the user goes and looks instead of believing it worked.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use otag_agents::AgentKind;
 use otag_agents::approval::Answer;
 use otag_core::pane::PaneId;
+use otag_core::proto::{AskView, Event};
 use otag_core::session::Session;
+use otag_features::inbox::Inbox;
+
+use crate::events::Bus;
 
 /// How long otag waits for the prompt to go away before saying it could not
 /// answer.
@@ -26,6 +30,82 @@ use otag_core::session::Session;
 /// Long enough for an agent to redraw its screen, short enough that the user
 /// is not left waiting on a dialog.
 const CONFIRM_WITHIN: Duration = Duration::from_millis(1_500);
+
+/// Keep the inbox in step with what the panes are actually doing.
+///
+/// Hooks are the better source — they say which tool is waiting and what it
+/// was given — but only one agent has them, and even that one can be waiting
+/// for something no hook reported. So this watches the session: a pane whose
+/// agent is asking and has no question in the inbox gets one, read off its
+/// screen, and a question whose pane has moved on is taken out again.
+///
+/// Ends when the session does, which is when the daemon is stopping.
+pub async fn keep_in_step(session: Arc<Session>, inbox: Arc<Mutex<Inbox>>, bus: Bus) {
+    let mut changes = session.changes();
+    loop {
+        for event in reconcile(&session, &inbox) {
+            bus.publish(event);
+        }
+        if changes.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Add what is missing and take out what is over, and say what changed.
+fn reconcile(session: &Arc<Session>, inbox: &Arc<Mutex<Inbox>>) -> Vec<Event> {
+    let panes = session.agent_panes();
+    let Ok(mut inbox) = inbox.lock() else {
+        return Vec::new();
+    };
+    let mut events = Vec::new();
+
+    for pane in &panes {
+        let Some(agent) = pane.agent else { continue };
+        let asking = agent.adapter().is_asking(&pane.screen);
+        let waiting = inbox.of_pane(pane.id.get()).map(|ask| ask.id);
+
+        match (asking, waiting) {
+            (true, None) => {
+                let summary = agent
+                    .adapter()
+                    .asking_summary(&pane.screen)
+                    .unwrap_or_else(|| format!("{agent} needs you"));
+                let id = inbox.ask(pane.id.get(), Some(agent), None, summary);
+                if let Some(ask) = inbox.get(id) {
+                    events.push(Event::Asked {
+                        ask: AskView::of(ask),
+                    });
+                }
+            }
+            (false, Some(id)) => {
+                inbox.clear_pane(pane.id.get());
+                events.push(Event::Resolved {
+                    ask: id.get(),
+                    answer: None,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // A question whose pane is gone cannot be answered by anyone.
+    let gone: Vec<_> = inbox
+        .asks()
+        .iter()
+        .filter(|ask| !panes.iter().any(|pane| pane.id.get() == ask.pane))
+        .map(|ask| (ask.id, ask.pane))
+        .collect();
+    for (id, pane) in gone {
+        inbox.clear_pane(pane);
+        events.push(Event::Resolved {
+            ask: id.get(),
+            answer: None,
+        });
+    }
+
+    events
+}
 
 /// What happened to one answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +234,76 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         (session, pane)
+    }
+
+    #[tokio::test]
+    async fn a_pane_whose_agent_is_asking_gets_a_question_read_off_its_screen() {
+        let (session, pane) = with_screen("Do you want to proceed?").await;
+        session.set_agent(pane, Some(AgentKind::Claude)).await;
+        let inbox = Arc::new(Mutex::new(Inbox::new()));
+
+        let events = reconcile(&session, &inbox);
+        assert_eq!(events.len(), 1, "one question, one event: {events:?}");
+        assert!(matches!(events[0], Event::Asked { .. }));
+
+        let waiting = inbox.lock().expect("the inbox");
+        let ask = waiting.of_pane(pane.get()).expect("the question");
+        assert_eq!(ask.summary, "Do you want to proceed?");
+        assert_eq!(ask.agent, Some(AgentKind::Claude));
+        drop(waiting);
+
+        // Looking again changes nothing: the agent is still waiting for the
+        // same answer.
+        assert!(reconcile(&session, &inbox).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pane_that_is_not_asking_has_no_question_collected_for_it() {
+        let (session, pane) = with_screen("esc to interrupt").await;
+        session.set_agent(pane, Some(AgentKind::Claude)).await;
+        let inbox = Arc::new(Mutex::new(Inbox::new()));
+
+        assert!(reconcile(&session, &inbox).is_empty());
+        assert!(inbox.lock().expect("the inbox").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_question_whose_pane_has_moved_on_is_taken_out_again() {
+        let (session, pane) = with_screen("esc to interrupt").await;
+        session.set_agent(pane, Some(AgentKind::Claude)).await;
+        let inbox = Arc::new(Mutex::new(Inbox::new()));
+        let id = inbox.lock().expect("the inbox").ask(
+            pane.get(),
+            Some(AgentKind::Claude),
+            None,
+            "Do you want to proceed?",
+        );
+
+        let events = reconcile(&session, &inbox);
+        assert_eq!(
+            events,
+            vec![Event::Resolved {
+                ask: id.get(),
+                answer: None
+            }]
+        );
+        assert!(inbox.lock().expect("the inbox").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_question_whose_pane_is_gone_is_taken_out_too() {
+        let (session, _) = with_screen("esc to interrupt").await;
+        let inbox = Arc::new(Mutex::new(Inbox::new()));
+        inbox.lock().expect("the inbox").ask(
+            999,
+            Some(AgentKind::Claude),
+            None,
+            "from a pane that ended",
+        );
+
+        let events = reconcile(&session, &inbox);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(inbox.lock().expect("the inbox").is_empty());
     }
 
     #[tokio::test]

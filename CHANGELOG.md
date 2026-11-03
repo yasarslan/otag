@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktree of the session's own so that two agents cannot collide in one
   checkout. A worktree that cannot be made stops the session rather than
   quietly sharing the checkout.
+- The app finds you when its window does not: the questions the agents are
+  waiting on sit at the top of the sidebar with **Allow** and **Deny** beside
+  them (`Cmd-Shift-Y` / `Cmd-Shift-N` answer the oldest), the Dock icon
+  carries the number of sessions waiting, a notification with the same two
+  buttons goes out the moment one starts waiting, and a menu bar item shows
+  the limits and who is waiting even with the window closed.
+- An answer otag could not deliver says so instead of pretending: otag types
+  the keys the agent's own prompt offers, waits for the prompt to go away,
+  and tells you to look at the session if it has not.
+- otag notices a question whether or not the agent has hooks: a pane whose
+  screen is asking gets an entry in the inbox, read off that screen, and the
+  entry goes again the moment the pane moves on.
+- The daemon's own desktop notifications stand down while the app is
+  connected, so one question is one notification.
 - `start_session` on the socket, which is what that sheet sends: any client
   can now start a session with an agent, a model, a first prompt and a
   worktree in one request.

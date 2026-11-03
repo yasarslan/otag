@@ -254,6 +254,13 @@ pub trait AgentAdapter: Send + Sync {
     /// question; see [`crate::approval`].
     fn answer_keys(&self, answer: approval::Answer) -> Vec<u8>;
 
+    /// One line saying what the agent is asking, read off its screen.
+    ///
+    /// For an agent with hooks the payload says it better; this is for the
+    /// agents that have none, and for a question otag noticed without one.
+    /// `None` when the screen is not asking anything otag recognises.
+    fn asking_summary(&self, screen: &str) -> Option<String>;
+
     /// What the agent's screen says it is doing, when it says anything.
     ///
     /// This is the fallback: hooks are better where an agent has them. The
@@ -294,6 +301,24 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Read what otag needs out of one of the agent's session files.
     fn read_transcript(&self, path: &Path) -> Result<Transcript>;
+}
+
+/// The line of a screen that a marker appears on, tidied up for a list.
+///
+/// Agents draw their questions inside boxes, so the line carries border
+/// characters and padding that mean nothing to a reader.
+#[must_use]
+pub fn asking_line(screen: &str, markers: &[&str]) -> Option<String> {
+    let line = screen
+        .lines()
+        .find(|line| markers.iter().any(|marker| line.contains(marker)))?;
+    let trimmed = line
+        .trim()
+        .trim_matches(|character: char| {
+            character.is_whitespace() || "\u{2502}\u{2503}\u{2551}|>\u{276f}*".contains(character)
+        })
+        .trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 /// The adapter for a process, if it is an agent otag knows.

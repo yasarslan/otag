@@ -53,6 +53,15 @@ impl Bus {
         let _ = self.sender.send(event);
     }
 
+    /// Whether any client is listening.
+    ///
+    /// Used to decide who tells the user about a waiting agent: a client
+    /// with a window of its own does it better than the daemon can.
+    #[must_use]
+    pub fn has_subscribers(&self) -> bool {
+        self.sender.receiver_count() > 0
+    }
+
     /// Listen for events from now on.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {

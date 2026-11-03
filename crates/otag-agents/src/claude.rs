@@ -67,6 +67,10 @@ impl AgentAdapter for Claude {
         ASKING.iter().any(|marker| screen.contains(marker))
     }
 
+    fn asking_summary(&self, screen: &str) -> Option<String> {
+        crate::asking_line(screen, &ASKING)
+    }
+
     fn answer_keys(&self, answer: crate::approval::Answer) -> Vec<u8> {
         // The prompt is a list whose first entry is the plain yes, and it
         // names `esc` as the way to refuse — "No, and tell Claude what to do
@@ -691,6 +695,26 @@ mod tests {
         assert_eq!(
             claude.detect_status(screen),
             Some(PaneStatus::NeedsApproval)
+        );
+    }
+
+    #[test]
+    fn the_question_on_the_screen_becomes_one_line_for_a_list() {
+        let claude = Claude;
+        let screen = "\u{2502} Bash command                    \u{2502}\n\
+                      \u{2502}   rm -rf build                   \u{2502}\n\
+                      \u{2502} Do you want to proceed?          \u{2502}\n\
+                      \u{276f} 1. Yes";
+        assert_eq!(
+            claude.asking_summary(screen).as_deref(),
+            Some("Do you want to proceed?"),
+            "the box around it is not part of the question"
+        );
+        assert!(claude.is_asking(screen), "the same screen is answerable");
+        assert_eq!(
+            claude.asking_summary("nothing to see here"),
+            None,
+            "a screen that is not asking has no question"
         );
     }
 

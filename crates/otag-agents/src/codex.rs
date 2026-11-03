@@ -70,6 +70,10 @@ impl AgentAdapter for Codex {
         ASKING.iter().any(|marker| screen.contains(marker))
     }
 
+    fn asking_summary(&self, screen: &str) -> Option<String> {
+        crate::asking_line(screen, &ASKING)
+    }
+
     fn answer_keys(&self, answer: crate::approval::Answer) -> Vec<u8> {
         // Unverified against a running Codex, like the words above: its
         // prompt is a list whose first entry is the plain yes, and `esc`

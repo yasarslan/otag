@@ -21,11 +21,30 @@ struct OtagApp: App {
     @State private var store = SessionStore()
     @State private var workbench = Workbench()
     @State private var pending: PendingSession?
+    @State private var attention = Attention()
 
     var body: some Scene {
         WindowGroup {
             MainView(store: store, workbench: workbench, pending: $pending)
-                .task { store.start() }
+                .task {
+                    attention.prepare()
+                    store.start()
+                }
+                // The Dock badge and the notifications follow the inbox,
+                // which the daemon keeps in step with the panes themselves.
+                .onChange(of: store.asks) { _, asks in
+                    attention.update(asks: asks, waiting: store.waiting, store: store)
+                }
+                .onChange(of: store.waiting) { _, waiting in
+                    attention.update(asks: store.asks, waiting: waiting, store: store)
+                }
+                .onChange(of: attention.pending?.ask) { _, _ in
+                    guard let answered = attention.pending else { return }
+                    attention.pending = nil
+                    guard let ask = store.asks.first(where: { $0.id == answered.ask })
+                    else { return }
+                    store.answer(ask, with: answered.answer)
+                }
         }
         .defaultSize(width: 1_100, height: 700)
         .windowToolbarStyle(.unified)
@@ -35,6 +54,13 @@ struct OtagApp: App {
                     .keyboardShortcut("n", modifiers: .command)
             }
             CommandMenu("Session") {
+                Button("Allow What Is Waiting") { answerFirst(.allow) }
+                    .keyboardShortcut("y", modifiers: [.command, .shift])
+                    .disabled(store.asks.isEmpty)
+                Button("Deny What Is Waiting") { answerFirst(.deny) }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(store.asks.isEmpty)
+                Divider()
                 // Splitting means another session beside this one, and a
                 // pane is the daemon's to create: the only honest way to get
                 // one is to say what should run in it.
@@ -51,6 +77,20 @@ struct OtagApp: App {
                     .keyboardShortcut("[", modifiers: [.command, .shift])
             }
         }
+
+        // Visible with the window closed, which is how an agent that needs
+        // permission is found without going looking for the app.
+        MenuBarExtra {
+            MenuBarView(store: store)
+        } label: {
+            MenuBarLabel(store: store)
+        }
+    }
+
+    /// Answer the oldest question, which is the one the sidebar shows first.
+    private func answerFirst(_ answer: Answer) {
+        guard let ask = store.asks.first else { return }
+        store.answer(ask, with: answer)
     }
 
     private func closeTab() {

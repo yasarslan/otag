@@ -278,9 +278,13 @@ pub trait AgentAdapter: Send + Sync {
     /// The command that continues a session where it left off.
     fn resume_command(&self, session: &SessionRef) -> Vec<String>;
 
-    /// The command that starts the agent, with a first prompt if there is
-    /// one.
-    fn start_command(&self, initial_prompt: Option<&str>) -> Vec<String>;
+    /// The command that starts the agent, with a first prompt and a model
+    /// if there are any.
+    ///
+    /// A model is named only when the user asked for one: letting the agent
+    /// pick its own default is the right behaviour, and otag does not know
+    /// which models an account has.
+    fn start_command(&self, initial_prompt: Option<&str>, model: Option<&str>) -> Vec<String>;
 
     /// The command that continues a session on another model.
     ///

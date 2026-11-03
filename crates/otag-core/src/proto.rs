@@ -192,6 +192,31 @@ pub enum Request {
         /// Its new size.
         size: PaneSize,
     },
+    /// Start a session of its own: a project, an agent, and what to ask it
+    /// first. Answered with [`Response::SessionStarted`].
+    ///
+    /// This is what a client's "new session" sends. Everything but the
+    /// directory is optional: no agent means the user's shell, no model
+    /// means the agent's own default, and no prompt means the agent starts
+    /// waiting for one.
+    StartSession {
+        /// The project directory the session works in.
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+        /// The agent to run, or the user's shell when there is none.
+        #[serde(default)]
+        agent: Option<AgentKind>,
+        /// A model to ask the agent for, when the user named one.
+        #[serde(default)]
+        model: Option<String>,
+        /// What to ask the agent first.
+        #[serde(default)]
+        prompt: Option<String>,
+        /// Whether to give the session a git worktree of its own, so that it
+        /// cannot collide with the other sessions in the same checkout.
+        #[serde(default)]
+        worktree: bool,
+    },
     /// Be told about everything that happens in the session, without asking
     /// again: statuses, usage, questions and handoffs.
     ///
@@ -311,6 +336,17 @@ pub enum Response {
         pane: PaneId,
         /// What it wrote.
         bytes: Bytes,
+    },
+    /// Answer to [`Request::StartSession`].
+    SessionStarted {
+        /// The pane the session is running in, to attach to.
+        pane: PaneId,
+        /// The name the sidebar gives its project.
+        #[serde(default)]
+        workspace: String,
+        /// Where it is working, which is the worktree when one was made.
+        #[serde(default)]
+        cwd: Option<PathBuf>,
     },
     /// A pane a client was watching in raw mode has ended, and nothing more
     /// will come from it.
@@ -863,6 +899,38 @@ mod tests {
             cells: 2,
         });
         roundtrip_request(Request::ToggleSidebar);
+    }
+
+    #[test]
+    fn starting_a_session_roundtrips_with_and_without_its_options() {
+        roundtrip_request(Request::StartSession {
+            cwd: Some(PathBuf::from("/some/project")),
+            agent: Some(AgentKind::Claude),
+            model: Some("sonnet".to_owned()),
+            prompt: Some("read the roadmap".to_owned()),
+            worktree: true,
+        });
+        roundtrip_request(Request::StartSession {
+            cwd: None,
+            agent: None,
+            model: None,
+            prompt: None,
+            worktree: false,
+        });
+
+        // A client that sends only a directory gets a shell in it.
+        let decoded: Request =
+            decode_line(r#"{"type":"start_session","cwd":"/some/project"}"#).expect("decodes");
+        assert_eq!(
+            decoded,
+            Request::StartSession {
+                cwd: Some(PathBuf::from("/some/project")),
+                agent: None,
+                model: None,
+                prompt: None,
+                worktree: false,
+            }
+        );
     }
 
     #[test]

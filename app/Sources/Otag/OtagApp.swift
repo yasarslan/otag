@@ -1,6 +1,16 @@
 import OtagKit
 import SwiftUI
 
+/// A session the user has asked for but the daemon has not started yet.
+///
+/// It carries where the new pane should go: a tab of its own, or beside the
+/// pane that is showing.
+struct PendingSession: Identifiable {
+    let id = UUID()
+    /// How to place the new pane, or `nil` for a tab of its own.
+    var axis: SplitAxis?
+}
+
 /// Otag: a native window onto the otag daemon.
 ///
 /// The daemon owns the panes, the agents and everything known about them;
@@ -9,47 +19,137 @@ import SwiftUI
 @main
 struct OtagApp: App {
     @State private var store = SessionStore()
+    @State private var workbench = Workbench()
+    @State private var pending: PendingSession?
 
     var body: some Scene {
         WindowGroup {
-            MainView(store: store)
+            MainView(store: store, workbench: workbench, pending: $pending)
                 .task { store.start() }
         }
         .defaultSize(width: 1_100, height: 700)
         .windowToolbarStyle(.unified)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Session…") { pending = PendingSession(axis: nil) }
+                    .keyboardShortcut("n", modifiers: .command)
+            }
+            CommandMenu("Session") {
+                // Splitting means another session beside this one, and a
+                // pane is the daemon's to create: the only honest way to get
+                // one is to say what should run in it.
+                Button("Split Right…") { pending = PendingSession(axis: .horizontal) }
+                    .keyboardShortcut("d", modifiers: .command)
+                Button("Split Down…") { pending = PendingSession(axis: .vertical) }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                Divider()
+                Button("Close Tab") { closeTab() }
+                    .keyboardShortcut("w", modifiers: .command)
+                Button("Next Tab") { workbench.step(by: 1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Previous Tab") { workbench.step(by: -1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+            }
+        }
+    }
+
+    private func closeTab() {
+        guard let id = workbench.selected else { return }
+        for pane in workbench.closeTab(id) {
+            store.send(.detachPane(pane: pane))
+        }
     }
 }
 
-/// The window: sessions on the left, the selected session on the right.
+/// The window: sessions on the left, the open tabs on the right.
 struct MainView: View {
     let store: SessionStore
-    @State private var selection: PaneID?
+    let workbench: Workbench
+    @Binding var pending: PendingSession?
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(store: store, selection: $selection)
+            SidebarView(store: store, selection: selection)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
         } detail: {
-            if let selection, let pane = store.pane(selection) {
-                SessionView(pane: pane)
+            if workbench.tabs.isEmpty {
+                EmptyDetailView(state: store.state) {
+                    pending = PendingSession(axis: nil)
+                }
             } else {
-                EmptyDetailView(state: store.state)
+                TabsView(store: store, workbench: workbench)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    pending = PendingSession(axis: nil)
+                } label: {
+                    Label("New Session", systemImage: "plus")
+                }
+                .help("Start a session (⌘N)")
+            }
+        }
+        .sheet(item: $pending) { request in
+            NewSessionSheet(socket: store.socket) { pane, title in
+                place(pane: pane, title: title, axis: request.axis)
             }
         }
         .onChange(of: store.panes) { _, panes in
-            // A session that has gone cannot stay selected, and a window
-            // with nothing selected should show the first session there is.
-            if let selection, panes.contains(where: { $0.id == selection }) {
-                return
+            // A pane the daemon has let go of cannot stay on screen.
+            let alive = Set(panes.map(\.id))
+            for tab in workbench.tabs {
+                for pane in tab.panes where !alive.contains(pane) {
+                    workbench.close(pane: pane)
+                }
             }
-            selection = panes.first?.id
+            retitleTabs(panes)
         }
+    }
+
+    /// The sidebar's selection is the focused pane of the current tab, and
+    /// choosing a session there opens or shows it.
+    private var selection: Binding<PaneID?> {
+        Binding(
+            get: { workbench.focus },
+            set: { pane in
+                guard let pane else { return }
+                let title = store.pane(pane).map(Self.title(of:)) ?? "session"
+                workbench.open(pane: pane, title: title)
+            }
+        )
+    }
+
+    /// Put a freshly started session where the user asked for it.
+    private func place(pane: PaneID, title: String, axis: SplitAxis?) {
+        if let axis, workbench.current != nil {
+            workbench.split(with: pane, axis: axis)
+        } else {
+            workbench.open(pane: pane, title: title)
+        }
+    }
+
+    /// Keep each tab named after the pane it was opened for.
+    private func retitleTabs(_ panes: [PaneInfo]) {
+        for tab in workbench.tabs {
+            guard let first = tab.panes.first,
+                  let pane = panes.first(where: { $0.id == first })
+            else { continue }
+            workbench.rename(tab: tab.id, to: Self.title(of: pane))
+        }
+    }
+
+    /// What a pane is called in a tab.
+    static func title(of pane: PaneInfo) -> String {
+        if !pane.title.isEmpty { return pane.title }
+        return pane.agent?.label ?? "shell"
     }
 }
 
-/// What fills the detail side before a session is chosen.
+/// What fills the detail side before anything is open.
 struct EmptyDetailView: View {
     let state: ConnectionState
+    let newSession: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -62,10 +162,12 @@ struct EmptyDetailView: View {
                 Image(systemName: "rectangle.on.rectangle")
                     .font(.system(size: 34, weight: .light))
                     .foregroundStyle(.tertiary)
-                Text("No session selected")
+                Text("No session open")
                     .font(.title3)
-                Text("Pick a session on the left.")
+                Text("Pick one on the left, or start one.")
                     .foregroundStyle(.secondary)
+                Button("New Session…", action: newSession)
+                    .padding(.top, 4)
             case let .failed(message):
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 34, weight: .light))

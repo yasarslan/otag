@@ -140,7 +140,9 @@ pub async fn run(session: &Arc<Session>, pane: PaneId, mode: Mode) -> Result<Don
                 tracing::debug!(%error, "cannot add otag's directory to .git/info/exclude");
             }
 
-            let command = to.adapter().start_command(Some(&Package::prompt(&path)));
+            let command = to
+                .adapter()
+                .start_command(Some(&Package::prompt(&path)), None);
             let started = split(session, pane, &command, to).await?;
 
             Ok(Done {

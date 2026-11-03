@@ -570,6 +570,27 @@ impl Session {
         Ok(())
     }
 
+    /// Start a session of its own: a workspace with one tab and one pane
+    /// running `command`, shown straight away.
+    ///
+    /// This is what a client's "new session" does. An empty command runs the
+    /// user's shell, which is the same as [`Self::new_workspace`]; a command
+    /// starts an agent. Returns the pane, because the client that asked for
+    /// it wants to attach to it.
+    pub async fn start_session(
+        self: &Arc<Self>,
+        cwd: Option<&Path>,
+        command: &[String],
+        title: &str,
+    ) -> Result<PaneId> {
+        let pane = {
+            let mut state = self.lock()?;
+            self.start_workspace_running(&mut state, cwd, command, title)?
+        };
+        self.commit(true).await;
+        Ok(pane)
+    }
+
     /// Show the tab at `index` of the active workspace.
     pub async fn select_tab(self: &Arc<Self>, index: usize) {
         let changed = self
@@ -1157,11 +1178,23 @@ impl Session {
 
     /// Start a workspace with one tab and one pane, and show it.
     fn start_workspace(self: &Arc<Self>, state: &mut State, cwd: Option<&Path>) -> Result<()> {
+        self.start_workspace_running(state, cwd, &[], SHELL_TITLE)?;
+        Ok(())
+    }
+
+    /// Start a workspace whose one pane runs a command of its own.
+    fn start_workspace_running(
+        self: &Arc<Self>,
+        state: &mut State,
+        cwd: Option<&Path>,
+        command: &[String],
+        title: &str,
+    ) -> Result<PaneId> {
         let id = state.next_workspace;
         state.next_workspace = id.next();
         let name = crate::workspace::unique_name(&crate::workspace::name_for(cwd), &state.names());
 
-        let pane = self.start_pane(state, id, cwd)?;
+        let pane = self.start_pane_running(state, id, cwd, command, title)?;
         let tab_id = state.next_tab;
         state.next_tab = tab_id.next();
 
@@ -1169,11 +1202,11 @@ impl Session {
             id,
             name,
             cwd.map(Path::to_path_buf),
-            Tab::new(tab_id, SHELL_TITLE, pane),
+            Tab::new(tab_id, title, pane),
         );
         state.workspaces.push(workspace);
         state.active = state.workspaces.len().saturating_sub(1);
-        Ok(())
+        Ok(pane)
     }
 
     /// Start a pane, and the task that notices when its program ends.

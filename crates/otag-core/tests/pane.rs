@@ -382,3 +382,70 @@ async fn a_noisy_program_does_not_flood_the_client_with_frames() {
     // lines printed.
     assert!(frames < 200, "the pane published {frames} frames");
 }
+
+#[tokio::test]
+async fn a_session_of_its_own_runs_its_command_in_a_workspace_of_its_own() {
+    // What a client's "new session" does: a project directory, a command,
+    // and a pane to attach to.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let session = Session::new(PaneSpec::shell());
+    session
+        .attach(PaneSize::new(24, 80), None)
+        .await
+        .expect("the first pane");
+
+    let command = vec![
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        "printf 'from the session\\n'; sleep 10".to_owned(),
+    ];
+    let pane = session
+        .start_session(Some(directory.path()), &command, "claude")
+        .await
+        .expect("the session starts");
+
+    let handle = session.pane(pane).expect("the new pane");
+    let state = wait_for(&handle, |state| {
+        state.screen.text().contains("from the session")
+    })
+    .await;
+    assert!(state.screen.text().contains("from the session"));
+
+    let summary = session
+        .summaries()
+        .into_iter()
+        .find(|summary| summary.id == pane)
+        .expect("the new pane is listed");
+    assert_eq!(summary.title, "claude", "the pane says what it is running");
+
+    let view = session.view();
+    assert_eq!(
+        view.panes.len(),
+        1,
+        "the new session is shown on its own, not beside the old one"
+    );
+    assert_eq!(view.focus, Some(pane));
+    assert_eq!(view.workspaces.len(), 2, "it is a workspace of its own");
+}
+
+#[tokio::test]
+async fn a_session_without_a_command_runs_the_shell() {
+    let session = Session::new(PaneSpec::command([
+        "/bin/sh",
+        "-c",
+        "printf 'shell\\n'; sleep 10",
+    ]));
+    session
+        .attach(PaneSize::new(24, 80), None)
+        .await
+        .expect("the first pane");
+
+    let pane = session
+        .start_session(None, &[], "shell")
+        .await
+        .expect("the session starts");
+
+    let handle = session.pane(pane).expect("the new pane");
+    let state = wait_for(&handle, |state| state.screen.text().contains("shell")).await;
+    assert!(state.screen.text().contains("shell"));
+}

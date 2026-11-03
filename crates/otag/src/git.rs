@@ -8,7 +8,7 @@
 //! work. That file is not tracked by git, so nothing otag writes can end up
 //! in a commit.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -71,6 +71,83 @@ pub fn exclude(cwd: &Path) -> std::io::Result<bool> {
     let addition = format!("{separator}# otag's handoff packages\n{EXCLUDE_LINE}\n");
     std::fs::write(&path, format!("{existing}{addition}"))?;
     Ok(true)
+}
+
+/// Where otag puts the worktrees it makes, below the project directory.
+///
+/// Inside `.otag/`, which is already kept out of `git status` by
+/// [`exclude`], so a worktree never looks like untracked work.
+pub const WORKTREES: [&str; 2] = [".otag", "worktrees"];
+
+/// Give a session a git worktree of its own, and say where it is.
+///
+/// Two agents editing the same checkout is the most expensive kind of
+/// collision there is, and a worktree is the cheap way out: the same
+/// repository, a branch and a directory of its own. `name` is what the
+/// branch and the directory are called, below `cwd`.
+///
+/// Reports a sentence for the user when it cannot be done — `cwd` is not a
+/// repository, git is missing, the branch exists already — because the
+/// caller has to decide whether to carry on without one.
+pub async fn add_worktree(cwd: &Path, name: &str) -> std::result::Result<PathBuf, String> {
+    let slug: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        return Err("a worktree needs a name".to_owned());
+    }
+
+    let directory = WORKTREES
+        .iter()
+        .fold(cwd.to_path_buf(), |path, part| path.join(part))
+        .join(&slug);
+    if directory.exists() {
+        return Err(format!(
+            "{} exists already, so otag did not make a worktree there",
+            directory.display()
+        ));
+    }
+
+    // Keep otag's own directory out of the user's `git status` before
+    // putting anything in it.
+    if let Err(error) = exclude(cwd) {
+        tracing::debug!(%error, "cannot write .git/info/exclude");
+    }
+    if let Some(parent) = directory.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+
+    let branch = format!("otag/{slug}");
+    let Some(path) = directory.to_str() else {
+        return Err("that project's path is not text this can pass to git".to_owned());
+    };
+    if run(cwd, &["worktree", "add", "-b", &branch, path])
+        .await
+        .is_none()
+    {
+        // A branch that exists already is the common case, and adding the
+        // worktree on the existing branch is what the user meant.
+        if run(cwd, &["worktree", "add", path, &branch])
+            .await
+            .is_none()
+        {
+            return Err(format!(
+                "git could not make a worktree in {}. Is this a git repository?",
+                directory.display()
+            ));
+        }
+    }
+
+    tracing::info!(worktree = %directory.display(), branch, "made a worktree for a session");
+    Ok(directory)
 }
 
 /// The `info` directory of the repository `cwd` is in, if it is in one.

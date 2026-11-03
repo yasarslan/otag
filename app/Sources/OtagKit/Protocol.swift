@@ -256,6 +256,34 @@ public enum Answer: String, Codable, Sendable {
 
 // MARK: - Requests
 
+/// What the new-session sheet asks for.
+public struct StartSession: Sendable, Equatable {
+    /// The project directory the session works in.
+    public var cwd: String?
+    /// The agent to run, or the user's shell when there is none.
+    public var agent: AgentKind?
+    /// A model to ask the agent for, when the user named one.
+    public var model: String?
+    /// What to ask the agent first.
+    public var prompt: String?
+    /// Whether the session gets a git worktree of its own.
+    public var worktree: Bool
+
+    public init(
+        cwd: String? = nil,
+        agent: AgentKind? = nil,
+        model: String? = nil,
+        prompt: String? = nil,
+        worktree: Bool = false
+    ) {
+        self.cwd = cwd
+        self.agent = agent
+        self.model = model
+        self.prompt = prompt
+        self.worktree = worktree
+    }
+}
+
 /// A command the app sends the daemon.
 public enum Request: Sendable {
     case ping
@@ -265,6 +293,7 @@ public enum Request: Sendable {
     case subscribe
     case inbox
     case answer(ask: UInt64, answer: Answer)
+    case startSession(StartSession)
     case attachPane(pane: PaneID, size: PaneSize?)
     case detachPane(pane: PaneID)
     case paneInput(pane: PaneID, bytes: Data)
@@ -303,6 +332,19 @@ extension Request: Encodable {
             try container.encode("answer", forKey: Key("type"))
             try container.encode(ask, forKey: Key("ask"))
             try container.encode(answer, forKey: Key("answer"))
+        case let .startSession(asked):
+            try container.encode("start_session", forKey: Key("type"))
+            try container.encodeIfPresent(asked.cwd, forKey: Key("cwd"))
+            try container.encodeIfPresent(asked.agent, forKey: Key("agent"))
+            // An empty model or prompt is no model and no prompt: the daemon
+            // should not be told to pass an empty argument along.
+            try container.encodeIfPresent(asked.model?.isEmpty == true ? nil : asked.model,
+                                          forKey: Key("model"))
+            try container.encodeIfPresent(asked.prompt?.isEmpty == true ? nil : asked.prompt,
+                                          forKey: Key("prompt"))
+            if asked.worktree {
+                try container.encode(true, forKey: Key("worktree"))
+            }
         case let .attachPane(pane, size):
             try container.encode("attach_pane", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
@@ -388,6 +430,7 @@ public enum Response: Sendable {
     case version(String)
     case panes([PaneInfo])
     case usage(UsageReport)
+    case sessionStarted(pane: PaneID, workspace: String, cwd: String?)
     case paneScreen(pane: PaneID, size: PaneSize, bytes: Data)
     case output(pane: PaneID, bytes: Data)
     case paneEnded(pane: PaneID, exit: PaneExit?)
@@ -404,7 +447,7 @@ public enum Response: Sendable {
 extension Response: Decodable {
     private enum Key: String, CodingKey {
         case type, version, panes, report, pane, size, bytes, exit, event, asks, ask
-        case delivered, summary, package, message, view, frame
+        case delivered, summary, package, message, view, frame, workspace, cwd
     }
 
     public init(from decoder: Decoder) throws {
@@ -422,6 +465,12 @@ extension Response: Decodable {
         case "usage":
             self = .usage(try container.decodeIfPresent(UsageReport.self, forKey: .report)
                 ?? UsageReport())
+        case "session_started":
+            self = .sessionStarted(
+                pane: try container.decode(PaneID.self, forKey: .pane),
+                workspace: try container.decodeIfPresent(String.self, forKey: .workspace) ?? "",
+                cwd: try container.decodeIfPresent(String.self, forKey: .cwd)
+            )
         case "pane_screen":
             self = .paneScreen(
                 pane: try container.decode(PaneID.self, forKey: .pane),

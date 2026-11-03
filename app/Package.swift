@@ -9,6 +9,11 @@ let package = Package(
         .executable(name: "Otag", targets: ["Otag"]),
         .library(name: "OtagKit", targets: ["OtagKit"]),
     ],
+    dependencies: [
+        // The terminal emulator and view. MIT, and the only dependency the
+        // app has: everything else is the system's own frameworks.
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0"),
+    ],
     targets: [
         // Everything that talks to the daemon, with no user interface in it,
         // so that it can be tested on its own.
@@ -19,7 +24,7 @@ let package = Package(
         // The app itself: views and nothing else worth testing.
         .executableTarget(
             name: "Otag",
-            dependencies: ["OtagKit"],
+            dependencies: ["OtagKit", .product(name: "SwiftTerm", package: "SwiftTerm")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(

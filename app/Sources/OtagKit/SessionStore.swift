@@ -161,7 +161,7 @@ public final class SessionStore {
         case let .error(message):
             state = .failed(message)
         case .pong, .ok, .paneScreen, .output, .paneEnded, .handoffDone, .sessionEnded,
-             .unknown:
+             .sessionStarted, .unknown:
             // Pane bytes belong to whichever terminal view asked for them,
             // and the rest needs nothing from the store.
             break

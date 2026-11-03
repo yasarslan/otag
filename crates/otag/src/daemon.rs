@@ -222,6 +222,22 @@ impl Handler for Daemon {
                 self.session.toggle_sidebar().await;
                 None
             }
+            Request::StartSession {
+                cwd,
+                agent,
+                model,
+                prompt,
+                worktree,
+            } => Some(
+                self.start_session(StartSession {
+                    cwd,
+                    agent,
+                    model,
+                    prompt,
+                    worktree,
+                })
+                .await,
+            ),
             Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
             Request::DetachPane { pane } => {
                 self.attachments.remove(outbox.id(), pane);
@@ -260,7 +276,77 @@ impl Handler for Daemon {
     }
 }
 
+/// What a client asked for when it asked for a new session.
+struct StartSession {
+    cwd: Option<PathBuf>,
+    agent: Option<AgentKind>,
+    model: Option<String>,
+    prompt: Option<String>,
+    worktree: bool,
+}
+
 impl Daemon {
+    /// Start a session: a project, an agent, and what to ask it first.
+    ///
+    /// Answered either way, because the user is waiting on it. A worktree
+    /// that cannot be made is reported and the session is *not* started: a
+    /// user who asked for one does not want two agents in one checkout.
+    async fn start_session(&self, asked: StartSession) -> Response {
+        let mut cwd = asked.cwd;
+        if asked.worktree {
+            let Some(project) = cwd.clone() else {
+                return Response::error("a worktree needs a project directory to make it in.");
+            };
+            let name = format!(
+                "{}-{}",
+                asked.agent.map_or("shell", AgentKind::name),
+                worktree_stamp()
+            );
+            match crate::git::add_worktree(&project, &name).await {
+                Ok(worktree) => cwd = Some(worktree),
+                Err(message) => return Response::error(message),
+            }
+        }
+
+        let (command, title) = match asked.agent {
+            Some(agent) => (
+                agent
+                    .adapter()
+                    .start_command(asked.prompt.as_deref(), asked.model.as_deref()),
+                agent.name().to_owned(),
+            ),
+            // No agent is a shell, and a prompt without an agent has nothing
+            // to be asked of, so it is ignored rather than typed somewhere.
+            None => (Vec::new(), "shell".to_owned()),
+        };
+
+        match self
+            .session
+            .start_session(cwd.as_deref(), &command, &title)
+            .await
+        {
+            Ok(pane) => {
+                let workspace = self
+                    .session
+                    .summaries()
+                    .into_iter()
+                    .find(|summary| summary.id == pane)
+                    .map(|summary| summary.workspace)
+                    .unwrap_or_default();
+                tracing::info!(%pane, workspace, "started a session");
+                Response::SessionStarted {
+                    pane,
+                    workspace,
+                    cwd,
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot start a session");
+                Response::error(format!("cannot start a session: {error}"))
+            }
+        }
+    }
+
     /// Everything the agents are waiting for, as a client sees it.
     fn asks(&self) -> Vec<AskView> {
         self.inbox
@@ -490,6 +576,17 @@ impl Daemon {
     }
 }
 
+/// A short, sortable stamp for naming a worktree and its branch.
+///
+/// Seconds since the epoch: short, unique enough for a person starting
+/// sessions by hand, and it sorts the way the directory listing should.
+fn worktree_stamp() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs().to_string())
+        .unwrap_or_else(|_| "new".to_owned())
+}
+
 /// Completes when the operating system asks the daemon to terminate.
 ///
 /// A signal handler that cannot be installed is logged and then ignored: the
@@ -548,6 +645,80 @@ mod tests {
             },
             pane,
         )
+    }
+
+    #[tokio::test]
+    async fn starting_a_session_without_an_agent_opens_a_shell_in_the_project() {
+        let (daemon, _) = with_one_pane().await;
+        let directory = tempfile::tempdir().expect("a temporary directory");
+
+        let response = daemon
+            .start_session(StartSession {
+                cwd: Some(directory.path().to_path_buf()),
+                agent: None,
+                model: None,
+                prompt: None,
+                worktree: false,
+            })
+            .await;
+
+        let Response::SessionStarted {
+            pane,
+            workspace,
+            cwd,
+        } = response
+        else {
+            panic!("expected a started session, got {response:?}");
+        };
+        assert!(daemon.session.pane(pane).is_some(), "the pane is running");
+        assert!(
+            !workspace.is_empty(),
+            "the sidebar has something to call it"
+        );
+        assert_eq!(cwd.as_deref(), Some(directory.path()));
+    }
+
+    #[tokio::test]
+    async fn asking_for_a_worktree_without_a_project_is_refused_rather_than_guessed_at() {
+        let (daemon, _) = with_one_pane().await;
+
+        let response = daemon
+            .start_session(StartSession {
+                cwd: None,
+                agent: None,
+                model: None,
+                prompt: None,
+                worktree: true,
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected a refusal, got {response:?}");
+        };
+        assert!(message.contains("project directory"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_worktree_that_cannot_be_made_stops_the_session_rather_than_sharing_a_checkout() {
+        // Not a git repository, so there is no worktree to be had — and two
+        // agents in one checkout is exactly what the user asked to avoid.
+        let (daemon, _) = with_one_pane().await;
+        let directory = tempfile::tempdir().expect("a temporary directory");
+
+        let response = daemon
+            .start_session(StartSession {
+                cwd: Some(directory.path().to_path_buf()),
+                agent: None,
+                model: None,
+                prompt: None,
+                worktree: true,
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected a refusal, got {response:?}");
+        };
+        assert!(message.contains("worktree"), "{message}");
     }
 
     #[tokio::test]

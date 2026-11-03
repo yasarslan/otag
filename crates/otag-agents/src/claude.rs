@@ -145,8 +145,13 @@ impl AgentAdapter for Claude {
         ]
     }
 
-    fn start_command(&self, initial_prompt: Option<&str>) -> Vec<String> {
+    fn start_command(&self, initial_prompt: Option<&str>, model: Option<&str>) -> Vec<String> {
         let mut command = vec![PROGRAM.to_owned()];
+        if let Some(model) = model.filter(|model| !model.is_empty()) {
+            command.push("--model".to_owned());
+            command.push(model.to_owned());
+        }
+        // The prompt goes last: it is an argument, not an option's value.
         command.extend(initial_prompt.map(str::to_owned));
         command
     }
@@ -648,9 +653,19 @@ mod tests {
             claude.resume_on_model(&session, "sonnet"),
             vec!["claude", "--resume", &session.id, "--model", "sonnet"]
         );
-        assert_eq!(claude.start_command(None), vec!["claude"]);
+        assert_eq!(claude.start_command(None, None), vec!["claude"]);
         assert_eq!(
-            claude.start_command(Some("read the handoff")),
+            claude.start_command(Some("go"), Some("sonnet")),
+            vec!["claude", "--model", "sonnet", "go"],
+            "the model is an option and the prompt an argument"
+        );
+        assert_eq!(
+            claude.start_command(None, Some("")),
+            vec!["claude"],
+            "an empty model is no model"
+        );
+        assert_eq!(
+            claude.start_command(Some("read the handoff"), None),
             vec!["claude", "read the handoff"]
         );
     }

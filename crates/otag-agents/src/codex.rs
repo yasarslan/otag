@@ -133,8 +133,13 @@ impl AgentAdapter for Codex {
         vec![PROGRAM.to_owned(), "resume".to_owned(), session.id.clone()]
     }
 
-    fn start_command(&self, initial_prompt: Option<&str>) -> Vec<String> {
+    fn start_command(&self, initial_prompt: Option<&str>, model: Option<&str>) -> Vec<String> {
         let mut command = vec![PROGRAM.to_owned()];
+        if let Some(model) = model.filter(|model| !model.is_empty()) {
+            command.push("--model".to_owned());
+            command.push(model.to_owned());
+        }
+        // The prompt goes last: it is an argument, not an option's value.
         command.extend(initial_prompt.map(str::to_owned));
         command
     }
@@ -585,9 +590,13 @@ mod tests {
             codex.resume_command(&session),
             vec!["codex", "resume", &session.id]
         );
-        assert_eq!(codex.start_command(None), vec!["codex"]);
+        assert_eq!(codex.start_command(None, None), vec!["codex"]);
         assert_eq!(
-            codex.start_command(Some("read the handoff")),
+            codex.start_command(Some("go"), Some("o3")),
+            vec!["codex", "--model", "o3", "go"]
+        );
+        assert_eq!(
+            codex.start_command(Some("read the handoff"), None),
             vec!["codex", "read the handoff"]
         );
     }

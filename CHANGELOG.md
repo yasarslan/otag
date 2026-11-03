@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon if none is running and lists every session, grouped by project, with
   what each one is doing. Build it with `scripts/bundle-app.sh`. The terminal
   client is unchanged and stays the way to use otag on Linux and over SSH.
+- The app shows the sessions themselves, in tabs that can be split: a real
+  terminal per pane with colours, scrollback, mouse reporting, copy and
+  paste, resized by the window rather than by otag's own layout. Dividers
+  drag, `Cmd-D` and `Cmd-Shift-D` split, `Cmd-W` closes a tab and
+  `Cmd-Shift-[`/`]` step between them.
+- A new-session sheet (`Cmd-N`): a project folder, Claude Code / Codex /
+  shell, an optional model, an optional first prompt, and an optional git
+  worktree of the session's own so that two agents cannot collide in one
+  checkout. A worktree that cannot be made stops the session rather than
+  quietly sharing the checkout.
+- `start_session` on the socket, which is what that sheet sends: any client
+  can now start a session with an agent, a model, a first prompt and a
+  worktree in one request.
 
 - A second way to watch a pane, for clients that run a terminal emulator of
   their own: `attach_pane` answers with the escape sequences that recreate

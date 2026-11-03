@@ -132,6 +132,10 @@ struct UsageInspector: View {
                 if let pane {
                     section("This session") {
                         ContextBar(pane: pane)
+                        HandoffButtons(store: store, pane: pane)
+                    }
+                    section("Night shift") {
+                        NightShiftPanel(store: store, pane: pane)
                     }
                 }
 

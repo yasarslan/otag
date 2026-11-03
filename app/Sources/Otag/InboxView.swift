@@ -97,3 +97,35 @@ struct AnswerProblemView: View {
         .padding(.bottom, 6)
     }
 }
+
+/// One line across the bottom of the window: what otag just did.
+///
+/// A handoff, or something the night shift sent. It stays until it is
+/// dismissed, because the thing it is reporting already happened.
+struct NoticeBar: View {
+    let notice: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+            Text(notice)
+                .font(.caption)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+}

@@ -15,7 +15,7 @@ use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 use otag_features::inbox::{AskId, Inbox};
 
-use crate::{agents, events, handoff, inbox, notify, persist, usage};
+use crate::{agents, events, handoff, inbox, nightshift, notify, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -97,8 +97,18 @@ async fn serve(socket: &Path) -> Result<()> {
         bus.clone(),
     ));
 
+    // The night shift only does anything for sessions a client has given a
+    // plan, so it runs for every daemon and costs nothing until then.
+    let shifts = nightshift::Shifts::new();
+    let working = tokio::spawn(nightshift::keep_working(
+        Arc::clone(&session),
+        Arc::clone(&shifts),
+        bus.clone(),
+    ));
+
     let daemon = Daemon {
         session: Arc::clone(&session),
+        shifts: Arc::clone(&shifts),
         usage: Arc::clone(&shared_usage),
         events: bus,
         attachments: raw::Attachments::new(),
@@ -108,6 +118,7 @@ async fn serve(socket: &Path) -> Result<()> {
     watching.abort();
     notifying.abort();
     collecting.abort();
+    working.abort();
 
     // The panes are about to be killed with the daemon, so what they show
     // now is what a restart has to put back.
@@ -156,6 +167,8 @@ struct Daemon {
     attachments: raw::Attachments,
     /// What the agents are waiting for the user to answer.
     inbox: Arc<std::sync::Mutex<Inbox>>,
+    /// What otag is working through for the sessions that asked.
+    shifts: Arc<nightshift::Shifts>,
 }
 
 impl Handler for Daemon {
@@ -172,7 +185,7 @@ impl Handler for Daemon {
                 version: otag_core::VERSION.to_owned(),
             }),
             Request::ListPanes => Some(Response::Panes {
-                panes: events::panes_of(&self.session),
+                panes: self.panes(),
             }),
             Request::Usage => Some(Response::Usage {
                 report: Box::new(self.usage.report()),
@@ -270,6 +283,24 @@ impl Handler for Daemon {
                 None
             }
             Request::Subscribe => Some(events::start(&self.session, &self.events, outbox).await),
+            Request::NightShift { pane, plan } => {
+                if self.session.pane(pane).is_none() {
+                    Some(Response::error(format!("otag has no pane {pane}")))
+                } else {
+                    let stopping = plan.is_none();
+                    self.shifts.set(pane, plan);
+                    tracing::info!(%pane, stopping, "a night shift plan changed");
+                    // The pane list carries the plan, so every client sees
+                    // it without asking.
+                    self.events.publish(Event::Panes {
+                        panes: self.panes(),
+                    });
+                    Some(Response::Ok)
+                }
+            }
+            Request::MorningReport => Some(Response::MorningReport {
+                sessions: nightshift::report(&self.session, &self.shifts).await,
+            }),
             Request::UsageHistory => Some(Response::UsageHistory {
                 samples: self.usage.samples(),
             }),
@@ -303,6 +334,15 @@ struct StartSession {
 }
 
 impl Daemon {
+    /// Every pane, with what the night shift is doing for it.
+    fn panes(&self) -> Vec<otag_core::proto::PaneInfo> {
+        let mut panes = events::panes_of(&self.session);
+        for pane in &mut panes {
+            pane.night_shift = self.shifts.view(pane.id);
+        }
+        panes
+    }
+
     /// Start a session: a project, an agent, and what to ask it first.
     ///
     /// Answered either way, because the user is waiting on it. A worktree
@@ -429,11 +469,20 @@ impl Daemon {
         };
 
         match handoff::run(&self.session, pane, mode).await {
-            Ok(done) => Response::HandoffDone {
-                pane: done.pane,
-                package: done.package,
-                summary: done.summary,
-            },
+            Ok(done) => {
+                // Every client learns about it, not only the one that asked:
+                // a handoff changes what the window should be showing.
+                self.events.publish(Event::Handoff {
+                    pane: done.pane,
+                    package: done.package.clone(),
+                    summary: done.summary.clone(),
+                });
+                Response::HandoffDone {
+                    pane: done.pane,
+                    package: done.package,
+                    summary: done.summary,
+                }
+            }
             Err(message) => {
                 tracing::info!(%pane, message, "a handoff was refused");
                 Response::error(message)
@@ -659,6 +708,7 @@ mod tests {
                 events: events::Bus::new(),
                 attachments: raw::Attachments::new(),
                 inbox: Arc::new(std::sync::Mutex::new(Inbox::new())),
+                shifts: nightshift::Shifts::new(),
             },
             pane,
         )

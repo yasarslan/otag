@@ -73,6 +73,30 @@ pub fn exclude(cwd: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// Commits made in this directory since a point in time, newest first.
+///
+/// For the morning report: what the night actually produced, rather than
+/// what otag asked for. Outside a repository, or without git, the answer is
+/// nothing — the same as "no commits", which is the honest reading.
+pub async fn commits_since(cwd: &Path, since_unix: i64) -> Vec<String> {
+    /// How many commits are worth listing in a report.
+    const MOST: usize = 50;
+
+    let since = format!("--since={since_unix}");
+    let output = run(
+        cwd,
+        &[
+            "log",
+            "--no-color",
+            "--pretty=format:%h %s",
+            &since,
+            "--max-count=50",
+        ],
+    )
+    .await;
+    lines(output).into_iter().take(MOST).collect()
+}
+
 /// Where otag puts the worktrees it makes, below the project directory.
 ///
 /// Inside `.otag/`, which is already kept out of `git status` by

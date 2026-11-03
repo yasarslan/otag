@@ -47,6 +47,11 @@ public final class SessionStore {
     public private(set) var asks: [AskView] = []
     /// The readings behind the usage numbers, oldest first, for a timeline.
     public private(set) var history: [UsageSample] = []
+    /// What otag did overnight, once it has been asked for.
+    public private(set) var morningReport: [SessionReport]?
+    /// The last thing otag did that is worth a line in the window: a
+    /// handoff, or something the night shift sent.
+    public private(set) var notice: String?
     /// How the connection stands.
     public private(set) var state: ConnectionState = .connecting
     /// The daemon's version, once it has said.
@@ -104,6 +109,21 @@ public final class SessionStore {
     /// Forget the last failed answer.
     public func clearAnswerProblem() {
         answerProblem = nil
+    }
+
+    /// Forget the last notice.
+    public func clearNotice() {
+        notice = nil
+    }
+
+    /// Ask otag what it did overnight.
+    public func askForMorningReport() {
+        send(.morningReport)
+    }
+
+    /// Forget the report, so the window can be opened fresh.
+    public func clearMorningReport() {
+        morningReport = nil
     }
 
     /// Connect to the daemon — starting it if it is not running — and keep
@@ -183,6 +203,10 @@ public final class SessionStore {
             self.asks = asks
         case let .usageHistory(samples):
             history = samples
+        case let .morningReport(sessions):
+            morningReport = sessions
+        case let .handoffDone(_, _, summary):
+            notice = summary.isEmpty ? nil : summary
         case let .version(version):
             daemonVersion = version
         case let .answered(ask, delivered, summary):
@@ -194,7 +218,7 @@ public final class SessionStore {
             }
         case let .error(message):
             state = .failed(message)
-        case .pong, .ok, .paneScreen, .output, .paneEnded, .handoffDone, .sessionEnded,
+        case .pong, .ok, .paneScreen, .output, .paneEnded, .sessionEnded,
              .sessionStarted, .unknown:
             // Pane bytes belong to whichever terminal view asked for them,
             // and the rest needs nothing from the store.
@@ -234,7 +258,11 @@ public final class SessionStore {
             asks.append(ask)
         case let .resolved(ask, _):
             asks.removeAll { $0.id == ask }
-        case .handoff, .notice, .unknown:
+        case let .handoff(_, _, summary):
+            notice = summary.isEmpty ? nil : summary
+        case let .notice(_, text):
+            notice = text.isEmpty ? nil : text
+        case .unknown:
             break
         }
     }

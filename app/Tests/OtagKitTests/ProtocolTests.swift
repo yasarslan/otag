@@ -220,6 +220,81 @@ struct ProtocolTests {
         #expect(bare.first?.contextWindow == nil)
     }
 
+    @Test("a handoff says where the work should go")
+    func handoffEncodes() throws {
+        let toOther = try line(.handoff(pane: 2, handoff: .agent(to: nil)))
+        #expect(toOther.contains(#""type":"handoff""#))
+        #expect(toOther.contains(#""mode":"agent""#))
+        #expect(!toOther.contains("\"to\""), "no agent named means the other one")
+
+        let named = try line(.handoff(pane: 2, handoff: .agent(to: .codex)))
+        #expect(named.contains(#""to":"codex""#))
+
+        let model = try line(.handoff(pane: 2, handoff: .model("sonnet")))
+        #expect(model.contains(#""mode":"model""#))
+        #expect(model.contains(#""model":"sonnet""#))
+
+        let fallback = try line(.handoff(pane: 2, handoff: .model("")))
+        #expect(!fallback.contains("\"model\":\"\""), "an empty model is no model")
+    }
+
+    @Test("a night shift carries its queue, and stopping carries no plan")
+    func nightShiftEncodes() throws {
+        let plan = try line(.nightShift(
+            pane: 1,
+            plan: NightShiftPlan(pauseAt: 80, resumePrompt: "carry on", queue: ["a", "b"])
+        ))
+        #expect(plan.contains(#""type":"night_shift""#))
+        #expect(plan.contains(#""pause_at":80"#))
+        #expect(plan.contains(#""resume_prompt":"carry on""#))
+        #expect(plan.contains(#""queue":["a","b"]"#))
+
+        let stop = try line(.nightShift(pane: 1, plan: nil))
+        #expect(!stop.contains("plan"), "no plan at all turns it off")
+    }
+
+    @Test("a pane says what the night shift is doing for it")
+    func nightShiftViewDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"panes","panes":[{"id":1,"size":{"rows":2,"cols":2},\
+            "night_shift":{"pause_at":80,"paused":true,"sent":2,"queued":5,\
+            "resume_prompt":"carry on"}}]}
+            """
+        )
+        guard case let .panes(panes) = decoded, let shift = panes.first?.nightShift else {
+            Issue.record("expected a night shift, got \(decoded)")
+            return
+        }
+        #expect(shift.pauseAt == 80)
+        #expect(shift.paused)
+        #expect(shift.sent == 2)
+        #expect(shift.queued == 5)
+        #expect(shift.remaining == 3)
+    }
+
+    @Test("the morning report is read with everything it may leave out")
+    func morningReportDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"morning_report","sessions":[{"pane":3,"workspace":"app",\
+            "title":"claude","agent":"claude","sent":2,"remaining":1,\
+            "log":[{"at":1700000000,"what":"sent: run the tests"}],\
+            "commits":["abc123 fix the parser"]}]}
+            """
+        )
+        guard case let .morningReport(sessions) = decoded, let session = sessions.first else {
+            Issue.record("expected a report, got \(decoded)")
+            return
+        }
+        #expect(session.pane == 3)
+        #expect(session.sent == 2)
+        #expect(session.remaining == 1)
+        #expect(session.log.first?.what == "sent: run the tests")
+        #expect(session.commits == ["abc123 fix the parser"])
+        #expect(session.tokens.context == 0, "what it leaves out is nothing, not an error")
+    }
+
     @Test("statuses are ordered by how much they want the user")
     func statusOrdering() {
         #expect(PaneStatus.needsApproval > PaneStatus.error)

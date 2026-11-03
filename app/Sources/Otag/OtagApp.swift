@@ -75,6 +75,11 @@ struct OtagApp: App {
                     .keyboardShortcut("]", modifiers: [.command, .shift])
                 Button("Previous Tab") { workbench.step(by: -1) }
                     .keyboardShortcut("[", modifiers: [.command, .shift])
+                Divider()
+                Button("Hand Over to the Other Agent") { handOver() }
+                    .disabled(focusedPane?.agent == nil)
+                Button("Morning Report…") { store.askForMorningReport() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
             }
         }
 
@@ -85,6 +90,17 @@ struct OtagApp: App {
         } label: {
             MenuBarLabel(store: store)
         }
+    }
+
+    /// The session the window is showing.
+    private var focusedPane: PaneInfo? {
+        workbench.focus.flatMap(store.pane)
+    }
+
+    /// Hand the showing session over to the other agent.
+    private func handOver() {
+        guard let pane = focusedPane, pane.agent != nil else { return }
+        store.send(.handoff(pane: pane.id, handoff: .agent(to: nil)))
     }
 
     /// Answer the oldest question, which is the one the sidebar shows first.
@@ -149,6 +165,16 @@ struct MainView: View {
                 place(pane: pane, title: title, axis: request.axis)
             }
         }
+        .sheet(isPresented: reportShown) {
+            MorningReportView(sessions: store.morningReport ?? []) {
+                store.clearMorningReport()
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let notice = store.notice {
+                NoticeBar(notice: notice) { store.clearNotice() }
+            }
+        }
         .onChange(of: store.panes) { _, panes in
             // A pane the daemon has let go of cannot stay on screen.
             let alive = Set(panes.map(\.id))
@@ -159,6 +185,14 @@ struct MainView: View {
             }
             retitleTabs(panes)
         }
+    }
+
+    /// The report is shown exactly while there is one.
+    private var reportShown: Binding<Bool> {
+        Binding(
+            get: { store.morningReport != nil },
+            set: { shown in if !shown { store.clearMorningReport() } }
+        )
     }
 
     /// The sidebar's selection is the focused pane of the current tab, and

@@ -64,6 +64,74 @@ struct StreamTests {
         }
     }
 
+    @Test("a night shift plan reaches the daemon and comes back on the pane")
+    func nightShiftRoundTrip() async throws {
+        let daemon = try Daemonless()
+        defer { daemon.stop() }
+
+        let connection: DaemonConnection
+        do {
+            connection = try await connect(to: daemon.socket)
+        } catch {
+            Issue.record("the daemon did not start: \(error). It printed:\n\(daemon.output)")
+            return
+        }
+        defer { connection.close() }
+
+        try connection.send(.startSession(StartSession(cwd: daemon.project.path)))
+        var started: PaneID?
+        for await response in connection.responses {
+            if case let .sessionStarted(pane, _, _) = response {
+                started = pane
+                break
+            }
+        }
+        let pane = try #require(started)
+
+        try connection.send(.nightShift(
+            pane: pane,
+            plan: NightShiftPlan(pauseAt: 80, resumePrompt: "carry on", queue: ["one", "two"])
+        ))
+        // The queue is not sent anywhere: this pane runs a shell, not an
+        // agent, and otag only works for sessions it knows an agent in.
+        try connection.send(.listPanes)
+
+        for await response in connection.responses {
+            guard case let .panes(panes) = response else { continue }
+            let shift = try #require(
+                panes.first { $0.id == pane }?.nightShift,
+                "the pane carries what the night shift is doing"
+            )
+            #expect(shift.pauseAt == 80)
+            #expect(shift.queued == 2)
+            #expect(shift.sent == 0)
+            #expect(shift.resumePrompt == "carry on")
+            return
+        }
+    }
+
+    @Test("the morning report says what otag did, and nothing it did not")
+    func morningReport() async throws {
+        let daemon = try Daemonless()
+        defer { daemon.stop() }
+
+        let connection: DaemonConnection
+        do {
+            connection = try await connect(to: daemon.socket)
+        } catch {
+            Issue.record("the daemon did not start: \(error). It printed:\n\(daemon.output)")
+            return
+        }
+        defer { connection.close() }
+
+        try connection.send(.morningReport)
+        for await response in connection.responses {
+            guard case let .morningReport(sessions) = response else { continue }
+            #expect(sessions.isEmpty, "nothing has been queued, so there is nothing to report")
+            return
+        }
+    }
+
     /// Connect, waiting for a daemon that is still starting.
     private func connect(to socket: URL) async throws -> DaemonConnection {
         for _ in 0 ..< 100 {

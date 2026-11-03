@@ -125,11 +125,14 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     /// How large the model's context is, when otag knows. Without it a
     /// context meter has no denominator and only the count is shown.
     public var contextWindow: UInt64?
+    /// What the night shift is doing for it, when it has been asked to.
+    public var nightShift: NightShiftView?
     public var exit: PaneExit?
 
     enum CodingKeys: String, CodingKey {
         case id, size, workspace, title, agent, status, session, tokens, exit
         case contextWindow = "context_window"
+        case nightShift = "night_shift"
     }
 
     public init(from decoder: Decoder) throws {
@@ -145,6 +148,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         session = try container.decodeIfPresent(String.self, forKey: .session)
         tokens = try container.decodeIfPresent(Tokens.self, forKey: .tokens) ?? Tokens()
         contextWindow = try container.decodeIfPresent(UInt64.self, forKey: .contextWindow)
+        nightShift = try container.decodeIfPresent(NightShiftView.self, forKey: .nightShift)
         exit = try container.decodeIfPresent(PaneExit.self, forKey: .exit)
     }
 }
@@ -284,6 +288,95 @@ public enum Answer: String, Codable, Sendable {
 
 // MARK: - Requests
 
+/// What the night shift should do for one session.
+public struct NightShiftPlan: Codable, Hashable, Sendable {
+    /// Percentage of a window at which to stop sending.
+    public var pauseAt: UInt16?
+    /// What to send when a window has reset and the queue is empty.
+    public var resumePrompt: String?
+    /// Prompts to work through, in order.
+    public var queue: [String]
+
+    public init(pauseAt: UInt16? = nil, resumePrompt: String? = nil, queue: [String] = []) {
+        self.pauseAt = pauseAt
+        self.resumePrompt = resumePrompt
+        self.queue = queue
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case pauseAt = "pause_at"
+        case resumePrompt = "resume_prompt"
+        case queue
+    }
+}
+
+/// What the night shift is doing for one session.
+public struct NightShiftView: Codable, Hashable, Sendable {
+    public var pauseAt: UInt16
+    public var paused: Bool = false
+    public var sent: Int = 0
+    public var queued: Int = 0
+    public var resumePrompt: String = ""
+
+    /// How many prompts are still to go.
+    public var remaining: Int { max(queued - sent, 0) }
+
+    enum CodingKeys: String, CodingKey {
+        case pauseAt = "pause_at"
+        case paused, sent, queued
+        case resumePrompt = "resume_prompt"
+    }
+}
+
+/// One line of what otag did overnight.
+public struct ReportEntry: Codable, Hashable, Sendable, Identifiable {
+    public var at: Int64
+    public var what: String
+
+    public var id: String { "\(at)-\(what)" }
+    public var date: Date { Date(timeIntervalSince1970: TimeInterval(at)) }
+}
+
+/// What otag did for one session while nobody was watching.
+public struct SessionReport: Codable, Hashable, Sendable, Identifiable {
+    public var pane: PaneID
+    public var workspace: String = ""
+    public var title: String = ""
+    public var agent: AgentKind?
+    public var tokens: Tokens = Tokens()
+    public var sent: Int = 0
+    public var remaining: Int = 0
+    public var log: [ReportEntry] = []
+    public var commits: [String] = []
+
+    public var id: PaneID { pane }
+
+    enum CodingKeys: String, CodingKey {
+        case pane, workspace, title, agent, tokens, sent, remaining, log, commits
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pane = try container.decode(PaneID.self, forKey: .pane)
+        workspace = try container.decodeIfPresent(String.self, forKey: .workspace) ?? ""
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        agent = try? container.decodeIfPresent(AgentKind.self, forKey: .agent)
+        tokens = try container.decodeIfPresent(Tokens.self, forKey: .tokens) ?? Tokens()
+        sent = try container.decodeIfPresent(Int.self, forKey: .sent) ?? 0
+        remaining = try container.decodeIfPresent(Int.self, forKey: .remaining) ?? 0
+        log = try container.decodeIfPresent([ReportEntry].self, forKey: .log) ?? []
+        commits = try container.decodeIfPresent([String].self, forKey: .commits) ?? []
+    }
+}
+
+/// What a handoff should do.
+public enum Handoff: Sendable, Equatable {
+    /// Open another agent on the same task, with a package to read.
+    case agent(to: AgentKind?)
+    /// Continue the same session on another model of the same agent.
+    case model(String?)
+}
+
 /// What the new-session sheet asks for.
 public struct StartSession: Sendable, Equatable {
     /// The project directory the session works in.
@@ -323,6 +416,9 @@ public enum Request: Sendable {
     case usageHistory
     case answer(ask: UInt64, answer: Answer)
     case startSession(StartSession)
+    case handoff(pane: PaneID, handoff: Handoff)
+    case nightShift(pane: PaneID, plan: NightShiftPlan?)
+    case morningReport
     case attachPane(pane: PaneID, size: PaneSize?)
     case detachPane(pane: PaneID)
     case paneInput(pane: PaneID, bytes: Data)
@@ -376,6 +472,25 @@ extension Request: Encodable {
             if asked.worktree {
                 try container.encode(true, forKey: Key("worktree"))
             }
+        case let .handoff(pane, handoff):
+            try container.encode("handoff", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            var mode = container.nestedContainer(keyedBy: Key.self, forKey: Key("handoff"))
+            switch handoff {
+            case let .agent(to):
+                try mode.encode("agent", forKey: Key("mode"))
+                try mode.encodeIfPresent(to, forKey: Key("to"))
+            case let .model(model):
+                try mode.encode("model", forKey: Key("mode"))
+                try mode.encodeIfPresent(model?.isEmpty == true ? nil : model,
+                                         forKey: Key("model"))
+            }
+        case let .nightShift(pane, plan):
+            try container.encode("night_shift", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            try container.encodeIfPresent(plan, forKey: Key("plan"))
+        case .morningReport:
+            try container.encode("morning_report", forKey: Key("type"))
         case let .attachPane(pane, size):
             try container.encode("attach_pane", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
@@ -468,6 +583,7 @@ public enum Response: Sendable {
     case event(Event)
     case inbox([AskView])
     case usageHistory([UsageSample])
+    case morningReport([SessionReport])
     case answered(ask: UInt64, delivered: Bool, summary: String)
     case handoffDone(pane: PaneID, package: String?, summary: String)
     case sessionEnded(exit: PaneExit?)
@@ -480,6 +596,7 @@ extension Response: Decodable {
     private enum Key: String, CodingKey {
         case type, version, panes, report, pane, size, bytes, exit, event, asks, ask
         case delivered, summary, package, message, view, frame, workspace, cwd, samples
+        case sessions
     }
 
     public init(from decoder: Decoder) throws {
@@ -521,6 +638,10 @@ extension Response: Decodable {
             )
         case "event":
             self = .event(try container.decode(Event.self, forKey: .event))
+        case "morning_report":
+            self = .morningReport(
+                try container.decodeIfPresent([SessionReport].self, forKey: .sessions) ?? []
+            )
         case "usage_history":
             self = .usageHistory(
                 try container.decodeIfPresent([UsageSample].self, forKey: .samples) ?? []

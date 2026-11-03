@@ -8,4 +8,5 @@
 
 pub mod handoff;
 pub mod inbox;
+pub mod nightshift;
 pub mod usage;

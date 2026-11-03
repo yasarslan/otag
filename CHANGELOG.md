@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktree of the session's own so that two agents cannot collide in one
   checkout. A worktree that cannot be made stops the session rather than
   quietly sharing the checkout.
+- **Night shift**: give a session a queue of prompts and otag works through
+  it for you. It sends the next one only while the agent is idle and its
+  window has room, stops at a threshold you choose (90% by default), carries
+  on when the window resets, and never types past a question or an error.
+  Every prompt is pasted and submitted the way a person would, and written
+  down as it happens.
+- A morning report (`Cmd-Shift-R`): per session, how many prompts otag sent,
+  what it did and when, the commits made in that session's directory since
+  the night started, and what the session spent.
+- Handoff from the app: one button hands the work to the other agent with a
+  package it can read, another continues the same conversation on a
+  different model. Both report what happened in a line across the bottom of
+  the window, and every client is told, not only the one that asked.
+- `night_shift`, `morning_report` and `handoff` on the socket, and every
+  pane now says what the night shift is doing for it.
 - The app shows how much of the limits is gone: a thin meter per window at
   the bottom of the sidebar with the percentage, when the window resets and
   — once there are three readings — when it would be full at the rate of the

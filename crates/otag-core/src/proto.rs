@@ -224,6 +224,22 @@ pub enum Request {
     /// [`Response::Event`] whenever something happens, until the connection
     /// ends.
     Subscribe,
+    /// Have otag work through a queue of prompts for one session overnight,
+    /// pausing at a share of the limits and carrying on when the window
+    /// resets. Answered with [`Response::Ok`] or an error.
+    ///
+    /// No plan at all turns the night shift off for that session; what it
+    /// has already done is kept, so the morning report still has it.
+    NightShift {
+        /// The session to work for.
+        pane: PaneId,
+        /// What to do, or nothing to stop.
+        #[serde(default)]
+        plan: Option<NightShiftPlan>,
+    },
+    /// Ask what otag did while nobody was watching. Answered with
+    /// [`Response::MorningReport`].
+    MorningReport,
     /// Ask for the readings behind the usage numbers, for a chart.
     /// Answered with [`Response::UsageHistory`].
     ///
@@ -372,6 +388,11 @@ pub enum Response {
         /// What happened.
         event: Event,
     },
+    /// Answer to [`Request::MorningReport`].
+    MorningReport {
+        /// One entry per session otag worked for, newest activity last.
+        sessions: Vec<SessionReport>,
+    },
     /// Answer to [`Request::UsageHistory`].
     UsageHistory {
         /// Every reading otag has kept, oldest first.
@@ -412,6 +433,79 @@ pub enum Response {
     /// A response this build does not know about.
     #[serde(other)]
     Unknown,
+}
+
+/// What a client asks the night shift to do for one session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NightShiftPlan {
+    /// Percentage of a window at which to stop sending, or otag's default.
+    #[serde(default)]
+    pub pause_at: Option<u16>,
+    /// What to send when a window has reset and the queue is empty.
+    #[serde(default)]
+    pub resume_prompt: Option<String>,
+    /// Prompts to work through, in order.
+    #[serde(default)]
+    pub queue: Vec<String>,
+}
+
+/// What the night shift is doing for one session, as a client sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NightShiftView {
+    /// The threshold in use.
+    pub pause_at: u16,
+    /// Whether otag is waiting for a window to reset.
+    #[serde(default)]
+    pub paused: bool,
+    /// How many prompts have been sent.
+    #[serde(default)]
+    pub sent: usize,
+    /// How many are queued in total.
+    #[serde(default)]
+    pub queued: usize,
+    /// What it sends when a window resets, if anything.
+    #[serde(default)]
+    pub resume_prompt: String,
+}
+
+/// What otag did for one session while nobody was watching.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionReport {
+    /// Which session this is.
+    pub pane: PaneId,
+    /// The project it is working in.
+    #[serde(default)]
+    pub workspace: String,
+    /// What is running in it.
+    #[serde(default)]
+    pub title: String,
+    /// The agent otag noticed in it.
+    #[serde(default)]
+    pub agent: Option<AgentKind>,
+    /// What that agent has spent.
+    #[serde(default)]
+    pub tokens: Tokens,
+    /// How many prompts otag sent it.
+    #[serde(default)]
+    pub sent: usize,
+    /// How many are still queued.
+    #[serde(default)]
+    pub remaining: usize,
+    /// What otag did, oldest first.
+    #[serde(default)]
+    pub log: Vec<ReportEntry>,
+    /// Commits made in its directory since the night shift started.
+    #[serde(default)]
+    pub commits: Vec<String>,
+}
+
+/// One line of what otag did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportEntry {
+    /// When, in seconds since the epoch.
+    pub at: i64,
+    /// What happened.
+    pub what: String,
 }
 
 /// Something the daemon tells a subscribed client about.
@@ -620,6 +714,9 @@ pub struct PaneInfo {
     /// context meter has no denominator and is not drawn as a share.
     #[serde(default)]
     pub context_window: Option<u64>,
+    /// What the night shift is doing for it, when it has been asked to.
+    #[serde(default)]
+    pub night_shift: Option<NightShiftView>,
     /// How its program ended, if it has.
     #[serde(default)]
     pub exit: Option<PaneExit>,
@@ -1071,6 +1168,7 @@ mod tests {
                     session: None,
                     tokens: Default::default(),
                     context_window: None,
+                    night_shift: None,
                     exit: None,
                 }],
             },
@@ -1085,6 +1183,13 @@ mod tests {
                     session: Some("a-session".to_owned()),
                     tokens: Default::default(),
                     context_window: Some(200_000),
+                    night_shift: Some(NightShiftView {
+                        pause_at: 90,
+                        paused: false,
+                        sent: 1,
+                        queued: 3,
+                        resume_prompt: "carry on".to_owned(),
+                    }),
                     exit: Some(PaneExit {
                         code: Some(0),
                         signal: None,

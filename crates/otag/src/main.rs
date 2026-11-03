@@ -13,6 +13,7 @@ mod hook;
 mod inbox;
 mod install;
 mod logging;
+mod nightshift;
 mod notify;
 mod persist;
 mod usage;

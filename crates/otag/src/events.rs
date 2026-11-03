@@ -85,6 +85,8 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
             session: pane.session,
             tokens: pane.tokens,
             context_window: pane.context_window,
+            // Filled in by the daemon, which is what holds the plans.
+            night_shift: None,
             exit: pane.exit,
         })
         .collect()

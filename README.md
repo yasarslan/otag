@@ -1,6 +1,7 @@
 # otag
 
-A terminal-native multiplexer for AI coding agents.
+A multiplexer for AI coding agents, with a terminal client and a native
+macOS app.
 
 otag runs several coding agents side by side in panes, tabs and workspaces,
 and keeps track of what each one is doing, what it has spent, and where it
@@ -30,6 +31,10 @@ agent to another when one of them cannot carry on.
   lighter model.
 - **A desktop notification** the moment an agent starts waiting for you —
   once per agent, not once a second.
+- **A native macOS app** on top of the same daemon: sessions in splittable
+  tabs, an inbox with Allow and Deny, the usage forecast, and a night shift
+  that works through a queue of prompts while you sleep. See
+  [the app](#the-macos-app).
 
 Supported agents: Claude Code and Codex CLI. otag reads the files they
 already write; it never uploads anything, and it never reads credentials.
@@ -38,6 +43,7 @@ already write; it never uploads anything, and it never reads credentials.
 
 - macOS or Linux.
 - A stable Rust toolchain, 1.88 or newer, to build it.
+- For the macOS app: macOS 14 or newer and Swift 5.9 or newer (Xcode 15+).
 - `git`, for the handoff package's summary of your checkout (optional).
 - At least one of the supported agents, if you want otag to track one.
 
@@ -73,6 +79,47 @@ otag install-hooks        # says what it will change, then asks
 It adds one command per event it needs, takes over the status line (and keeps
 running yours), and leaves a copy of the file as it was. `otag uninstall-hooks`
 puts everything back.
+
+## The macOS app
+
+The app is a client of the same daemon the terminal client talks to: the
+daemon owns the panes and the agents, and both ways of looking at them see
+the same thing at the same time. Quitting the app leaves every agent
+running.
+
+```sh
+./scripts/bundle-app.sh     # builds the daemon and the app
+open target/Otag.app
+```
+
+The first launch finds your agents, offers to install Claude Code's hooks —
+showing exactly what it would change, and doing nothing until you press the
+button — and lists the keys.
+
+- **Sessions in the sidebar**, grouped by project, each with what it is doing
+  and how much of its context is in use.
+- **Tabs that split.** `⌘D` and `⇧⌘D` put another session beside this one;
+  dividers drag; a pane closes with its program.
+- **The inbox.** Everything an agent is waiting for sits at the top of the
+  sidebar with **Allow** and **Deny** beside it (`⇧⌘Y` / `⇧⌘N`), and the same
+  two buttons are on the notification and in the menu bar. otag types only
+  the keys the agent's own prompt offers, then checks the prompt is gone — an
+  answer it cannot confirm says so rather than pretending.
+- **Usage** (`⌥⌘I`): the limits, when they reset, when they would be full, a
+  timeline of every reading, and what each session has spent.
+- **Night shift.** Give a session a queue of prompts: otag sends the next one
+  only while the agent is idle and its window has room, stops at a threshold
+  you choose, carries on when the window resets, and never types past a
+  question. `⇧⌘R` shows what it did, with the commits that came of it.
+- **Handoff** to the other agent, or the same conversation on a lighter
+  model, in one button.
+- `⌘K` is every command by name, `⌘P` jumps to a session, and the menu bar
+  item shows the limits and who is waiting even with the window closed.
+
+The app is not signed with a developer identity yet, so macOS may need
+"Open Anyway" in System Settings → Privacy & Security the first time, and
+notifications may be refused for an unsigned build (the Dock badge and the
+menu bar item still work).
 
 ## Keys
 
@@ -134,8 +181,14 @@ socket, its state database and its log live under
 where there is one.
 
 Handoff packages are written to `.otag/handoff/` inside the project they
-belong to, and otag adds `/.otag/` to that repository's `.git/info/exclude`
-so they never show up as untracked work. Your `.gitignore` is not touched.
+belong to, and a worktree the app makes for a session goes to
+`.otag/worktrees/<name>` on a branch called `otag/<name>`. otag adds
+`/.otag/` to that repository's `.git/info/exclude` so none of it shows up as
+untracked work. Your `.gitignore` is not touched.
+
+The app keeps its own few settings — the terminal's font size, whether idle
+sessions dim, whether it notifies — in its preferences, under
+**Otag → Settings** (`⌘,`).
 
 ## Privacy
 

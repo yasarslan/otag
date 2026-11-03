@@ -21,6 +21,8 @@ struct TerminalPaneView: NSViewRepresentable {
     /// Called when the user clicks into this pane.
     let onFocus: () -> Void
 
+    @AppStorage(Preference.fontSize) private var fontSize = Preference.defaultFontSize
+
     func makeCoordinator() -> Coordinator {
         Coordinator(pane: pane, socket: socket, onEnded: onEnded, onFocus: onFocus)
     }
@@ -28,7 +30,7 @@ struct TerminalPaneView: NSViewRepresentable {
     func makeNSView(context: Context) -> TerminalView {
         let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         view.terminalDelegate = context.coordinator
-        view.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         // The terminal takes its colours from the user's appearance, like
         // every other calm part of otag: nothing is painted that the system
         // has not chosen.
@@ -43,6 +45,11 @@ struct TerminalPaneView: NSViewRepresentable {
     func updateNSView(_ view: TerminalView, context: Context) {
         context.coordinator.onEnded = onEnded
         context.coordinator.onFocus = onFocus
+        if view.font.pointSize != fontSize {
+            // Changing the font changes how many cells fit, and the view
+            // reports the new size, which the daemon then tells the program.
+            view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
         if focused, view.window?.firstResponder !== view {
             view.window?.makeFirstResponder(view)
         }

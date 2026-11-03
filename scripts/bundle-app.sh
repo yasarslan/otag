@@ -70,6 +70,17 @@ cp "$app_binary" "$bundle/Contents/MacOS/Otag"
 # different version than the protocol it was built against.
 cp "$daemon_binary" "$bundle/Contents/Resources/otag"
 
+echo "==> drawing the icon"
+if swift "$root/scripts/make-icon.swift" "$bundle/Contents/Resources/AppIcon.icns" \
+    > /dev/null 2>&1; then
+    icon_entry='    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>'
+else
+    # An icon is not worth failing a build for; the app runs without one.
+    echo "    (could not draw the icon; the app will use the default one)"
+    icon_entry=""
+fi
+
 cat > "$bundle/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -83,6 +94,7 @@ cat > "$bundle/Contents/Info.plist" << PLIST
     <string>dev.otag.Otag</string>
     <key>CFBundleExecutable</key>
     <string>Otag</string>
+$icon_entry
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

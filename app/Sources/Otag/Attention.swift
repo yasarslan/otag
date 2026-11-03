@@ -75,7 +75,8 @@ final class Attention: NSObject, UNUserNotificationCenterDelegate {
 
     /// Tell the user about one question.
     private func announce(_ ask: AskView, store: SessionStore) {
-        guard allowed else { return }
+        let wanted = UserDefaults.standard.object(forKey: Preference.notify) as? Bool ?? true
+        guard allowed, wanted else { return }
 
         let content = UNMutableNotificationContent()
         let project = store.pane(ask.pane)?.workspace ?? ""

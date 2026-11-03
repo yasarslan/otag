@@ -201,6 +201,8 @@ private struct PaneCell: View {
     let store: SessionStore
     let workbench: Workbench
 
+    @AppStorage(Preference.dimIdle) private var dimIdle = true
+
     var body: some View {
         TerminalPaneView(
             pane: pane,
@@ -222,6 +224,17 @@ private struct PaneCell: View {
             }
         }
         .onTapGesture { workbench.focus(pane: pane) }
+        // A session doing nothing, with the keyboard somewhere else, fades
+        // slightly into the background. Nothing moves and nothing blinks;
+        // the eye simply goes to what is working.
+        .opacity(dimmed ? 0.72 : 1)
+    }
+
+    /// Whether this pane should be drawn dimmer.
+    private var dimmed: Bool {
+        guard dimIdle, tab.panes.count > 1, tab.focus != pane else { return false }
+        let status = store.pane(pane)?.status ?? .idle
+        return status == .idle || status == .done
     }
 }
 

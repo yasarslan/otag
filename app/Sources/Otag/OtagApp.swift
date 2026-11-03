@@ -22,10 +22,18 @@ struct OtagApp: App {
     @State private var workbench = Workbench()
     @State private var pending: PendingSession?
     @State private var attention = Attention()
+    @State private var palette: PaletteKind?
+    @AppStorage("hasOnboarded") private var onboarded = false
 
     var body: some Scene {
         WindowGroup {
-            MainView(store: store, workbench: workbench, pending: $pending)
+            MainView(
+                store: store,
+                workbench: workbench,
+                pending: $pending,
+                palette: $palette,
+                onboarded: $onboarded
+            )
                 .task {
                     attention.prepare()
                     store.start()
@@ -52,6 +60,15 @@ struct OtagApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Session…") { pending = PendingSession(axis: nil) }
                     .keyboardShortcut("n", modifiers: .command)
+            }
+            CommandGroup(after: .newItem) {
+                Button("Command Palette…") { palette = .commands }
+                    .keyboardShortcut("k", modifiers: .command)
+                Button("Go to Session…") { palette = .sessions }
+                    .keyboardShortcut("p", modifiers: .command)
+            }
+            CommandGroup(replacing: .help) {
+                Button("Show the Welcome Screen") { onboarded = false }
             }
             CommandMenu("Session") {
                 Button("Allow What Is Waiting") { answerFirst(.allow) }
@@ -90,6 +107,10 @@ struct OtagApp: App {
         } label: {
             MenuBarLabel(store: store)
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 
     /// The session the window is showing.
@@ -122,6 +143,8 @@ struct MainView: View {
     let store: SessionStore
     let workbench: Workbench
     @Binding var pending: PendingSession?
+    @Binding var palette: PaletteKind?
+    @Binding var onboarded: Bool
     @State private var inspector = false
 
     var body: some View {
@@ -165,6 +188,13 @@ struct MainView: View {
                 place(pane: pane, title: title, axis: request.axis)
             }
         }
+        .sheet(item: $palette) { kind in
+            PaletteView(title: kind.title, items: items(for: kind)) { palette = nil }
+        }
+        .sheet(isPresented: onboarding) {
+            OnboardingView(socket: store.socket) { onboarded = true }
+                .interactiveDismissDisabled()
+        }
         .sheet(isPresented: reportShown) {
             MorningReportView(sessions: store.morningReport ?? []) {
                 store.clearMorningReport()
@@ -184,6 +214,96 @@ struct MainView: View {
                 }
             }
             retitleTabs(panes)
+        }
+    }
+
+    /// The welcome screen is shown until it has been gone through once.
+    private var onboarding: Binding<Bool> {
+        Binding(
+            get: { !onboarded },
+            set: { shown in if !shown { onboarded = true } }
+        )
+    }
+
+    /// Everything the palette offers, in the order it offers it.
+    private func items(for kind: PaletteKind) -> [PaletteItem] {
+        switch kind {
+        case .sessions:
+            return store.panes.map { pane in
+                PaletteItem(
+                    title: Self.title(of: pane),
+                    detail: "\(pane.workspace) · \(pane.status.label)",
+                    symbol: pane.agent == nil ? "terminal" : "sparkles"
+                ) {
+                    workbench.open(pane: pane.id, title: Self.title(of: pane))
+                }
+            }
+
+        case .commands:
+            var items: [PaletteItem] = [
+                PaletteItem(
+                    title: "New Session",
+                    detail: "a project, an agent and a first prompt",
+                    shortcut: "⌘N",
+                    symbol: "plus"
+                ) { pending = PendingSession(axis: nil) },
+                PaletteItem(title: "Split Right", shortcut: "⌘D", symbol: "square.split.2x1") {
+                    pending = PendingSession(axis: .horizontal)
+                },
+                PaletteItem(
+                    title: "Split Down",
+                    shortcut: "⇧⌘D",
+                    symbol: "square.split.1x2"
+                ) { pending = PendingSession(axis: .vertical) },
+                PaletteItem(title: "Close Tab", shortcut: "⌘W", symbol: "xmark") {
+                    guard let id = workbench.selected else { return }
+                    for pane in workbench.closeTab(id) {
+                        store.send(.detachPane(pane: pane))
+                    }
+                },
+                PaletteItem(
+                    title: "Usage and Night Shift",
+                    detail: "limits, forecast, queue",
+                    shortcut: "⌥⌘I",
+                    symbol: "chart.line.uptrend.xyaxis"
+                ) { inspector.toggle() },
+                PaletteItem(
+                    title: "Morning Report",
+                    detail: "what otag did overnight",
+                    shortcut: "⇧⌘R",
+                    symbol: "sunrise"
+                ) { store.askForMorningReport() },
+            ]
+
+            for ask in store.asks {
+                items.append(PaletteItem(
+                    title: "Allow: \(ask.summary)",
+                    detail: ask.agent?.label ?? "",
+                    symbol: "checkmark.circle"
+                ) { store.answer(ask, with: .allow) })
+                items.append(PaletteItem(
+                    title: "Deny: \(ask.summary)",
+                    detail: ask.agent?.label ?? "",
+                    symbol: "xmark.circle"
+                ) { store.answer(ask, with: .deny) })
+            }
+
+            if let pane = workbench.focus.flatMap(store.pane), pane.agent != nil {
+                items.append(PaletteItem(
+                    title: "Hand Over to the Other Agent",
+                    detail: Self.title(of: pane),
+                    symbol: "arrow.left.arrow.right"
+                ) { store.send(.handoff(pane: pane.id, handoff: .agent(to: nil))) })
+                if pane.nightShift != nil {
+                    items.append(PaletteItem(
+                        title: "Stop the Night Shift",
+                        detail: Self.title(of: pane),
+                        symbol: "moon.zzz"
+                    ) { store.send(.nightShift(pane: pane.id, plan: nil)) })
+                }
+            }
+
+            return items
         }
     }
 

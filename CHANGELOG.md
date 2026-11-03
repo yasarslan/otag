@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktree of the session's own so that two agents cannot collide in one
   checkout. A worktree that cannot be made stops the session rather than
   quietly sharing the checkout.
+- `Cmd-K` is every command by name and `Cmd-P` jumps to a session: one
+  field, no modes, and the shortcut shown beside each so the palette teaches
+  the menus rather than replacing them.
+- A welcome screen on the first launch: it finds your agents, shows exactly
+  what installing Claude Code's hooks would change and installs them only
+  when you press the button, and lists the keys worth knowing.
+- A settings window (`Cmd-,`) with the three things worth setting: the
+  terminal's font size, whether idle sessions dim, and whether the app
+  notifies.
+- A session doing nothing, in a tab with others, is drawn slightly dimmer, so
+  the eye goes to what is working. Nothing blinks and nothing moves.
+- An app icon, drawn by `scripts/make-icon.swift` at build time rather than
+  shipped as a binary asset.
 - **Night shift**: give a session a queue of prompts and otag works through
   it for you. It sends the next one only while the agent is idle and its
   window has room, stops at a threshold you choose (90% by default), carries

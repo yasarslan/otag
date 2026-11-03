@@ -192,6 +192,10 @@ public struct UsageRow: Codable, Hashable, Sendable, Identifiable {
     /// Whether the window has reset since the reading was taken, so that
     /// otag is waiting for fresh data rather than showing a percentage.
     public var reset: Bool = false
+    /// The agent session the reading came from, when it said which.
+    ///
+    /// Usage is account-wide, so this can be a session otag is not running.
+    public var session: String?
 
     public var id: String { "\(agent.rawValue)-\(window.rawValue)" }
 
@@ -212,12 +216,43 @@ public struct UsageRow: Codable, Hashable, Sendable, Identifiable {
     /// clock with the daemon's.
     public var isStale: Bool { age > 600 }
 
+    /// Whether this window has a reading that describes it as it is now.
+    ///
+    /// A number nobody has confirmed for a while, and a window waiting for
+    /// its first reading, are both shown as what they are rather than as
+    /// the state of things.
+    public var isCurrent: Bool { !reset && !isStale && usedTenths != nil }
+
     enum CodingKeys: String, CodingKey {
         case agent, window
         case usedTenths = "used_tenths"
         case resetsIn = "resets_in"
         case fullIn = "full_in"
-        case level, at, age, reset
+        case level, at, age, reset, session
+    }
+
+    public init(
+        agent: AgentKind,
+        window: UsageWindow,
+        usedTenths: UInt16?,
+        resetsIn: Int64? = nil,
+        fullIn: Int64? = nil,
+        level: UsageLevel = .calm,
+        at: Int64 = 0,
+        age: Int64 = 0,
+        reset: Bool = false,
+        session: String? = nil
+    ) {
+        self.agent = agent
+        self.window = window
+        self.usedTenths = usedTenths
+        self.resetsIn = resetsIn
+        self.fullIn = fullIn
+        self.level = level
+        self.at = at
+        self.age = age
+        self.reset = reset
+        self.session = session
     }
 
     /// Everything but the window itself may be missing, as from every other
@@ -233,6 +268,7 @@ public struct UsageRow: Codable, Hashable, Sendable, Identifiable {
         at = try container.decodeIfPresent(Int64.self, forKey: .at) ?? 0
         age = try container.decodeIfPresent(Int64.self, forKey: .age) ?? 0
         reset = try container.decodeIfPresent(Bool.self, forKey: .reset) ?? false
+        session = try container.decodeIfPresent(String.self, forKey: .session)
     }
 }
 
@@ -285,6 +321,43 @@ public struct UsageReport: Codable, Hashable, Sendable {
     }
 
     public var isEmpty: Bool { rows.isEmpty && counted.isEmpty }
+
+    /// Whether any window has a reading that describes it as it is now.
+    public var isFresh: Bool { rows.contains(where: \.isCurrent) }
+
+    /// The newest reading in the report, which dates the whole of it.
+    public var newest: UsageRow? {
+        rows.min(by: { $0.age < $1.age })
+    }
+
+    /// How old the newest reading is, in seconds.
+    public var age: Int64? { newest?.age }
+
+    /// Where the numbers come from, in one line for a tooltip.
+    ///
+    /// Usage is account-wide: a reading can come from any Claude Code
+    /// session on the machine, including one otag is not running. Saying
+    /// which session it was, and how long ago, is what tells a current
+    /// number from one nobody has refreshed.
+    public func provenance(panes: [PaneInfo]) -> String {
+        guard let newest else {
+            return "No reading yet. A session reports the account's limits as it works."
+        }
+
+        let when = newest.age < 60 ? "just now" : Readable.ago(newest.age)
+        var line = newest.age < 60 ? "Last reading just now" : "Last reading \(when)"
+        if let session = newest.session {
+            // A session otag is running can be named by what it is working
+            // on, which means more to a person than an identifier.
+            if let pane = panes.first(where: { $0.session == session }) {
+                let what = pane.workspace.isEmpty ? pane.title : pane.workspace
+                line += what.isEmpty ? "" : ", from the session in \(what)"
+            } else {
+                line += ", from session \(Readable.sessionLabel(session))"
+            }
+        }
+        return line + ". Click to re-read."
+    }
 }
 
 // MARK: - The inbox

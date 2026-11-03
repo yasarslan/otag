@@ -157,7 +157,11 @@ struct MenuBarView: View {
         ForEach(store.usage.rows) { row in
             Text(line(row))
         }
-        if !store.usage.rows.isEmpty {
+        if !store.usage.isEmpty {
+            Text(store.usage.provenance(panes: store.panes))
+            Button("Refresh Usage", systemImage: "arrow.clockwise") {
+                store.refreshUsage()
+            }
             Divider()
         }
 
@@ -203,10 +207,12 @@ struct MenuBarLabel: View {
         if store.waiting > 0 {
             Label("\(store.waiting)", systemImage: "questionmark.circle.fill")
         } else if let worst = store.usage.rows
+            .filter(\.isCurrent)
             .compactMap(\.usedPercent)
             .max() {
-            // Only windows with a current reading: a window that has reset
-            // has no percentage to put in the menu bar.
+            // Only windows with a reading that describes them as they are
+            // now: a stale number in the menu bar is read as the truth all
+            // day, which is the one thing it must not be.
             Text("\(worst)%")
         } else {
             Image(systemName: "square.split.2x1")

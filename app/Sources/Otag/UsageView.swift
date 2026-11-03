@@ -13,8 +13,15 @@ struct UsageWidget: View {
     var body: some View {
         if !store.usage.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(store.usage.rows) { row in
-                    UsageRowView(row: row)
+                if store.usage.isFresh {
+                    ForEach(store.usage.rows) { row in
+                        UsageRowView(row: row)
+                    }
+                } else {
+                    // Nothing in the report describes the limits as they are
+                    // now, and a number nobody has confirmed is worse than
+                    // no number: it is the one thing a meter must not imply.
+                    UsageHint(store: store)
                 }
                 ForEach(store.usage.counted) { counted in
                     // A count, not a percentage: nobody knows what such an
@@ -27,6 +34,60 @@ struct UsageWidget: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
+    }
+}
+
+/// Ask the daemon for the numbers again.
+///
+/// Small and quiet, beside the numbers it refreshes. Its tooltip is where
+/// the provenance lives: when the last reading arrived and which session
+/// otag heard it from.
+struct UsageRefresh: View {
+    let store: SessionStore
+
+    var body: some View {
+        Button {
+            store.refreshUsage()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.caption)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(store.usage.provenance(panes: store.panes))
+        .accessibilityLabel("Refresh usage")
+    }
+}
+
+/// What the widget says instead of a number nobody has confirmed.
+struct UsageHint: View {
+    let store: SessionStore
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(headline)
+                    .font(.caption)
+                Text("An agent reports the limits as it works.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            UsageRefresh(store: store)
+        }
+    }
+
+    /// One line on why there is no number, which is not always the same
+    /// reason: a window that has reset is waiting for its first reading,
+    /// and an old one was simply never confirmed.
+    private var headline: String {
+        if store.usage.rows.contains(where: \.reset) {
+            return "Window reset — waiting for fresh data"
+        }
+        if let age = store.usage.age {
+            return "No reading for \(Readable.duration(age))"
+        }
+        return "No reading yet"
     }
 }
 
@@ -139,10 +200,16 @@ struct UsageInspector: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    section("Limits") {
+                    section("Limits", accessory: { UsageRefresh(store: store) }) {
+                        if !store.usage.isFresh {
+                            UsageHint(store: store)
+                        }
                         ForEach(store.usage.rows) { row in
                             UsageRowView(row: row)
                         }
+                        Text(store.usage.provenance(panes: store.panes))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     section("Timeline") {
                         UsageChart(samples: store.history)
@@ -199,9 +266,22 @@ struct UsageInspector: View {
         _ title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
+        section(title, accessory: { EmptyView() }, content: content)
+    }
+
+    /// A section with something small on the right of its title.
+    private func section<Accessory: View, Content: View>(
+        _ title: String,
+        @ViewBuilder accessory: () -> Accessory,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 4)
+                accessory()
+            }
             content()
         }
     }

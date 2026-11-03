@@ -191,8 +191,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Daemon logging to a daily-rolling file in otag's state directory, filtered by
   `OTAG_LOG` or `--log`.
 
+### Added
+
+- A refresh button beside the usage numbers — in the sidebar, in the
+  inspector and in the menu bar item — that asks the daemon for them again.
+  Its tooltip says when the last reading arrived and which session otag
+  heard it from, naming the project when it is a session otag is running.
+  The app also re-reads them every minute while it is open.
+
 ### Changed
 
+- The app shows a short hint instead of a percentage when no reading
+  describes the limits as they are now, and the menu bar item shows its icon
+  rather than a number nobody has confirmed. There is no supported way to
+  ask Claude Code for the account's limits without spending tokens, so otag
+  never does: the numbers come from what the sessions report.
 - `otag install-hooks` asks Claude Code to re-run the status line every 30
   seconds, so a session that is sitting idle keeps reporting the account's
   limits instead of going quiet until someone types. An interval already in

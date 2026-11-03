@@ -62,6 +62,7 @@ public final class SessionStore {
 
     private var connection: DaemonConnection?
     private var listening: Task<Void, Never>?
+    private var refreshing: Task<Void, Never>?
 
     public init(socket: URL = Paths.socket()) {
         self.socket = socket
@@ -121,6 +122,19 @@ public final class SessionStore {
         send(.morningReport)
     }
 
+    /// Ask the daemon for the usage numbers again, now.
+    ///
+    /// The daemon pushes a report whenever the numbers change, so this is
+    /// not how the app normally learns them: it is for the refresh button
+    /// and for the timer below, both of which exist because a reading can
+    /// only ever be as fresh as the last session that reported one. There is
+    /// no supported way to ask Claude Code for the account's limits without
+    /// spending tokens, so otag asks the daemon, never the agent.
+    public func refreshUsage() {
+        send(.usage)
+        send(.usageHistory)
+    }
+
     /// Forget the report, so the window can be opened fresh.
     public func clearMorningReport() {
         morningReport = nil
@@ -133,12 +147,32 @@ public final class SessionStore {
         listening = Task { [weak self] in
             await self?.run()
         }
+        guard refreshing == nil else { return }
+        refreshing = Task { [weak self] in
+            await self?.keepUsageCurrent()
+        }
+    }
+
+    /// Ask for the numbers again every minute, while the app is open.
+    ///
+    /// The daemon's own copy changes only when a session reports, so this
+    /// costs one small request a minute and keeps the age the app shows
+    /// honest even when nothing else happens.
+    private func keepUsageCurrent() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(60))
+            if Task.isCancelled { return }
+            guard case .connected = state else { continue }
+            refreshUsage()
+        }
     }
 
     /// Stop listening and close the connection. The daemon keeps running.
     public func disconnect() {
         listening?.cancel()
         listening = nil
+        refreshing?.cancel()
+        refreshing = nil
         connection?.close()
         connection = nil
     }
@@ -199,6 +233,7 @@ public final class SessionStore {
             self.panes = panes
         case let .usage(report):
             usage = report
+            remember(report)
         case let .inbox(asks):
             self.asks = asks
         case let .usageHistory(samples):

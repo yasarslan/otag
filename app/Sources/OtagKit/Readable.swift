@@ -35,6 +35,12 @@ public enum Readable {
         "updated \(duration(seconds)) ago"
     }
 
+    /// An agent session identifier short enough to show: the first eight
+    /// characters, which is what the agents themselves print.
+    public static func sessionLabel(_ id: String) -> String {
+        String(id.prefix(8))
+    }
+
     /// A token count: `840`, `12k`, `1.2M`.
     public static func tokens(_ count: UInt64) -> String {
         let thousand: UInt64 = 1_000

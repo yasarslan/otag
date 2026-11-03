@@ -12,7 +12,7 @@ use otag_core::proto::{Handoff as ProtoHandoff, PaneInfo, PaneUsage, Request, Re
 use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 
-use crate::{agents, handoff, persist, usage};
+use crate::{agents, handoff, notify, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -76,12 +76,18 @@ async fn serve(socket: &Path) -> Result<()> {
         Arc::clone(&shared_usage),
     ));
 
+    // Reaching the user when the terminal is not in front of them is the
+    // reason otag exists; it is also entirely optional, and silent when the
+    // system offers no way to do it.
+    let notifying = tokio::spawn(notify::keep_watching(Arc::clone(&session)));
+
     let daemon = Daemon {
         session: Arc::clone(&session),
         usage: Arc::clone(&shared_usage),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
     watching.abort();
+    notifying.abort();
 
     // The panes are about to be killed with the daemon, so what they show
     // now is what a restart has to put back.

@@ -11,6 +11,7 @@ mod handoff;
 mod hook;
 mod install;
 mod logging;
+mod notify;
 mod persist;
 mod usage;
 

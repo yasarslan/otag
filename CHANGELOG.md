@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A desktop notification the moment an agent starts waiting for you: once
+  per agent per situation, never once a second, and silent on a system that
+  has no way to show one. `OTAG_NO_NOTIFY` turns them off.
+- A README written for people using otag rather than building it: what it
+  does, what it needs, how to install it, a quick start, the whole key
+  table, the commands, the environment variables and what otag reads.
 - Handoff. `Ctrl-b g`, or `otag handoff <pane>`, writes everything the next
   agent needs — what the user asked, where the last agent left off, the files
   it changed, the commands it ran, the last errors on screen and what `git`

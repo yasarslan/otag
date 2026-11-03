@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Handoff. `Ctrl-b g`, or `otag handoff <pane>`, writes everything the next
+  agent needs — what the user asked, where the last agent left off, the files
+  it changed, the commands it ran, the last errors on screen and what `git`
+  says about the checkout — into `.otag/handoff/<when>-<from>-to-<to>.md`,
+  then opens the other agent beside the pane and tells it to read that file.
+  Nothing asks the agent being handed from, so it works when that agent is
+  out of quota. The old pane stays open.
+- `Ctrl-b m`, or `otag handoff <pane> --model <name>`, keeps the agent and
+  the conversation and continues the same session on another model, which is
+  what to do when one model's quota is gone but the account's is not.
+- The usage widget offers the handoff as soon as a window reads 100%.
+- otag's own files are kept out of `git status` through
+  `.git/info/exclude`, never by touching a tracked `.gitignore`.
+- A notice line on the tab bar: what a handoff did, or why otag would not do
+  something. A refused request no longer ends the session.
 - A usage widget at the bottom of the sidebar: how much of each agent's
   five-hour and weekly windows is gone, when the window resets, and — once
   there are three readings — when it would be full at the rate of the last

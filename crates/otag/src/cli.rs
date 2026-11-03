@@ -45,6 +45,25 @@ pub enum Command {
     KillServer,
     /// List workspaces and panes.
     Ls,
+    /// Hand a pane's work to another agent, or to another model.
+    ///
+    /// Without any option, the other agent otag knows takes over, reading a
+    /// package otag writes from the session, the checkout and the pane.
+    Handoff {
+        /// The pane to hand over, as `otag ls` numbers them.
+        #[arg(value_name = "PANE")]
+        pane: u64,
+        /// Hand over to this agent instead of the other one.
+        #[arg(long, value_name = "AGENT", conflicts_with_all = ["model", "fallback"])]
+        to: Option<String>,
+        /// Keep the agent and the session, and continue on this model.
+        #[arg(long, value_name = "MODEL", conflicts_with = "fallback")]
+        model: Option<String>,
+        /// Keep the agent and the session, and continue on otag's fallback
+        /// model for that agent.
+        #[arg(long)]
+        fallback: bool,
+    },
     /// Print how much of the agents' limits is used.
     Usage {
         /// Print the numbers as JSON instead of as lines.
@@ -108,6 +127,21 @@ pub fn run() -> Result<()> {
         Command::Ls => {
             logging::init_client(cli.log.as_deref());
             client_runtime()?.block_on(crate::client::ls(&socket))
+        }
+        Command::Handoff {
+            pane,
+            to,
+            model,
+            fallback,
+        } => {
+            logging::init_client(cli.log.as_deref());
+            client_runtime()?.block_on(crate::client::handoff(
+                &socket,
+                pane,
+                to.as_deref(),
+                model.as_deref(),
+                fallback,
+            ))
         }
         Command::Usage { json } => {
             logging::init_client(cli.log.as_deref());

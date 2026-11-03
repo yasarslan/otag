@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use otag_core::client;
+use otag_core::pane::PaneId;
 use otag_core::paths::Dirs;
-use otag_core::proto::{Request, Response};
+use otag_core::proto::{Handoff, Request, Response};
 use otag_ui::usage as ui_usage;
 
 /// How long to wait for a freshly spawned daemon to start listening.
@@ -76,6 +77,53 @@ pub async fn ls(socket: &Path) -> Result<()> {
         Ok(other) => bail!(unexpected(other)),
         Err(otag_core::Error::NotRunning { .. }) => {
             println!("no daemon is running");
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Hand a pane's work over, and say what happened.
+pub async fn handoff(
+    socket: &Path,
+    pane: u64,
+    to: Option<&str>,
+    model: Option<&str>,
+    fallback: bool,
+) -> Result<()> {
+    let handoff = if fallback || model.is_some() {
+        Handoff::Model {
+            model: model.map(str::to_owned),
+        }
+    } else {
+        Handoff::Agent {
+            to: match to {
+                Some(name) => Some(name.parse().map_err(anyhow::Error::from)?),
+                None => None,
+            },
+        }
+    };
+
+    let request = Request::Handoff {
+        pane: PaneId::from_number(pane),
+        handoff,
+    };
+    match client::request(socket, &request).await {
+        Ok(Response::HandoffDone {
+            pane,
+            package,
+            summary,
+        }) => {
+            println!("{summary}");
+            println!("the work carries on in pane {pane}");
+            if let Some(package) = package {
+                println!("the package it reads is {}", package.display());
+            }
+            Ok(())
+        }
+        Ok(other) => bail!(unexpected(other)),
+        Err(otag_core::Error::NotRunning { .. }) => {
+            println!("no daemon is running, so there is no pane to hand over");
             Ok(())
         }
         Err(error) => Err(error.into()),

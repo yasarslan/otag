@@ -445,6 +445,46 @@ impl Session {
         Ok(())
     }
 
+    /// Divide a pane and start a program of otag's choosing beside it.
+    ///
+    /// This is how a handoff opens the agent that takes over: beside the pane
+    /// it is taking over from, in the same directory, so the user sees both
+    /// at once and the one that ran out of quota stays where it is.
+    pub async fn split_running(
+        self: &Arc<Self>,
+        beside: PaneId,
+        direction: Direction,
+        command: &[String],
+        title: &str,
+    ) -> Result<PaneId> {
+        let started = {
+            let mut state = self.lock()?;
+            let Some(from) = state.panes.get(&beside) else {
+                return Err(Error::PaneGone { id: Some(beside) });
+            };
+            let workspace = from.workspace;
+            let cwd = from.cwd.clone();
+
+            let pane =
+                self.start_pane_running(&mut state, workspace, cwd.as_deref(), command, title)?;
+            // The split happens next to the pane being handed over from, so
+            // the focus is moved there first.
+            let placed = state.tab_mut().is_some_and(|tab| {
+                // The split happens at the focus, so the pane being handed
+                // over from becomes the focus first. A pane in another tab
+                // cannot be split beside, and says so.
+                tab.focus_pane(beside) && tab.split(direction, pane)
+            });
+            if !placed {
+                state.panes.remove(&pane);
+                return Err(Error::NoPanes);
+            }
+            pane
+        };
+        self.commit(true).await;
+        Ok(started)
+    }
+
     /// Add a tab with one pane to the active workspace, and show it.
     pub async fn new_tab(self: &Arc<Self>) -> Result<()> {
         {
@@ -1048,6 +1088,21 @@ impl Session {
         workspace: WorkspaceId,
         cwd: Option<&Path>,
     ) -> Result<PaneId> {
+        self.start_pane_running(state, workspace, cwd, &[], SHELL_TITLE)
+    }
+
+    /// Start a pane running a command of its own, and put it in the session.
+    ///
+    /// An empty command is the user's shell, which is what every pane the
+    /// user opens runs; a handoff passes the command that starts an agent.
+    fn start_pane_running(
+        self: &Arc<Self>,
+        state: &mut State,
+        workspace: WorkspaceId,
+        cwd: Option<&Path>,
+        command: &[String],
+        title: &str,
+    ) -> Result<PaneId> {
         let id = state.next_pane;
         let pane = self.start_pane_as(
             state,
@@ -1055,8 +1110,8 @@ impl Session {
                 id,
                 workspace,
                 cwd,
-                command: &[],
-                title: SHELL_TITLE,
+                command,
+                title,
                 restored: &[],
             },
         )?;

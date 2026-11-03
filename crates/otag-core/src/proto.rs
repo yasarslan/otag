@@ -110,6 +110,14 @@ pub enum Request {
     },
     /// Show or hide the workspace sidebar.
     ToggleSidebar,
+    /// Carry the work in a pane over to another agent, or to another model
+    /// of the same agent. Answered with [`Response::HandoffDone`].
+    Handoff {
+        /// The pane whose work is being handed over.
+        pane: PaneId,
+        /// What to do with it.
+        handoff: Handoff,
+    },
     /// What an agent's hook, or its statusLine command, reported.
     ///
     /// Not answered: the hook command runs inside the agent's own turn and
@@ -132,6 +140,28 @@ pub enum Request {
     /// [`Response::Ok`]. The panes and their programs keep running.
     Detach,
     /// A request this build does not know about.
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a handoff should do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum Handoff {
+    /// Open another agent on the same task, with a package to read.
+    Agent {
+        /// Which agent, or the other one otag knows about.
+        #[serde(default)]
+        to: Option<AgentKind>,
+    },
+    /// Continue the same session on another model of the same agent.
+    Model {
+        /// Which model, or the agent's fallback when otag has a verified
+        /// one.
+        #[serde(default)]
+        model: Option<String>,
+    },
+    /// A mode this build does not know about.
     #[serde(other)]
     Unknown,
 }
@@ -186,6 +216,17 @@ pub enum Response {
         /// How the last program ended.
         #[serde(default)]
         exit: Option<PaneExit>,
+    },
+    /// Answer to [`Request::Handoff`].
+    HandoffDone {
+        /// The pane the work carries on in.
+        pane: PaneId,
+        /// The package that was written, when the handoff wrote one.
+        #[serde(default)]
+        package: Option<PathBuf>,
+        /// One line saying what happened, for the user.
+        #[serde(default)]
+        summary: String,
     },
     /// The request could not be carried out.
     Error {

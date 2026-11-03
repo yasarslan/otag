@@ -17,10 +17,18 @@ use ratatui::widgets::Widget;
 
 use crate::theme::Theme;
 
+/// What the widget says when an agent has nothing left.
+///
+/// The offer is the point: a user who has just been told they are out of
+/// quota wants to know what to do about it, and `Ctrl-b g` hands the task to
+/// the other agent.
+pub const OFFER: &str = "out · ^b g hands over";
+
 /// How many rows the widget needs for a report.
 ///
-/// One per window, one more for each window with a projection, and one per
-/// agent that reports no percentage at all.
+/// One per window, one more for each window with a projection, one per agent
+/// that reports no percentage at all, and one for the offer when a window is
+/// used up.
 #[must_use]
 pub fn height(report: &Report) -> u16 {
     let rows: usize = report
@@ -28,7 +36,19 @@ pub fn height(report: &Report) -> u16 {
         .iter()
         .map(|row| 1 + usize::from(detail(row).is_some()))
         .sum();
-    u16::try_from(rows.saturating_add(report.counted.len())).unwrap_or(u16::MAX)
+    let offer = usize::from(offers_handoff(report));
+    u16::try_from(
+        rows.saturating_add(report.counted.len())
+            .saturating_add(offer),
+    )
+    .unwrap_or(u16::MAX)
+}
+
+/// Whether any window is used up, so that handing the task over is the only
+/// thing left to do.
+#[must_use]
+pub fn offers_handoff(report: &Report) -> bool {
+    report.rows.iter().any(|row| row.used_pct() >= 100)
 }
 
 /// A duration a person reads at a glance: `2h`, `1h20m`, `45m`, `30s`.
@@ -144,6 +164,9 @@ impl Widget for Usage<'_> {
                 self.theme.dim(),
                 &mut y,
             );
+        }
+        if offers_handoff(self.report) {
+            put(OFFER, Style::new().fg(self.theme.error), &mut y);
         }
     }
 }
@@ -300,6 +323,30 @@ mod tests {
         let lines = render(&report, 16, 1);
         assert_eq!(lines.len(), 1, "nothing is drawn outside the widget");
         assert_eq!(lines[0], "claude 5h  10%");
+    }
+
+    #[test]
+    fn a_window_that_is_used_up_offers_the_handoff() {
+        let report = Report {
+            rows: vec![row(1_000, None, Some(600))],
+            counted: Vec::new(),
+        };
+
+        assert!(offers_handoff(&report));
+        assert_eq!(height(&report), 3);
+        let lines = render(&report, 22, 3);
+        assert_eq!(lines[0], "claude 5h 100%");
+        assert_eq!(lines[2], OFFER, "the user is told what to do about it");
+    }
+
+    #[test]
+    fn a_window_that_is_merely_worrying_offers_nothing() {
+        let report = Report {
+            rows: vec![row(950, None, None)],
+            counted: Vec::new(),
+        };
+        assert!(!offers_handoff(&report));
+        assert_eq!(height(&report), 1);
     }
 
     #[test]

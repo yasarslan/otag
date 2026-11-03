@@ -8,11 +8,11 @@ use otag_agents::{AgentKind, SessionRef, claude, hooks};
 use otag_core::attach;
 use otag_core::pane::{PaneId, PaneSize, PaneSpec};
 use otag_core::paths::{Dirs, SOCKET_ENV};
-use otag_core::proto::{PaneInfo, PaneUsage, Request, Response};
+use otag_core::proto::{Handoff as ProtoHandoff, PaneInfo, PaneUsage, Request, Response};
 use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 
-use crate::{agents, persist, usage};
+use crate::{agents, handoff, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -219,6 +219,7 @@ impl Handler for Daemon {
                 self.session.toggle_sidebar().await;
                 None
             }
+            Request::Handoff { pane, handoff } => Some(self.handoff(pane, handoff).await),
             Request::Hook {
                 event,
                 pane,
@@ -235,6 +236,34 @@ impl Handler for Daemon {
 }
 
 impl Daemon {
+    /// Carry a pane's work over to another agent, or another model.
+    ///
+    /// Answered either way: a handoff is something the user asked for and
+    /// waits on, so a refusal has to say why.
+    async fn handoff(&self, pane: PaneId, handoff: ProtoHandoff) -> Response {
+        let mode = match handoff {
+            ProtoHandoff::Agent { to } => handoff::Mode::SwitchAgent { to },
+            ProtoHandoff::Model { model } => handoff::Mode::SwitchModel { model },
+            ProtoHandoff::Unknown => {
+                return Response::error(
+                    "this otag daemon does not know that kind of handoff.                      The daemon and the client are probably different versions;                      restart the daemon with `otag kill-server`.",
+                );
+            }
+        };
+
+        match handoff::run(&self.session, pane, mode).await {
+            Ok(done) => Response::HandoffDone {
+                pane: done.pane,
+                package: done.package,
+                summary: done.summary,
+            },
+            Err(message) => {
+                tracing::info!(%pane, message, "a handoff was refused");
+                Response::error(message)
+            }
+        }
+    }
+
     /// Act on what an agent's hook, or its status line, reported.
     ///
     /// A hook is the agent speaking for itself, so what it says outweighs

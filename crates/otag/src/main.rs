@@ -6,6 +6,8 @@ mod attach;
 mod cli;
 mod client;
 mod daemon;
+mod git;
+mod handoff;
 mod hook;
 mod install;
 mod logging;

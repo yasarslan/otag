@@ -77,7 +77,13 @@ pub const fn rect(area: Area) -> Rect {
 }
 
 /// Draw the whole session.
-pub fn draw(frame: &mut Frame, view: &SessionView, screens: &Screens, theme: Theme) {
+pub fn draw(
+    frame: &mut Frame,
+    view: &SessionView,
+    screens: &Screens,
+    theme: Theme,
+    notice: Option<&str>,
+) {
     let whole = frame.area();
     // otag's own background, so that the parts no pane covers are otag's
     // rather than whatever the terminal had.
@@ -91,7 +97,14 @@ pub fn draw(frame: &mut Frame, view: &SessionView, screens: &Screens, theme: The
         },
         usage_area(rect(view.sidebar), &view.usage),
     );
-    frame.render_widget(TabBar { view, theme }, rect(view.tabs_area));
+    frame.render_widget(
+        TabBar {
+            view,
+            theme,
+            notice,
+        },
+        rect(view.tabs_area),
+    );
 
     for pane in &view.panes {
         let area = rect(pane.area);
@@ -229,6 +242,11 @@ pub fn workspace_at(view: &SessionView, x: u16, y: u16) -> Option<usize> {
 struct TabBar<'a> {
     view: &'a SessionView,
     theme: Theme,
+    /// Something otag has to tell the user: what a handoff did, or why a
+    /// request was refused. It takes the place of the workspace's name while
+    /// it is there, because the name is always one keypress away and the
+    /// notice is not.
+    notice: Option<&'a str>,
 }
 
 impl Widget for TabBar<'_> {
@@ -255,23 +273,34 @@ impl Widget for TabBar<'_> {
             );
         }
 
-        // The workspace's name sits at the far end, out of the way of the
-        // tabs but telling the user which project they are looking at.
-        if let Some(workspace) = self.view.workspaces.get(self.view.active_workspace) {
-            let width = u16::try_from(workspace.name.chars().count()).unwrap_or(u16::MAX);
-            let used = tab_spans(self.view)
-                .last()
-                .map_or(area.x, |(_, _, span)| span.right());
-            let x = area.right().saturating_sub(width);
-            if x > used {
-                buffer.set_stringn(
-                    x,
-                    area.y,
-                    &workspace.name,
-                    usize::from(width),
-                    self.theme.dim(),
-                );
-            }
+        // The far end of the bar carries either a notice or, when there is
+        // none, the name of the workspace: it says which project this is,
+        // and it is out of the way of the tabs.
+        let (text, style) = match self.notice {
+            Some(notice) => (notice, Style::new().fg(self.theme.attention)),
+            None => match self.view.workspaces.get(self.view.active_workspace) {
+                Some(workspace) => (workspace.name.as_str(), self.theme.dim()),
+                None => return,
+            },
+        };
+
+        let width = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
+        let used = tab_spans(self.view)
+            .last()
+            .map_or(area.x, |(_, _, span)| span.right());
+        let x = area.right().saturating_sub(width);
+        if x > used {
+            buffer.set_stringn(x, area.y, text, usize::from(width), style);
+        } else if used < area.right() {
+            // Not enough room for all of it; what fits is still worth
+            // showing, because a notice the user never sees is worse.
+            buffer.set_stringn(
+                used.saturating_add(1),
+                area.y,
+                text,
+                usize::from(area.right().saturating_sub(used).saturating_sub(1)),
+                style,
+            );
         }
     }
 }
@@ -421,7 +450,7 @@ mod tests {
         let mut terminal =
             Terminal::new(TestBackend::new(size.cols(), size.rows())).expect("a test terminal");
         terminal
-            .draw(|frame| draw(frame, view, screens, Theme::default()))
+            .draw(|frame| draw(frame, view, screens, Theme::default(), None))
             .expect("the session draws");
         terminal.backend().buffer().clone()
     }

@@ -6,4 +6,5 @@
 //! on its own.
 #![forbid(unsafe_code)]
 
+pub mod handoff;
 pub mod usage;

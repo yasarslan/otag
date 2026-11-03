@@ -282,3 +282,57 @@ fn usage_without_a_daemon_says_so_rather_than_failing() {
     let reported = succeeds(sandbox.otag().arg("usage"));
     assert_eq!(reported.trim(), "no daemon is running");
 }
+
+#[test]
+fn a_handoff_of_a_pane_that_does_not_exist_says_so() {
+    let sandbox = Sandbox::new();
+    succeeds(sandbox.otag().arg("ping"));
+
+    let output = sandbox
+        .otag()
+        .args(["handoff", "7"])
+        .output()
+        .expect("the otag binary runs");
+
+    assert!(!output.status.success());
+    let message = text(&output.stderr);
+    assert!(message.contains("no pane 7"), "{message}");
+}
+
+#[test]
+fn a_handoff_names_an_agent_otag_knows() {
+    let sandbox = Sandbox::new();
+    succeeds(sandbox.otag().arg("ping"));
+
+    let output = sandbox
+        .otag()
+        .args(["handoff", "1", "--to", "gemini"])
+        .output()
+        .expect("the otag binary runs");
+
+    assert!(!output.status.success());
+    let message = text(&output.stderr);
+    assert!(message.contains("claude, codex"), "{message}");
+}
+
+#[test]
+fn a_handoff_without_a_daemon_says_so_rather_than_failing() {
+    let sandbox = Sandbox::new();
+    let reported = succeeds(sandbox.otag().args(["handoff", "1"]));
+    assert!(reported.contains("no daemon is running"), "{reported}");
+}
+
+#[test]
+fn a_handoff_cannot_both_switch_agent_and_keep_the_session() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .otag()
+        .args(["handoff", "1", "--to", "codex", "--model", "sonnet"])
+        .output()
+        .expect("the otag binary runs");
+
+    assert!(
+        !output.status.success(),
+        "the two options contradict each other"
+    );
+}

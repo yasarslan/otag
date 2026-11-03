@@ -6,7 +6,7 @@
 //! untouched.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use crossterm::event::{
@@ -16,7 +16,7 @@ use otag_core::client::{self, Reader, Writer};
 use otag_core::frame::ScreenState;
 use otag_core::layout::{BORDER, Direction, Side};
 use otag_core::pane::{PaneExit, PaneSize};
-use otag_core::proto::{Request, Response, SessionView};
+use otag_core::proto::{Handoff, Request, Response, SessionView};
 use otag_ui::session::Screens;
 use otag_ui::terminal::{Guard, Tui};
 use otag_ui::theme::Theme;
@@ -42,6 +42,12 @@ const RESIZE_CELLS: u16 = 3;
 /// timer costs one query of the terminal and makes a missed signal heal
 /// itself instead.
 const SIZE_CHECK: Duration = Duration::from_secs(1);
+
+/// How long a notice stays on the tab bar.
+///
+/// Long enough to read a sentence, short enough that it does not become
+/// part of the furniture.
+const NOTICE: Duration = Duration::from_secs(8);
 
 /// Attach to the session and draw it until the user detaches or it ends.
 pub async fn run(socket: &Path) -> Result<()> {
@@ -85,6 +91,12 @@ struct Client {
     view: SessionView,
     screens: Screens,
     theme: Theme,
+    /// Something to tell the user, and when it stops being worth saying.
+    ///
+    /// A handoff's result and a refused request both arrive while the user is
+    /// looking at their panes. Ending the session for either would be absurd,
+    /// and a message nobody clears would sit there for the rest of the day.
+    notice: Option<(String, Instant)>,
 }
 
 impl Client {
@@ -97,6 +109,7 @@ impl Client {
             },
             screens: Screens::new(),
             theme: Theme::default(),
+            notice: None,
         }
     }
 
@@ -131,9 +144,27 @@ impl Client {
     }
 
     /// Draw everything.
+    /// Say something to the user for the next few seconds.
+    fn say(&mut self, notice: impl Into<String>) {
+        self.notice = Some((notice.into(), Instant::now() + NOTICE));
+    }
+
+    /// Drop a notice that has been shown long enough, reporting whether the
+    /// screen has to be drawn again.
+    fn forget_old_notice(&mut self) -> bool {
+        match &self.notice {
+            Some((_, until)) if Instant::now() >= *until => {
+                self.notice = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn draw(&self, terminal: &mut Tui) -> Result<()> {
+        let notice = self.notice.as_ref().map(|(notice, _)| notice.as_str());
         terminal
-            .draw(|frame| session::draw(frame, &self.view, &self.screens, self.theme))
+            .draw(|frame| session::draw(frame, &self.view, &self.screens, self.theme, notice))
             .context("cannot draw the session")?;
         Ok(())
     }
@@ -201,7 +232,17 @@ async fn event_loop(
                     client.draw(terminal)?;
                 }
                 Ok(Response::SessionEnded { exit }) => return Ok(Outcome::Ended(exit)),
-                Ok(Response::Error { message }) => bail!("{message}"),
+                Ok(Response::HandoffDone { pane, summary, .. }) => {
+                    client.say(format!("{summary} (pane {pane})"));
+                    client.draw(terminal)?;
+                }
+                // A request the daemon would not carry out — a handoff with
+                // nothing to hand over, a split with no room. The session is
+                // fine; the user is told and carries on.
+                Ok(Response::Error { message }) => {
+                    client.say(message);
+                    client.draw(terminal)?;
+                }
                 // A daemon of another version may send something this build
                 // does not know; ignoring it is better than giving up.
                 Ok(other) => tracing::debug!(?other, "ignoring a message otag does not know"),
@@ -273,6 +314,11 @@ async fn event_loop(
                     // Without a size there is nothing to compare; the next
                     // tick tries again rather than ending the session.
                     Err(error) => tracing::debug!(%error, "cannot read the terminal's size"),
+                }
+                // The same tick takes a notice down again once it has been
+                // on screen long enough.
+                if client.forget_old_notice() {
+                    client.draw(terminal)?;
                 }
             }
         }
@@ -363,6 +409,13 @@ fn prefixed(key: KeyEvent, view: &SessionView) -> Command {
         KeyCode::Char('o') | KeyCode::Tab => Command::Ask(Request::FocusNext),
         KeyCode::Char('z') => Command::Ask(Request::ToggleSidebar),
 
+        // `g` for "give the work away" and `m` for "another model". The
+        // obvious letters are taken: `h` moves the focus and `H` moves an
+        // edge, and a key that both resizes and hands work over would be a
+        // trap.
+        KeyCode::Char('g') => handoff(view, Handoff::Agent { to: None }),
+        KeyCode::Char('m') => handoff(view, Handoff::Model { model: None }),
+
         KeyCode::Char('h') | KeyCode::Left => focus(Side::Left),
         KeyCode::Char('j') | KeyCode::Down => focus(Side::Down),
         KeyCode::Char('k') | KeyCode::Up => focus(Side::Up),
@@ -394,6 +447,14 @@ const fn resize(side: Side) -> Command {
 }
 
 /// Show the tab `by` positions along, wrapping around.
+/// Hand the focused pane's work over, if a pane has the focus.
+fn handoff(view: &SessionView, handoff: Handoff) -> Command {
+    match view.focus {
+        Some(pane) => Command::Ask(Request::Handoff { pane, handoff }),
+        None => Command::Ignore,
+    }
+}
+
 fn step_tab(view: &SessionView, by: isize) -> Command {
     match step(view.active_tab, view.tabs.len(), by) {
         Some(index) => Command::Ask(Request::SelectTab { index }),
@@ -999,5 +1060,55 @@ mod tests {
         // panic or the wrong pane's.
         client.view.focus = None;
         assert_eq!(focused_modes(&client), InputModes::default());
+    }
+
+    #[test]
+    fn the_handoff_keys_ask_for_the_focused_pane() {
+        assert_eq!(
+            asked(after_prefix(KeyCode::Char('g'))),
+            Request::Handoff {
+                pane: pane_id(2),
+                handoff: Handoff::Agent { to: None }
+            },
+            "the focused pane is the one handed over"
+        );
+        assert_eq!(
+            asked(after_prefix(KeyCode::Char('m'))),
+            Request::Handoff {
+                pane: pane_id(2),
+                handoff: Handoff::Model { model: None }
+            }
+        );
+    }
+
+    #[test]
+    fn a_handoff_key_with_nothing_focused_does_nothing() {
+        let mut nothing = view();
+        nothing.focus = None;
+        let mut prefix_held = true;
+
+        assert!(matches!(
+            command(key(KeyCode::Char('g')), &mut prefix_held, &nothing),
+            Command::Ignore
+        ));
+    }
+
+    #[test]
+    fn a_notice_is_kept_until_it_has_been_on_screen_long_enough() {
+        let mut client = Client::new(PaneSize::new(24, 80));
+        assert!(!client.forget_old_notice(), "there is nothing to forget");
+
+        client.say("codex is taking over");
+        assert!(!client.forget_old_notice(), "it was only just said");
+        assert_eq!(
+            client.notice.as_ref().map(|(notice, _)| notice.as_str()),
+            Some("codex is taking over")
+        );
+
+        // Time travel instead of sleeping: the rule is the deadline, not the
+        // clock.
+        client.notice = Some(("stale".to_owned(), Instant::now()));
+        assert!(client.forget_old_notice(), "the screen has to be redrawn");
+        assert!(client.notice.is_none());
     }
 }

@@ -214,6 +214,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The app's terminals come back by themselves when the daemon is restarted.
+  Each pane is picked up again — with its restored screen, at the size the
+  view is drawing it — instead of showing "the otag daemon closed the
+  connection" and staying dead. A pane the daemon no longer has says so over
+  its last screen, with a button to close it, rather than quietly swallowing
+  what is typed into it.
 - Usage is read from every Claude Code session on the machine, not only from
   the ones running inside otag. A session in your own terminal reports the
   same account's limits, so its numbers now reach the meters too; what is

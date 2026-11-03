@@ -161,6 +161,11 @@ final class Collected {
         text += String(decoding: bytes, as: UTF8.self)
     }
 
+    /// Forget what has arrived so far, to watch for what comes next.
+    func forget() {
+        text = ""
+    }
+
     /// Wait until `ready` holds, or fail saying what did arrive.
     func wait(for what: String, until ready: (Collected) -> Bool) async throws {
         for _ in 0 ..< 100 {
@@ -194,7 +199,7 @@ struct Daemonless {
     let home: URL
     let project: URL
     let socket: URL
-    private let process: Process
+    private var process: Process
 
     init() throws {
         let binary = try #require(Self.binary)
@@ -207,23 +212,41 @@ struct Daemonless {
         socket = home.appendingPathComponent("otag.sock")
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
 
-        process = Process()
-        process.executableURL = binary
+        _ = binary
+        process = try Self.spawn(home: home, socket: socket)
+    }
+
+    /// One daemon process, with a home of its own so its state — and the
+    /// sessions it would restore — is this test's and nobody else's.
+    private static func spawn(home: URL, socket: URL) throws -> Process {
+        let process = Process()
+        process.executableURL = try #require(Self.binary)
         process.arguments = ["daemon", "--socket", socket.path]
-        // A home of its own, so the daemon's state — and the sessions it
-        // would restore — is this test's and nobody else's.
         process.environment = [
             "HOME": home.path,
             "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
             "OTAG_NO_NOTIFY": "1",
         ]
-        // Kept, so a daemon that will not start can say why.
+        // Kept, so a daemon that will not start can say why. Appended to, so
+        // a restart does not throw away what the first one said.
         let log = home.appendingPathComponent("daemon.out")
-        FileManager.default.createFile(atPath: log.path, contents: nil)
+        if !FileManager.default.fileExists(atPath: log.path) {
+            FileManager.default.createFile(atPath: log.path, contents: nil)
+        }
         let output = try FileHandle(forWritingTo: log)
+        output.seekToEndOfFile()
         process.standardOutput = output
         process.standardError = output
         try process.run()
+        return process
+    }
+
+    /// Stop the daemon and start another one on the same socket, with the
+    /// same state directory, which is what an upgrade looks like.
+    mutating func restart() throws {
+        process.terminate()
+        process.waitUntilExit()
+        process = try Self.spawn(home: home, socket: socket)
     }
 
     /// Whatever the daemon printed, for a failure message.

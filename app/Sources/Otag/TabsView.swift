@@ -202,6 +202,8 @@ private struct PaneCell: View {
     let workbench: Workbench
 
     @AppStorage(Preference.dimIdle) private var dimIdle = true
+    /// Why this pane cannot be followed any more, once that has happened.
+    @State private var gone: String?
 
     var body: some View {
         TerminalPaneView(
@@ -209,8 +211,18 @@ private struct PaneCell: View {
             socket: store.socket,
             focused: tab.focus == pane && tab.panes.count > 1,
             onEnded: { _ in workbench.close(pane: pane) },
+            onGone: { message in gone = message },
             onFocus: { workbench.focus(pane: pane) }
         )
+        .overlay {
+            if let gone {
+                // The daemon is running and has no such pane: the session is
+                // over, and what is on the terminal is the last thing it
+                // ever showed. Saying so beats a view that quietly does
+                // nothing when it is typed into.
+                PaneGoneOverlay(reason: gone) { workbench.close(pane: pane) }
+            }
+        }
         .overlay(alignment: .topLeading) {
             if tab.panes.count > 1 {
                 PaneLabel(pane: store.pane(pane), focused: tab.focus == pane)
@@ -235,6 +247,34 @@ private struct PaneCell: View {
         guard dimIdle, tab.panes.count > 1, tab.focus != pane else { return false }
         let status = store.pane(pane)?.status ?? .idle
         return status == .idle || status == .done
+    }
+}
+
+/// Said over a pane the daemon no longer has.
+///
+/// Not a dialog and not an alert: the terminal stays readable underneath,
+/// because its last screen is often the thing the user wants to look at.
+private struct PaneGoneOverlay: View {
+    let reason: String
+    let close: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            VStack(spacing: 4) {
+                Label("This session is no longer running", systemImage: "xmark.circle")
+                    .font(.callout)
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Close", action: close)
+                    .padding(.top, 4)
+            }
+            .padding(14)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding(12)
+        }
     }
 }
 

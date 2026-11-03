@@ -18,13 +18,22 @@ struct TerminalPaneView: NSViewRepresentable {
     let focused: Bool
     /// Called when the pane's program ends, so the tab can close it.
     let onEnded: (PaneExit?) -> Void
+    /// Called when the daemon has no such pane any more, so the tab can say
+    /// so instead of showing a terminal nothing is behind.
+    let onGone: (String) -> Void
     /// Called when the user clicks into this pane.
     let onFocus: () -> Void
 
     @AppStorage(Preference.fontSize) private var fontSize = Preference.defaultFontSize
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(pane: pane, socket: socket, onEnded: onEnded, onFocus: onFocus)
+        Coordinator(
+            pane: pane,
+            socket: socket,
+            onEnded: onEnded,
+            onGone: onGone,
+            onFocus: onFocus
+        )
     }
 
     func makeNSView(context: Context) -> TerminalView {
@@ -44,6 +53,7 @@ struct TerminalPaneView: NSViewRepresentable {
 
     func updateNSView(_ view: TerminalView, context: Context) {
         context.coordinator.onEnded = onEnded
+        context.coordinator.onGone = onGone
         context.coordinator.onFocus = onFocus
         if view.font.pointSize != fontSize {
             // Changing the font changes how many cells fit, and the view
@@ -65,16 +75,19 @@ struct TerminalPaneView: NSViewRepresentable {
         private let stream: PaneStream
         private weak var view: TerminalView?
         var onEnded: (PaneExit?) -> Void
+        var onGone: (String) -> Void
         var onFocus: () -> Void
 
         init(
             pane: PaneID,
             socket: URL,
             onEnded: @escaping (PaneExit?) -> Void,
+            onGone: @escaping (String) -> Void,
             onFocus: @escaping () -> Void
         ) {
             stream = PaneStream(pane: pane, socket: socket)
             self.onEnded = onEnded
+            self.onGone = onGone
             self.onFocus = onFocus
             super.init()
         }
@@ -102,6 +115,16 @@ struct TerminalPaneView: NSViewRepresentable {
                 // the program.
                 let text = "\r\n\u{1b}[2m-- \(message) --\u{1b}[0m\r\n"
                 view?.feed(text: text)
+            }
+            stream.onReattached = { [weak view] in
+                // The daemon is about to send the pane's whole screen, and
+                // those bytes clear what is there first. Resetting the
+                // emulator as well means a restart cannot leave the view in
+                // a mode the old program set.
+                view?.softReset()
+            }
+            stream.onGone = { [weak self] message in
+                self?.onGone(message)
             }
 
             let size = view.terminalDimensions

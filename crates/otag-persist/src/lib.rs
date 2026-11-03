@@ -138,9 +138,25 @@ impl Store {
                  at        INTEGER NOT NULL,
                  used_pct  REAL    NOT NULL,
                  resets_at INTEGER,
+                 session   TEXT,
                  PRIMARY KEY (agent, window, at)
              );",
-        )
+        )?;
+        self.add_missing_columns();
+        Ok(())
+    }
+
+    /// Bring a database an older otag created up to today's columns.
+    ///
+    /// A column that is already there makes `ALTER TABLE` fail, and that
+    /// failure is the answer rather than a problem: the point is only that
+    /// the column exists afterwards. Nothing here can lose a reading, so
+    /// none of it is worth refusing to start over.
+    fn add_missing_columns(&self) {
+        let statement = "ALTER TABLE usage_samples ADD COLUMN session TEXT;";
+        if self.connection.execute_batch(statement).is_err() {
+            tracing::debug!(statement, "the database already has this column");
+        }
     }
 
     /// Save the structure of a session, replacing what was there.
@@ -235,10 +251,10 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "INSERT INTO usage_samples (agent, window, at, used_pct, resets_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO usage_samples (agent, window, at, used_pct, resets_at, session)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT (agent, window, at) DO UPDATE
-                 SET used_pct = ?4, resets_at = ?5",
+                 SET used_pct = ?4, resets_at = ?5, session = ?6",
             )
             .map_err(|source| self.failed(source))?;
         for sample in samples {
@@ -249,6 +265,7 @@ impl Store {
                     sample.at,
                     f64::from(sample.used_pct),
                     sample.resets_at,
+                    sample.session.as_deref(),
                 ])
                 .map_err(|source| self.failed(source))?;
         }
@@ -272,7 +289,7 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT agent, window, at, used_pct, resets_at
+                "SELECT agent, window, at, used_pct, resets_at, session
                  FROM usage_samples ORDER BY at",
             )
             .map_err(|source| self.failed(source))?;
@@ -285,13 +302,14 @@ impl Store {
                     row.get::<_, i64>(2)?,
                     row.get::<_, f64>(3)?,
                     row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(|source| self.failed(source))?;
 
         let mut samples = Vec::new();
         for row in rows {
-            let (agent, window, at, used_pct, resets_at) =
+            let (agent, window, at, used_pct, resets_at, session) =
                 row.map_err(|source| self.failed(source))?;
             let (Ok(agent), Some(window)) = (agent.parse(), window_from_name(&window)) else {
                 continue;
@@ -302,6 +320,7 @@ impl Store {
                 used_pct: used_pct as f32,
                 resets_at,
                 at,
+                session,
             });
         }
         Ok(samples)
@@ -599,6 +618,7 @@ mod tests {
                 used_pct: 62.5,
                 resets_at: Some(1_700_000_000),
                 at: 1_699_999_000,
+                session: Some("a9f87cc5-726a".to_owned()),
             },
             Sample {
                 agent: otag_agents::AgentKind::Codex,
@@ -606,6 +626,7 @@ mod tests {
                 used_pct: 3.0,
                 resets_at: None,
                 at: 1_699_999_500,
+                session: None,
             },
         ];
 
@@ -618,6 +639,55 @@ mod tests {
         assert_eq!(read[1].agent, otag_agents::AgentKind::Codex);
         assert_eq!(read[1].window, Window::Weekly);
         assert_eq!(read[1].resets_at, None);
+        assert_eq!(
+            read[0].session.as_deref(),
+            Some("a9f87cc5-726a"),
+            "which session reported a reading survives a restart"
+        );
+        assert_eq!(read[1].session, None);
+    }
+
+    #[test]
+    fn a_database_from_an_older_otag_gains_the_columns_it_is_missing() {
+        let store = Store::open_in_memory().expect("a database");
+        // The table as an older otag wrote it, with a reading already in it.
+        store
+            .execute(
+                "DROP TABLE usage_samples;
+                 CREATE TABLE usage_samples (
+                     agent     TEXT    NOT NULL,
+                     window    TEXT    NOT NULL,
+                     at        INTEGER NOT NULL,
+                     used_pct  REAL    NOT NULL,
+                     resets_at INTEGER,
+                     PRIMARY KEY (agent, window, at)
+                 );
+                 INSERT INTO usage_samples VALUES ('claude', 'five_hour', 1700000000, 42.0, NULL);",
+            )
+            .expect("an older table");
+
+        store.add_missing_columns();
+
+        let read = store
+            .load_usage()
+            .expect("the old readings are still there");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].used_pct, 42.0);
+        assert_eq!(read[0].session, None, "an old row never said which session");
+
+        // And the new column works from then on.
+        store
+            .save_usage(&[Sample {
+                agent: otag_agents::AgentKind::Claude,
+                window: Window::FiveHour,
+                used_pct: 43.0,
+                resets_at: None,
+                at: 1_700_000_100,
+                session: Some("later".to_owned()),
+            }])
+            .expect("saved");
+        let read = store.load_usage().expect("read back");
+        assert_eq!(read[1].session.as_deref(), Some("later"));
     }
 
     #[test]
@@ -629,9 +699,12 @@ mod tests {
             used_pct: 10.0,
             resets_at: None,
             at: 1_700_000_000,
+            session: None,
         };
 
-        store.save_usage(&[sample]).expect("saved");
+        store
+            .save_usage(std::slice::from_ref(&sample))
+            .expect("saved");
         store
             .save_usage(&[Sample {
                 used_pct: 11.0,
@@ -653,8 +726,9 @@ mod tests {
             used_pct: 1.0,
             resets_at: None,
             at: 1_000_000,
+            session: None,
         };
-        store.save_usage(&[old]).expect("saved");
+        store.save_usage(std::slice::from_ref(&old)).expect("saved");
         store
             .save_usage(&[Sample {
                 at: 1_000_000 + usage::HISTORY + 1,
@@ -699,6 +773,7 @@ mod tests {
                 used_pct: 1.0,
                 resets_at: None,
                 at: 1,
+                session: None,
             }])
             .expect("saved");
         store.clear_usage().expect("forgotten");

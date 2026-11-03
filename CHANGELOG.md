@@ -193,6 +193,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Usage is read from every Claude Code session on the machine, not only from
+  the ones running inside otag. A session in your own terminal reports the
+  same account's limits, so its numbers now reach the meters too; what is
+  attributed to a session — its context and what it spent — still needs the
+  session to be running in an otag pane.
+- The meters no longer fall behind the agent's own `/usage`. A session that
+  has been idle for an hour keeps reporting the percentage it was last told,
+  so the reading that arrived last is not the one that knows most: within a
+  window otag now takes the highest reading, and a reading of a later window
+  always replaces one of the window before it. Each window also says which
+  session the number came from.
 - A window that has already reset no longer shows the percentage it ended on
   as if it were current. Everywhere the numbers appear — the sidebar, the
   app, its inspector and its menu bar item, and `otag usage` — such a window

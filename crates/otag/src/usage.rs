@@ -39,11 +39,11 @@ impl Shared {
     ///
     /// Reports nothing when the agent said nothing about either window,
     /// which is the normal case for an account that has no limits to report.
-    pub fn record_limits(&self, agent: AgentKind, limits: &Limits) -> bool {
+    pub fn record_limits(&self, agent: AgentKind, limits: &Limits, session: Option<&str>) -> bool {
         if limits.is_empty() {
             return false;
         }
-        self.with(|usage| usage.record_limits(agent, limits, now()));
+        self.with(|usage| usage.record_limits(agent, limits, now(), session));
         true
     }
 
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn what_an_agent_reports_reaches_the_report() {
         let shared = Shared::default();
-        assert!(shared.record_limits(AgentKind::Claude, &limits(91.0)));
+        assert!(shared.record_limits(AgentKind::Claude, &limits(91.0), None));
 
         let report = shared.report();
         assert_eq!(report.rows.len(), 1);
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn an_agent_that_reports_no_limits_adds_nothing() {
         let shared = Shared::default();
-        assert!(!shared.record_limits(AgentKind::Claude, &Limits::default()));
+        assert!(!shared.record_limits(AgentKind::Claude, &Limits::default(), None));
         assert!(shared.report().is_empty());
         assert!(shared.samples().is_empty());
     }
@@ -191,6 +191,7 @@ mod tests {
             used_pct: 40.0,
             resets_at: None,
             at: now() - 60,
+            session: None,
         }]);
 
         assert_eq!(shared.samples().len(), 1);
@@ -208,6 +209,7 @@ mod tests {
             used_pct: 68.0,
             resets_at: Some(now() - 3_600),
             at: now() - 5_400,
+            session: None,
         }]);
 
         let report = shared.report();
@@ -222,7 +224,7 @@ mod tests {
         assert_eq!(report.level(), Level::Calm);
 
         // And a fresh reading of the new window takes over.
-        shared.record_limits(AgentKind::Claude, &limits(4.0));
+        shared.record_limits(AgentKind::Claude, &limits(4.0), None);
         let report = shared.report();
         assert_eq!(report.rows[0].used_pct(), Some(4));
         assert!(!report.rows[0].reset);
@@ -233,7 +235,7 @@ mod tests {
     async fn a_report_that_says_the_same_thing_is_not_published_twice() {
         let session = Session::new(otag_core::pane::PaneSpec::shell());
         let shared = Shared::default();
-        shared.record_limits(AgentKind::Claude, &limits(10.0));
+        shared.record_limits(AgentKind::Claude, &limits(10.0), None);
 
         publish(&session, &shared).await;
         let after_first = session.view().generation;

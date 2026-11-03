@@ -177,6 +177,14 @@ pub async fn usage(socket: &Path, as_json: bool) -> Result<()> {
         if row.is_stale() {
             line.push_str(&format!(" · {}", ui_usage::ago(row.age)));
         }
+        if let Some(session) = &row.session {
+            // Usage is account-wide, so which session otag heard it from is
+            // the only way to tell a fresh reading from a forgotten one.
+            line.push_str(&format!(
+                " · from session {}",
+                ui_usage::session_label(session)
+            ));
+        }
         println!("{line}");
     }
     for counted in &report.counted {

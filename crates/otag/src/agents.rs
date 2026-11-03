@@ -149,8 +149,9 @@ async fn read_session(
     };
 
     // What the agent says about its own limits always wins over what otag
-    // counted; both are kept, and the report decides which to show.
-    shared.record_limits(agent, &transcript.limits);
+    // counted; both are kept, and the report decides which to show. The
+    // session it came from is the one this pane is running.
+    shared.record_limits(agent, &transcript.limits, pane.session_id.as_deref());
     session.set_tokens(pane.id, transcript.tokens).await;
     // Without the size of the model's context, a count of context tokens
     // cannot be drawn as a share of anything.

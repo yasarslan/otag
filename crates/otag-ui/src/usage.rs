@@ -114,6 +114,16 @@ pub fn ago(seconds: i64) -> String {
     format!("updated {} ago", duration(seconds))
 }
 
+/// An agent session identifier short enough to show: the first eight
+/// characters, which is what the agents themselves print.
+#[must_use]
+pub fn session_label(id: &str) -> String {
+    const SHOWN: usize = 8;
+
+    let short: String = id.chars().take(SHOWN).collect();
+    short
+}
+
 /// The first line of a window: who, which window, how much is gone.
 ///
 /// A window that has reset shows no percentage at all. The last one otag was
@@ -245,6 +255,7 @@ mod tests {
             at: 0,
             age: 0,
             reset: false,
+            session: None,
         }
     }
 
@@ -260,6 +271,7 @@ mod tests {
             at: 0,
             age,
             reset: true,
+            session: None,
         }
     }
 

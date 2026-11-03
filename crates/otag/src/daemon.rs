@@ -497,21 +497,25 @@ impl Daemon {
     /// that cannot be read, or one for a pane this daemon does not have, is
     /// logged at debug level and dropped.
     async fn hook(&self, event: &str, pane: Option<PaneId>, payload: &str) {
-        let Some(pane) = pane else {
-            // An agent started outside otag, or one whose environment was
-            // not inherited. There is no pane to attribute this to.
-            tracing::debug!(event, "a hook arrived without a pane");
-            return;
-        };
-        if self.session.pane(pane).is_none() {
-            tracing::debug!(event, %pane, "a hook arrived for a pane that is gone");
-            return;
-        }
+        // A pane otag is not running is the same as no pane at all: there is
+        // nothing to attribute to it.
+        let pane = pane.filter(|pane| self.session.pane(*pane).is_some());
 
         if event == hooks::STATUS_LINE {
+            // The one event that is worth having without a pane. What it
+            // carries about the account's limits is true of the whole
+            // machine, whoever ran the session: a Claude Code session in
+            // another terminal spends the same five hours otag is drawing.
             self.status_line(pane, payload).await;
             return;
         }
+
+        let Some(pane) = pane else {
+            // Everything else describes one session's work, and otag has
+            // nowhere to put it.
+            tracing::debug!(event, "a hook arrived without a pane otag is running");
+            return;
+        };
 
         let Some(hook) = hooks::HookPayload::parse(payload) else {
             tracing::debug!(event, %pane, "a hook payload could not be read");
@@ -572,12 +576,16 @@ impl Daemon {
     /// It says nothing about what the agent is doing, but it is the one
     /// place the session identifier and the account's usage arrive from
     /// without otag having to read the agent's files.
-    async fn status_line(&self, pane: PaneId, payload: &str) {
+    ///
+    /// `pane` is the session's pane when otag is running it. Without one the
+    /// usage is still kept — it belongs to the account, not to the pane —
+    /// and only the per-session part is skipped.
+    async fn status_line(&self, pane: Option<PaneId>, payload: &str) {
         let Some(line) = claude::StatusLine::parse(payload) else {
-            tracing::debug!(%pane, "a status line payload could not be read");
+            tracing::debug!(?pane, "a status line payload could not be read");
             return;
         };
-        if let Some(id) = line.session_id.clone() {
+        if let (Some(pane), Some(id)) = (pane, line.session_id.clone()) {
             self.remember_session(pane, id, line.transcript_path.clone(), line.cwd.clone())
                 .await;
         }
@@ -585,7 +593,11 @@ impl Daemon {
         // The status line is the only place Claude Code says how much of the
         // account's limits is gone. Everything else otag shows about usage is
         // counted, and says so.
-        if self.usage.record_limits(AgentKind::Claude, &line.limits()) {
+        if self.usage.record_limits(
+            AgentKind::Claude,
+            &line.limits(),
+            line.session_id.as_deref(),
+        ) {
             usage::publish(&self.session, &self.usage).await;
         }
     }
@@ -926,6 +938,70 @@ mod tests {
 
         // The clients are told without asking.
         assert_eq!(daemon.session.view().usage, report);
+    }
+
+    #[tokio::test]
+    async fn a_status_line_from_a_session_outside_otag_still_counts_against_the_account() {
+        let (daemon, _pane) = with_one_pane().await;
+        let payload =
+            std::fs::read_to_string(std::path::Path::new(FIXTURES).join("claude-statusline.json"))
+                .expect("the fixture");
+
+        // No pane: Claude Code running in the user's own terminal, where
+        // otag's environment was never inherited. The limits it reports are
+        // the same account's.
+        daemon
+            .hook(otag_agents::hooks::STATUS_LINE, None, &payload)
+            .await;
+
+        let report = daemon.usage.report();
+        assert_eq!(report.rows.len(), 2, "the account's windows are known");
+        assert_eq!(report.rows[0].used_pct(), Some(70));
+        assert!(
+            report.rows[0].session.is_some(),
+            "and otag can say which session told it"
+        );
+        assert_eq!(daemon.session.view().usage, report, "the clients are told");
+    }
+
+    #[tokio::test]
+    async fn a_status_line_for_a_pane_the_daemon_does_not_have_still_counts() {
+        let (daemon, _pane) = with_one_pane().await;
+        let payload =
+            std::fs::read_to_string(std::path::Path::new(FIXTURES).join("claude-statusline.json"))
+                .expect("the fixture");
+
+        daemon
+            .hook(
+                otag_agents::hooks::STATUS_LINE,
+                Some(otag_core::pane::PaneId::from_number(9_999)),
+                &payload,
+            )
+            .await;
+
+        assert_eq!(
+            daemon.usage.report().rows.len(),
+            2,
+            "a pane otag never had is no reason to throw the account's numbers away"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hook_that_is_not_the_status_line_needs_a_pane() {
+        let (daemon, _pane) = with_one_pane().await;
+
+        // This one describes one session's work, so without a pane there is
+        // nowhere for it to go.
+        daemon
+            .hook("Notification", None, r#"{"session_id":"outside"}"#)
+            .await;
+
+        let panes = daemon.session.agent_panes();
+        assert_eq!(
+            panes.first().and_then(|pane| pane.session_id.clone()),
+            None,
+            "otag's own pane is not given another session's identity"
+        );
     }
 
     #[tokio::test]

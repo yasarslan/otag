@@ -236,6 +236,7 @@ mod tests {
                 at: 0,
                 age: 0,
                 reset: false,
+                session: None,
             }],
             counted: Vec::new(),
         }

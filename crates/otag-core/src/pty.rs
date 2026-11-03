@@ -216,6 +216,16 @@ fn spawn_failure_context(spec: &PaneSpec) -> String {
 }
 
 /// Read the program's output until it ends, then report how it ended.
+///
+/// The output and the exit travel the same channel, in that order, so that
+/// whoever watches a pane cannot learn that the program ended before it has
+/// seen everything the program printed.
+///
+/// How the terminal reports the end differs between systems: closing the last
+/// handle on the program's side gives end-of-file on some and `EIO` on Linux.
+/// Both mean the same thing here — there is nothing more to read — and
+/// neither says anything about what was read before, so output already in
+/// hand is always passed on and only then is the exit reported.
 fn spawn_reader(
     id: PaneId,
     mut reader: Box<dyn Read + Send>,
@@ -238,7 +248,12 @@ fn spawn_reader(
                         return;
                     }
                 }
+                // A signal arrived mid-read; the terminal is still there.
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                // Anything else is the end of the output, not a reason to
+                // drop what was read: on Linux the terminal answers `EIO`
+                // once the program's side is closed, where other systems
+                // answer end-of-file.
                 Err(error) => {
                     tracing::debug!(%error, pane = %id, "pane output ended");
                     break;

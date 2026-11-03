@@ -46,7 +46,7 @@ pub async fn start(
     // Subscribed before the view is taken, so a change that lands between
     // the two is noticed rather than lost.
     let changes = session.changes();
-    let view = session.view();
+    let (view, panes) = session.view_with_panes();
     if view.is_empty() {
         return Err(Error::NoPanes);
     }
@@ -56,6 +56,7 @@ pub async fn start(
         outbox.clone(),
         changes,
         view.clone(),
+        panes,
     ));
     Ok(Response::view(view))
 }
@@ -67,10 +68,15 @@ async fn stream(
     outbox: Outbox,
     mut changes: watch::Receiver<u64>,
     view: SessionView,
+    panes: HashMap<PaneId, PaneHandle>,
 ) {
+    // This task may be polled for the first time long after attaching — the
+    // program it follows can already have printed its last line and ended by
+    // then. Everything needed to send that output came with the view, so the
+    // order holds however late this runs.
     let (notices_tx, mut notices) = mpsc::channel(NOTICES);
     let mut following = Following::default();
-    following.follow(&session, &view, &notices_tx);
+    following.follow(&view, panes, &notices_tx, &outbox).await;
 
     loop {
         tokio::select! {
@@ -84,7 +90,7 @@ async fn stream(
                     // daemon is shutting down.
                     break;
                 }
-                let view = session.view();
+                let (view, panes) = session.view_with_panes();
                 if view.is_empty() {
                     // Whatever the last program printed before it ended has
                     // to reach the client before the news that it did.
@@ -99,7 +105,7 @@ async fn stream(
                 }
                 // The view carries every visible pane's whole screen, so it
                 // is also the new baseline to diff against.
-                following.follow(&session, &view, &notices_tx);
+                following.follow(&view, panes, &notices_tx, &outbox).await;
             }
 
             notice = notices.recv() => {
@@ -136,16 +142,34 @@ struct Following {
 impl Following {
     /// Follow exactly the panes `view` shows, with `view`'s screens as the
     /// baselines to diff against.
-    fn follow(&mut self, session: &Session, view: &SessionView, notices: &mpsc::Sender<PaneId>) {
+    ///
+    /// `handles` are the panes of that same view, taken from the session in
+    /// the same breath as the view itself: a pane whose program has just
+    /// ended is still followed, so its last output can be sent, where looking
+    /// it up again here would find it gone.
+    async fn follow(
+        &mut self,
+        view: &SessionView,
+        mut handles: HashMap<PaneId, PaneHandle>,
+        notices: &mpsc::Sender<PaneId>,
+        outbox: &Outbox,
+    ) {
         // A pane that is no longer visible — another tab was selected, or it
-        // closed — is not worth a task.
-        self.panes.retain(|id, follow| {
-            if view.panes.iter().any(|pane| pane.id == *id) {
-                return true;
+        // closed — is not worth a task. What it drew last is still sent
+        // first: a program's final output must not be lost to the pane
+        // leaving the view.
+        let departed: Vec<PaneId> = self
+            .panes
+            .keys()
+            .copied()
+            .filter(|id| !view.panes.iter().any(|pane| pane.id == *id))
+            .collect();
+        for id in departed {
+            let _ = self.send_frame(outbox, id).await;
+            if let Some(follow) = self.panes.remove(&id) {
+                follow.task.abort();
             }
-            follow.task.abort();
-            false
-        });
+        }
 
         for pane in &view.panes {
             let mut screen = ScreenState::new(pane.area.size());
@@ -156,7 +180,7 @@ impl Following {
             match self.panes.get_mut(&pane.id) {
                 Some(follow) => follow.sent = screen,
                 None => {
-                    let Some(handle) = session.pane(pane.id) else {
+                    let Some(handle) = handles.remove(&pane.id) else {
                         continue;
                     };
                     let task = tokio::spawn(notice(pane.id, handle.watch(), notices.clone()));

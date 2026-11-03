@@ -16,7 +16,7 @@
 //! that clients watch, which is how they learn to ask for a new view instead
 //! of being sent one they then have to reconcile.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -637,33 +637,47 @@ impl Session {
     /// Everything a client has to draw.
     #[must_use]
     pub fn view(&self) -> SessionView {
+        self.view_with_panes().0
+    }
+
+    /// Everything a client has to draw, and a handle on every pane it shows.
+    ///
+    /// Both come from the same look at the session on purpose. A program can
+    /// end at any moment, and a client that took the view first and then
+    /// asked for its panes could find one already gone — leaving it with
+    /// nowhere to read that program's last output from. A handle taken here
+    /// keeps the pane's final screen reachable however late the client gets
+    /// round to sending it.
+    #[must_use]
+    pub fn view_with_panes(&self) -> (SessionView, HashMap<PaneId, PaneHandle>) {
         let Ok(state) = self.state.lock() else {
             // A poisoned lock means a holder panicked. An empty view says
             // there is nothing to draw, which is better than a panic in
             // every client that asks.
-            return SessionView::default();
+            return (SessionView::default(), HashMap::new());
         };
 
         let chrome = state.chrome();
-        let panes = state
-            .areas()
-            .into_iter()
-            .filter_map(|(id, area)| {
-                let pane = state.panes.get(&id)?;
-                let snapshot = pane.handle.snapshot();
-                Some(PaneView {
-                    id,
-                    area,
-                    title: pane.title.clone(),
-                    agent: pane.agent,
-                    status: pane.status,
-                    frame: Some(snapshot.screen.to_frame()),
-                    exit: snapshot.exit.clone(),
-                })
-            })
-            .collect();
+        let mut panes = Vec::new();
+        let mut handles = HashMap::new();
+        for (id, area) in state.areas() {
+            let Some(pane) = state.panes.get(&id) else {
+                continue;
+            };
+            let snapshot = pane.handle.snapshot();
+            panes.push(PaneView {
+                id,
+                area,
+                title: pane.title.clone(),
+                agent: pane.agent,
+                status: pane.status,
+                frame: Some(snapshot.screen.to_frame()),
+                exit: snapshot.exit.clone(),
+            });
+            handles.insert(id, pane.handle.clone());
+        }
 
-        SessionView {
+        let view = SessionView {
             generation: state.generation,
             size: state.size,
             sidebar: chrome.sidebar,
@@ -700,7 +714,9 @@ impl Session {
             panes,
             focus: state.focus(),
             usage: state.usage.clone(),
-        }
+        };
+
+        (view, handles)
     }
 
     /// Every pane, in creation order.
@@ -1288,6 +1304,11 @@ async fn run_pane(
                 }
                 Some(PtyEvent::Exited(exit)) => {
                     tracing::info!(pane = %id, %exit, "pane finished");
+                    // The exit comes after every chunk of output on the same
+                    // channel, so the screen published here already shows
+                    // everything the program printed, including whatever it
+                    // printed last. Nothing is left for the frame ticker,
+                    // which stops with this task.
                     publish(&view, &screen, Some(exit));
                     return;
                 }

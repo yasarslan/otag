@@ -103,3 +103,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON requests. `OTAG_SOCKET` and `--socket` choose its path.
 - Daemon logging to a daily-rolling file in otag's state directory, filtered by
   `OTAG_LOG` or `--log`.
+
+### Fixed
+
+- The last thing a program prints always reaches the screen before otag
+  reports that the program ended, so a crash message is no longer lost on
+  the way out.

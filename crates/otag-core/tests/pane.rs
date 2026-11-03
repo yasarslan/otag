@@ -287,6 +287,36 @@ async fn a_pane_the_session_does_not_have_is_not_found() {
 }
 
 #[tokio::test]
+async fn a_view_hands_out_panes_that_outlive_the_session_having_them() {
+    // What a client gets with a view has to stay usable afterwards: by the
+    // time it draws, the program may have printed its last line and ended,
+    // and the session may already have let the pane go. The final screen is
+    // then only reachable through the handle taken with the view.
+    let (session, handle) = running(shell("printf 'goodbye\\n'; exit 7"), PaneSize::DEFAULT).await;
+    let (view, panes) = session.view_with_panes();
+    assert_eq!(view.panes.len(), 1);
+    let kept = panes.get(&handle.id()).expect("the view's pane");
+
+    wait_for_text(&handle, "goodbye").await;
+    tokio::time::timeout(TIMEOUT, async {
+        while !session.is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the session lets the finished pane go");
+    assert!(session.pane(handle.id()).is_none());
+
+    let snapshot = kept.snapshot();
+    assert!(
+        snapshot.screen.text().contains("goodbye"),
+        "screen:\n{}",
+        snapshot.screen.text()
+    );
+    assert_eq!(snapshot.exit.as_ref().and_then(|exit| exit.code), Some(7));
+}
+
+#[tokio::test]
 async fn input_to_a_pane_whose_program_ended_is_refused() {
     let (_session, handle) = running(shell("exit 0"), PaneSize::DEFAULT).await;
     wait_for(&handle, |snapshot| snapshot.exit.is_some()).await;

@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(report.rows.len(), 1);
         assert_eq!(report.rows[0].agent, AgentKind::Claude);
         assert_eq!(report.rows[0].window, Window::FiveHour);
-        assert_eq!(report.rows[0].used_pct(), 91);
+        assert_eq!(report.rows[0].used_pct(), Some(91));
         assert_eq!(report.level(), Level::Red);
     }
 
@@ -194,7 +194,39 @@ mod tests {
         }]);
 
         assert_eq!(shared.samples().len(), 1);
-        assert_eq!(shared.report().rows[0].used_pct(), 40);
+        assert_eq!(shared.report().rows[0].used_pct(), Some(40));
+    }
+
+    #[test]
+    fn a_sample_whose_window_reset_while_the_daemon_slept_is_not_shown_as_current() {
+        let shared = Shared::default();
+        // What a restart reads back: a reading from before a reset that has
+        // already happened, which is the shape of the bug this guards.
+        shared.load(vec![Sample {
+            agent: AgentKind::Claude,
+            window: Window::FiveHour,
+            used_pct: 68.0,
+            resets_at: Some(now() - 3_600),
+            at: now() - 5_400,
+        }]);
+
+        let report = shared.report();
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(
+            report.rows[0].used_pct(),
+            None,
+            "68% is an hour out of date"
+        );
+        assert!(report.rows[0].reset);
+        assert!(report.rows[0].is_stale());
+        assert_eq!(report.level(), Level::Calm);
+
+        // And a fresh reading of the new window takes over.
+        shared.record_limits(AgentKind::Claude, &limits(4.0));
+        let report = shared.report();
+        assert_eq!(report.rows[0].used_pct(), Some(4));
+        assert!(!report.rows[0].reset);
+        assert!(!report.rows[0].is_stale());
     }
 
     #[tokio::test]

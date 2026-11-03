@@ -180,24 +180,59 @@ public enum UsageLevel: String, Codable, Sendable {
 public struct UsageRow: Codable, Hashable, Sendable, Identifiable {
     public var agent: AgentKind
     public var window: UsageWindow
-    /// Tenths of a percentage point, as the daemon sends it.
-    public var usedTenths: UInt16
+    /// Tenths of a percentage point, as the daemon sends it, or nothing when
+    /// the window has reset and no reading of the new one has arrived.
+    public var usedTenths: UInt16?
     public var resetsIn: Int64?
     public var fullIn: Int64?
     public var level: UsageLevel = .calm
     public var at: Int64 = 0
+    /// How old the reading is, in seconds, as the daemon measured it.
+    public var age: Int64 = 0
+    /// Whether the window has reset since the reading was taken, so that
+    /// otag is waiting for fresh data rather than showing a percentage.
+    public var reset: Bool = false
 
     public var id: String { "\(agent.rawValue)-\(window.rawValue)" }
 
-    /// The percentage as a whole number, which is what is shown.
-    public var usedPercent: Int { Int(usedTenths / 10) }
+    /// The percentage as a whole number, which is what is shown, or nothing
+    /// when there is no current reading to show.
+    public var usedPercent: Int? {
+        usedTenths.map { Int($0 / 10) }
+    }
+
+    /// How much of the window is gone, as a fraction, for the meter.
+    public var fraction: Double {
+        usedTenths.map { Double($0) / 1_000 } ?? 0
+    }
+
+    /// Whether the reading is old enough that it should be shown as old.
+    ///
+    /// The daemon measures the age, so the app never compares the user's
+    /// clock with the daemon's.
+    public var isStale: Bool { age > 600 }
 
     enum CodingKeys: String, CodingKey {
         case agent, window
         case usedTenths = "used_tenths"
         case resetsIn = "resets_in"
         case fullIn = "full_in"
-        case level, at
+        case level, at, age, reset
+    }
+
+    /// Everything but the window itself may be missing, as from every other
+    /// message: an older daemon sends no age and no reset at all.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try container.decode(AgentKind.self, forKey: .agent)
+        window = try container.decode(UsageWindow.self, forKey: .window)
+        usedTenths = try container.decodeIfPresent(UInt16.self, forKey: .usedTenths)
+        resetsIn = try container.decodeIfPresent(Int64.self, forKey: .resetsIn)
+        fullIn = try container.decodeIfPresent(Int64.self, forKey: .fullIn)
+        level = (try? container.decodeIfPresent(UsageLevel.self, forKey: .level)) ?? .calm
+        at = try container.decodeIfPresent(Int64.self, forKey: .at) ?? 0
+        age = try container.decodeIfPresent(Int64.self, forKey: .age) ?? 0
+        reset = try container.decodeIfPresent(Bool.self, forKey: .reset) ?? false
     }
 }
 

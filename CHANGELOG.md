@@ -193,6 +193,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A window that has already reset no longer shows the percentage it ended on
+  as if it were current. Everywhere the numbers appear — the sidebar, the
+  app, its inspector and its menu bar item, and `otag usage` — such a window
+  says it has reset and is waiting for fresh data, with no percentage and no
+  forecast, until the agent reports the new window.
+- Every reading now carries how old it is, so a number nobody has refreshed
+  for a while is shown as `updated 3h ago` and drawn dimmed rather than as
+  the state of things right now.
 - otag no longer paints a background of its own. Everything it draws keeps
   the terminal's own background and foreground, so a light terminal no longer
   shows dark bands behind an agent's own interface.

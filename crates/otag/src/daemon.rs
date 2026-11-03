@@ -910,12 +910,12 @@ mod tests {
         );
         assert_eq!(
             report.rows[0].used_pct(),
-            70,
+            Some(70),
             "what the widget shows is what the agent said"
         );
         assert_eq!(
             report.rows[1].used_pct(),
-            58,
+            Some(58),
             "the weekly window, rounded from the 57.99 the agent sent"
         );
         assert_eq!(

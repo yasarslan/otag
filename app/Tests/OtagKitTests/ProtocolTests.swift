@@ -170,7 +170,46 @@ struct ProtocolTests {
         #expect(row.resetsIn == 3_600)
         #expect(row.fullIn == nil)
         #expect(row.level == .amber)
+        #expect(!row.reset)
+        #expect(!row.isStale, "a report without an age is not old")
         #expect(report.counted.first?.tokens == 1_234)
+    }
+
+    @Test("a window that has reset carries no percentage at all")
+    func resetWindowDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"usage","report":{"rows":[{"agent":"claude","window":"five_hour",\
+            "used_tenths":null,"resets_in":null,"full_in":null,"level":"calm",\
+            "at":1700000000,"age":10800,"reset":true}],"counted":[]}}
+            """
+        )
+        guard case let .usage(report) = decoded, let row = report.rows.first else {
+            Issue.record("expected a usage report, got \(decoded)")
+            return
+        }
+        #expect(row.usedPercent == nil, "the old window's number is not this one's")
+        #expect(row.fraction == 0, "and the meter has nothing to fill")
+        #expect(row.reset)
+        #expect(row.isStale)
+        #expect(row.age == 10_800)
+    }
+
+    @Test("an old reading of the window running now keeps its percentage")
+    func staleWindowDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"usage","report":{"rows":[{"agent":"claude","window":"five_hour",\
+            "used_tenths":680,"resets_in":3600,"level":"calm","at":1700000000,\
+            "age":10800,"reset":false}],"counted":[]}}
+            """
+        )
+        guard case let .usage(report) = decoded, let row = report.rows.first else {
+            Issue.record("expected a usage report, got \(decoded)")
+            return
+        }
+        #expect(row.usedPercent == 68, "it is still the best number there is")
+        #expect(row.isStale, "but the app says how old it is")
     }
 
     @Test("the readings behind the numbers are read for the chart")

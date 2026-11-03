@@ -30,6 +30,11 @@ public enum Readable {
         return "\(seconds)s"
     }
 
+    /// How long ago a reading was taken: `updated 3h ago`.
+    public static func ago(_ seconds: Int64) -> String {
+        "updated \(duration(seconds)) ago"
+    }
+
     /// A token count: `840`, `12k`, `1.2M`.
     public static func tokens(_ count: UInt64) -> String {
         let thousand: UInt64 = 1_000

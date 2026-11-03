@@ -662,11 +662,11 @@ mod tests {
 
         let five_hour = transcript.limits.five_hour.expect("the short window");
         assert!((five_hour.used_pct - 36.0).abs() < f32::EPSILON);
-        assert_eq!(five_hour.resets_at, Some(1_792_626_399));
+        assert_eq!(five_hour.resets_at, Some(1_893_459_600));
 
         let weekly = transcript.limits.weekly.expect("the long window");
         assert!((weekly.used_pct - 9.0).abs() < f32::EPSILON);
-        assert_eq!(weekly.resets_at, Some(1_793_094_492));
+        assert_eq!(weekly.resets_at, Some(1_893_927_693));
     }
 
     #[test]

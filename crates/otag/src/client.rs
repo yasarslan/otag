@@ -158,17 +158,24 @@ pub async fn usage(socket: &Path, as_json: bool) -> Result<()> {
         );
     }
     for row in &report.rows {
-        let mut line = format!(
-            "{} {} {:>3}%",
-            row.agent,
-            row.window.label(),
-            row.used_pct()
-        );
+        let mut line = match row.used_pct() {
+            Some(used_pct) => format!("{} {} {used_pct:>3}%", row.agent, row.window.label()),
+            // The window reset, so the last percentage otag was told is not
+            // this window's. It says so instead of showing a stale number.
+            None => format!(
+                "{} {} reset, waiting for fresh data",
+                row.agent,
+                row.window.label()
+            ),
+        };
         if let Some(full_in) = row.full_in {
             line.push_str(&format!(" · full in {}", ui_usage::duration(full_in)));
         }
         if let Some(resets_in) = row.resets_in.filter(|resets_in| *resets_in > 0) {
             line.push_str(&format!(" · resets {}", ui_usage::duration(resets_in)));
+        }
+        if row.is_stale() {
+            line.push_str(&format!(" · {}", ui_usage::ago(row.age)));
         }
         println!("{line}");
     }

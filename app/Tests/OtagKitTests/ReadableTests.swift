@@ -25,6 +25,14 @@ struct ReadableTests {
         #expect(Readable.duration(604_800) == "7d")
     }
 
+    @Test("how long ago a reading was taken reads as a sentence")
+    func ages() {
+        #expect(Readable.ago(10_800) == "updated 3h ago")
+        #expect(Readable.ago(900) == "updated 15m ago")
+        #expect(Readable.ago(4_800) == "updated 1h20m ago")
+        #expect(Readable.ago(0) == "updated 0s ago")
+    }
+
     @Test("a token count is shortened but never rounded to nothing")
     func tokens() {
         #expect(Readable.tokens(0) == "0")

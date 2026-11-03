@@ -510,8 +510,8 @@ mod tests {
 
         let report = shared.report();
         assert_eq!(report.rows.len(), 2, "both windows the rollout carries");
-        assert_eq!(report.rows[0].used_pct(), 36);
-        assert_eq!(report.rows[1].used_pct(), 9);
+        assert_eq!(report.rows[0].used_pct(), Some(36));
+        assert_eq!(report.rows[1].used_pct(), Some(9));
     }
 
     #[tokio::test]

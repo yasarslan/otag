@@ -926,7 +926,7 @@ mod tests {
         let limits = status.limits();
         let five_hour = limits.five_hour.expect("the five-hour window");
         assert!((five_hour.used_pct - 70.0).abs() < f32::EPSILON);
-        assert_eq!(five_hour.resets_at, Some(1_793_660_400));
+        assert_eq!(five_hour.resets_at, Some(1_893_463_200));
         let weekly = limits.weekly.expect("the weekly window");
         assert!((weekly.used_pct - 58.0).abs() < 0.001);
     }

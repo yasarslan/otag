@@ -42,13 +42,22 @@ struct UsageRowView: View {
                 Text(row.window.label)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Text("\(row.usedPercent)%")
-                    .monospacedDigit()
-                    .foregroundStyle(colour)
+                if let percent = row.usedPercent {
+                    Text("\(percent)%")
+                        .monospacedDigit()
+                        .foregroundStyle(colour)
+                } else {
+                    // The last percentage otag was told belongs to a window
+                    // that is over; showing it as this window's would be the
+                    // one wrong thing to say.
+                    Text("reset")
+                        .foregroundStyle(.secondary)
+                }
             }
             .font(.caption)
 
-            Meter(fraction: Double(row.usedTenths) / 1_000, colour: colour)
+            Meter(fraction: row.fraction, colour: colour)
+                .opacity(row.reset || row.isStale ? 0.4 : 1)
 
             if let detail {
                 Text(detail)
@@ -58,9 +67,17 @@ struct UsageRowView: View {
         }
     }
 
-    /// The projection comes first because it is the useful number; the reset
-    /// is shown instead when nothing is climbing.
+    /// A window waiting for its first reading says so, and an old reading
+    /// says how old it is: both change what the number above means. After
+    /// that the projection, because it is the useful number, and the reset
+    /// when nothing is climbing.
     private var detail: String? {
+        if row.reset {
+            return "waiting for fresh data"
+        }
+        if row.isStale {
+            return Readable.ago(row.age)
+        }
         if let full = row.fullIn {
             return "full in \(Readable.duration(full))"
         }
@@ -70,7 +87,10 @@ struct UsageRowView: View {
         return nil
     }
 
+    /// A number otag cannot vouch for is never coloured: an old reading must
+    /// not shout, and a window waiting for data has nothing to shout about.
     private var colour: Color {
+        if row.reset || row.isStale { return .secondary }
         switch row.level {
         case .calm: return .secondary
         case .amber: return .orange

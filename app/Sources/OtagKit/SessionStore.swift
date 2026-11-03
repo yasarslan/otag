@@ -231,10 +231,13 @@ public final class SessionStore {
     private func remember(_ report: UsageReport) {
         let now = Int64(Date().timeIntervalSince1970)
         for row in report.rows {
+            // A window waiting for fresh data has no reading to put on the
+            // timeline; the line picks up again when one arrives.
+            guard let usedTenths = row.usedTenths else { continue }
             let sample = UsageSample(
                 agent: row.agent,
                 window: row.window,
-                usedPercent: Double(row.usedTenths) / 10,
+                usedPercent: Double(usedTenths) / 10,
                 resetsAt: nil,
                 at: row.at == 0 ? now : row.at
             )

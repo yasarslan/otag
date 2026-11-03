@@ -155,7 +155,7 @@ struct MenuBarView: View {
         }
 
         ForEach(store.usage.rows) { row in
-            Text("\(row.agent.label) \(row.window.label) · \(row.usedPercent)%")
+            Text(line(row))
         }
         if !store.usage.rows.isEmpty {
             Divider()
@@ -170,6 +170,21 @@ struct MenuBarView: View {
             }
         }
         Button("Quit Otag") { NSApp.terminate(nil) }
+    }
+
+    /// One window, as a line of the menu.
+    ///
+    /// A window that has reset says so instead of repeating the percentage
+    /// of the window before it, and an old reading says how old it is.
+    private func line(_ row: UsageRow) -> String {
+        let what = "\(row.agent.label) \(row.window.label)"
+        guard let percent = row.usedPercent else {
+            return "\(what) · reset, waiting for fresh data"
+        }
+        if row.isStale {
+            return "\(what) · \(percent)% · \(Readable.ago(row.age))"
+        }
+        return "\(what) · \(percent)%"
     }
 
     /// A question, short enough for a menu.
@@ -187,8 +202,12 @@ struct MenuBarLabel: View {
     var body: some View {
         if store.waiting > 0 {
             Label("\(store.waiting)", systemImage: "questionmark.circle.fill")
-        } else if let worst = store.usage.rows.max(by: { $0.usedTenths < $1.usedTenths }) {
-            Text("\(worst.usedPercent)%")
+        } else if let worst = store.usage.rows
+            .compactMap(\.usedPercent)
+            .max() {
+            // Only windows with a current reading: a window that has reset
+            // has no percentage to put in the menu bar.
+            Text("\(worst)%")
         } else {
             Image(systemName: "square.split.2x1")
         }

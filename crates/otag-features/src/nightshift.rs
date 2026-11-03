@@ -170,14 +170,15 @@ pub fn decide(plan: &Plan, progress: &Progress, usage: &Report, watched: Watched
 /// run until an agent reports its limits would never run for an agent that
 /// does not report them at all. So an agent with no numbers is treated as
 /// having room, and the threshold only ever stops a session otag can
-/// actually measure.
+/// actually measure. A window that has reset counts as no numbers too: the
+/// percentage before the reset is not what the night shift has to decide on.
 #[must_use]
 pub fn worst_used(usage: &Report, agent: AgentKind) -> u16 {
     usage
         .rows
         .iter()
         .filter(|row| row.agent == agent)
-        .map(crate::usage::Row::used_pct)
+        .filter_map(crate::usage::Row::used_pct)
         .max()
         .unwrap_or(0)
 }
@@ -228,11 +229,13 @@ mod tests {
             rows: vec![Row {
                 agent,
                 window: Window::FiveHour,
-                used_tenths: used_pct.saturating_mul(10),
+                used_tenths: Some(used_pct.saturating_mul(10)),
                 resets_in: Some(3_600),
                 full_in: None,
                 level: Level::Calm,
                 at: 0,
+                age: 0,
+                reset: false,
             }],
             counted: Vec::new(),
         }

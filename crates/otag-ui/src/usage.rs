@@ -48,7 +48,10 @@ pub fn height(report: &Report) -> u16 {
 /// thing left to do.
 #[must_use]
 pub fn offers_handoff(report: &Report) -> bool {
-    report.rows.iter().any(|row| row.used_pct() >= 100)
+    report
+        .rows
+        .iter()
+        .any(|row| row.used_pct().is_some_and(|used_pct| used_pct >= 100))
 }
 
 /// A duration a person reads at a glance: `6d 17h`, `2h`, `1h20m`, `45m`,
@@ -105,24 +108,39 @@ pub fn tokens(count: u64) -> String {
     count.to_string()
 }
 
-/// The first line of a window: who, which window, how much is gone.
+/// How long ago a reading was taken: `updated 3h ago`.
 #[must_use]
-pub fn headline(row: &Row) -> String {
-    format!(
-        "{} {} {:>3}%",
-        row.agent,
-        row.window.label(),
-        row.used_pct()
-    )
+pub fn ago(seconds: i64) -> String {
+    format!("updated {} ago", duration(seconds))
 }
 
-/// The second line of a window, when there is something to project.
+/// The first line of a window: who, which window, how much is gone.
 ///
-/// The projection comes first because it is the useful number; the reset is
-/// shown instead when nothing is climbing, so the user knows how long they
-/// are waiting.
+/// A window that has reset shows no percentage at all. The last one otag was
+/// told belongs to a window that is over, and showing it as the number of
+/// the window running now is the one thing this widget must never do.
+#[must_use]
+pub fn headline(row: &Row) -> String {
+    match row.used_pct() {
+        Some(used_pct) => format!("{} {} {used_pct:>3}%", row.agent, row.window.label()),
+        None => format!("{} {} reset", row.agent, row.window.label()),
+    }
+}
+
+/// The second line of a window, when there is something to add.
+///
+/// A window waiting for its first reading says so, and an old reading says
+/// how old it is: both of those change what the line above it means. After
+/// that comes the projection, because it is the useful number, and the reset
+/// when nothing is climbing, so the user knows how long they are waiting.
 #[must_use]
 pub fn detail(row: &Row) -> Option<String> {
+    if row.reset {
+        return Some("awaiting data".to_owned());
+    }
+    if row.is_stale() {
+        return Some(ago(row.age));
+    }
     if let Some(full_in) = row.full_in {
         return Some(format!("full in {}", duration(full_in)));
     }
@@ -167,7 +185,7 @@ impl Widget for Usage<'_> {
         };
 
         for row in &self.report.rows {
-            put(&headline(row), self.style(row.level), &mut y);
+            put(&headline(row), self.row_style(row), &mut y);
             if let Some(detail) = detail(row) {
                 // Indented and dim: it is the explanation, not the number.
                 put(&format!(" {detail}"), self.theme.dim(), &mut y);
@@ -187,6 +205,18 @@ impl Widget for Usage<'_> {
 }
 
 impl Usage<'_> {
+    /// How a window is drawn.
+    ///
+    /// A number otag cannot vouch for is dimmed rather than coloured: an old
+    /// reading must not shout, and a window waiting for data has nothing to
+    /// shout about.
+    fn row_style(&self, row: &Row) -> Style {
+        if row.reset || row.is_stale() {
+            return self.theme.dim();
+        }
+        self.style(row.level)
+    }
+
     /// How a level is drawn.
     fn style(&self, level: Level) -> Style {
         match level {
@@ -208,11 +238,28 @@ mod tests {
         Row {
             agent: AgentKind::Claude,
             window: Window::FiveHour,
-            used_tenths,
+            used_tenths: Some(used_tenths),
             resets_in,
             full_in,
             level: Level::of(f32::from(used_tenths) / 10.0),
             at: 0,
+            age: 0,
+            reset: false,
+        }
+    }
+
+    /// A window that reset, with no reading of the new one yet.
+    fn reset_row(age: i64) -> Row {
+        Row {
+            agent: AgentKind::Claude,
+            window: Window::FiveHour,
+            used_tenths: None,
+            resets_in: None,
+            full_in: None,
+            level: Level::Calm,
+            at: 0,
+            age,
+            reset: true,
         }
     }
 
@@ -371,6 +418,84 @@ mod tests {
         };
         assert!(!offers_handoff(&report));
         assert_eq!(height(&report), 1);
+    }
+
+    #[test]
+    fn how_long_ago_a_reading_was_taken_reads_as_a_sentence() {
+        assert_eq!(ago(10_800), "updated 3h ago");
+        assert_eq!(ago(900), "updated 15m ago");
+        assert_eq!(ago(4_800), "updated 1h20m ago");
+        assert_eq!(ago(0), "updated 0s ago");
+    }
+
+    #[test]
+    fn a_window_that_has_reset_shows_no_percentage() {
+        let report = Report {
+            rows: vec![reset_row(10_800)],
+            counted: Vec::new(),
+        };
+
+        assert_eq!(height(&report), 2);
+        let lines = render(&report, 16, 2);
+        assert_eq!(
+            lines[0], "claude 5h reset",
+            "the percentage from the window before is not shown as this one's"
+        );
+        assert_eq!(lines[1], " awaiting data");
+        assert!(
+            !offers_handoff(&report),
+            "a window with no number is not a window that is used up"
+        );
+    }
+
+    #[test]
+    fn an_old_reading_says_how_old_it_is() {
+        let mut row = row(680, None, Some(5_040));
+        row.age = 10_800;
+        let report = Report {
+            rows: vec![row],
+            counted: Vec::new(),
+        };
+
+        let lines = render(&report, 16, 2);
+        assert_eq!(lines[0], "claude 5h  68%");
+        assert_eq!(
+            lines[1], " updated 3h ago",
+            "how old the number is matters more than when the window resets"
+        );
+    }
+
+    #[test]
+    fn a_fresh_reading_shows_the_projection_and_not_an_age() {
+        let mut row = row(680, Some(4_800), Some(5_040));
+        row.age = 30;
+        let report = Report {
+            rows: vec![row],
+            counted: Vec::new(),
+        };
+        assert_eq!(render(&report, 16, 2)[1], " full in 1h20m");
+    }
+
+    #[test]
+    fn a_number_otag_cannot_vouch_for_is_dimmed_rather_than_coloured() {
+        let widget = Usage {
+            report: &Report::default(),
+            theme: Theme::CALM_DARK,
+        };
+        let mut old = row(950, None, None);
+        old.age = 10_800;
+
+        assert_eq!(
+            widget.row_style(&old),
+            Theme::CALM_DARK.dim(),
+            "an old number must not shout"
+        );
+        assert_eq!(widget.row_style(&reset_row(60)), Theme::CALM_DARK.dim());
+        assert_eq!(
+            widget.row_style(&row(950, None, None)),
+            Style::new().fg(Theme::CALM_DARK.error),
+            "a current number still says what it has to"
+        );
     }
 
     #[test]

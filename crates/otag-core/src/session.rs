@@ -200,6 +200,8 @@ pub struct PaneSummary {
     pub session: Option<String>,
     /// What the agent in it has spent.
     pub tokens: Tokens,
+    /// How large the model's context is, when otag knows.
+    pub context_window: Option<u64>,
     /// How its program ended, if it has.
     pub exit: Option<PaneExit>,
 }
@@ -274,6 +276,12 @@ struct Pane {
     /// Hooks report what the agent is actually doing; the words on its
     /// screen are a guess. While hooks are arriving, the guess is not used.
     last_hook: Option<Instant>,
+    /// How large the model's context is, when the agent's session file says.
+    ///
+    /// Without it a count of context tokens cannot be shown as a share of
+    /// anything, so otag shows the count alone rather than inventing a
+    /// denominator.
+    context_window: Option<u64>,
     /// The size a client that draws this pane in a window of its own has
     /// asked for.
     ///
@@ -828,6 +836,7 @@ impl Session {
                     status: pane.status,
                     session: pane.session_id.clone(),
                     tokens: pane.tokens,
+                    context_window: pane.context_window,
                     workspace: state
                         .workspaces
                         .iter()
@@ -995,6 +1004,16 @@ impl Session {
         self.lock()
             .map(|state| state.usage.clone())
             .unwrap_or_default()
+    }
+
+    /// Record how large the context of the model in a pane is.
+    pub async fn set_context_window(self: &Arc<Self>, pane: PaneId, window: u64) {
+        let changed = self.change(pane, |pane| {
+            let changed = pane.context_window != Some(window);
+            pane.context_window = Some(window);
+            changed
+        });
+        self.commit(changed).await;
     }
 
     /// What each pane has spent, for attributing usage to an agent.
@@ -1288,6 +1307,7 @@ impl Session {
             session_path: None,
             tokens: Tokens::default(),
             last_hook: None,
+            context_window: None,
             size_override: None,
         })
     }

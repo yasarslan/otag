@@ -122,10 +122,14 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     public var status: PaneStatus = .idle
     public var session: String?
     public var tokens: Tokens = Tokens()
+    /// How large the model's context is, when otag knows. Without it a
+    /// context meter has no denominator and only the count is shown.
+    public var contextWindow: UInt64?
     public var exit: PaneExit?
 
     enum CodingKeys: String, CodingKey {
         case id, size, workspace, title, agent, status, session, tokens, exit
+        case contextWindow = "context_window"
     }
 
     public init(from decoder: Decoder) throws {
@@ -140,6 +144,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         status = (try? container.decodeIfPresent(PaneStatus.self, forKey: .status)) ?? .idle
         session = try container.decodeIfPresent(String.self, forKey: .session)
         tokens = try container.decodeIfPresent(Tokens.self, forKey: .tokens) ?? Tokens()
+        contextWindow = try container.decodeIfPresent(UInt64.self, forKey: .contextWindow)
         exit = try container.decodeIfPresent(PaneExit.self, forKey: .exit)
     }
 }
@@ -198,6 +203,29 @@ public struct UsageCounted: Codable, Hashable, Sendable, Identifiable {
     public var tokens: UInt64
 
     public var id: String { agent.rawValue }
+}
+
+/// One reading behind the numbers, for a timeline.
+public struct UsageSample: Codable, Hashable, Sendable, Identifiable {
+    public var agent: AgentKind
+    public var window: UsageWindow
+    /// How much of the window was used, as a percentage.
+    public var usedPercent: Double
+    /// When the window resets, in seconds since the epoch.
+    public var resetsAt: Int64?
+    /// When the reading was taken, in seconds since the epoch.
+    public var at: Int64
+
+    public var id: String { "\(agent.rawValue)-\(window.rawValue)-\(at)" }
+
+    /// When the reading was taken.
+    public var date: Date { Date(timeIntervalSince1970: TimeInterval(at)) }
+
+    enum CodingKeys: String, CodingKey {
+        case agent, window, at
+        case usedPercent = "used_pct"
+        case resetsAt = "resets_at"
+    }
 }
 
 /// How much of the agents' limits is gone.
@@ -292,6 +320,7 @@ public enum Request: Sendable {
     case usage
     case subscribe
     case inbox
+    case usageHistory
     case answer(ask: UInt64, answer: Answer)
     case startSession(StartSession)
     case attachPane(pane: PaneID, size: PaneSize?)
@@ -328,6 +357,8 @@ extension Request: Encodable {
             try container.encode("subscribe", forKey: Key("type"))
         case .inbox:
             try container.encode("inbox", forKey: Key("type"))
+        case .usageHistory:
+            try container.encode("usage_history", forKey: Key("type"))
         case let .answer(ask, answer):
             try container.encode("answer", forKey: Key("type"))
             try container.encode(ask, forKey: Key("ask"))
@@ -436,6 +467,7 @@ public enum Response: Sendable {
     case paneEnded(pane: PaneID, exit: PaneExit?)
     case event(Event)
     case inbox([AskView])
+    case usageHistory([UsageSample])
     case answered(ask: UInt64, delivered: Bool, summary: String)
     case handoffDone(pane: PaneID, package: String?, summary: String)
     case sessionEnded(exit: PaneExit?)
@@ -447,7 +479,7 @@ public enum Response: Sendable {
 extension Response: Decodable {
     private enum Key: String, CodingKey {
         case type, version, panes, report, pane, size, bytes, exit, event, asks, ask
-        case delivered, summary, package, message, view, frame, workspace, cwd
+        case delivered, summary, package, message, view, frame, workspace, cwd, samples
     }
 
     public init(from decoder: Decoder) throws {
@@ -489,6 +521,10 @@ extension Response: Decodable {
             )
         case "event":
             self = .event(try container.decode(Event.self, forKey: .event))
+        case "usage_history":
+            self = .usageHistory(
+                try container.decodeIfPresent([UsageSample].self, forKey: .samples) ?? []
+            )
         case "inbox":
             self = .inbox(try container.decodeIfPresent([AskView].self, forKey: .asks) ?? [])
         case "answered":

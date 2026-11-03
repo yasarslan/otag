@@ -42,8 +42,11 @@ struct SidebarView: View {
                 if let problem = store.answerProblem {
                     AnswerProblemView(problem: problem) { store.clearAnswerProblem() }
                 }
+                Divider()
+                UsageWidget(store: store)
                 ConnectionFooter(store: store)
             }
+            .background(.bar)
         }
     }
 }
@@ -75,13 +78,22 @@ private struct SessionRow: View {
                     : AnyShapeStyle(.secondary))
                 .frame(width: 16)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .lineLimit(1)
                 Text(pane.status.label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                // A context meter is only honest when otag knows how large
+                // the model's context is.
+                if let window = pane.contextWindow, window > 0, pane.tokens.context > 0 {
+                    Meter(
+                        fraction: Double(pane.tokens.context) / Double(window),
+                        colour: .secondary
+                    )
+                    .frame(width: 90)
+                }
             }
         }
         .padding(.vertical, 2)

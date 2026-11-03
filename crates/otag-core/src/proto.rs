@@ -224,6 +224,13 @@ pub enum Request {
     /// [`Response::Event`] whenever something happens, until the connection
     /// ends.
     Subscribe,
+    /// Ask for the readings behind the usage numbers, for a chart.
+    /// Answered with [`Response::UsageHistory`].
+    ///
+    /// The daemon keeps these across restarts, so a client can draw a
+    /// timeline the moment it connects rather than after watching for an
+    /// hour.
+    UsageHistory,
     /// List what the agents are waiting for the user to answer. Answered
     /// with [`Response::Inbox`].
     Inbox,
@@ -265,7 +272,10 @@ pub enum Handoff {
 }
 
 /// The daemon's answer to a [`Request`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Eq`: a usage reading carries a percentage, and a percentage is a
+/// floating-point number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// Answer to [`Request::Ping`].
@@ -361,6 +371,11 @@ pub enum Response {
     Event {
         /// What happened.
         event: Event,
+    },
+    /// Answer to [`Request::UsageHistory`].
+    UsageHistory {
+        /// Every reading otag has kept, oldest first.
+        samples: Vec<otag_features::usage::Sample>,
     },
     /// Answer to [`Request::Inbox`].
     Inbox {
@@ -601,6 +616,10 @@ pub struct PaneInfo {
     /// What the agent in it has spent.
     #[serde(default)]
     pub tokens: Tokens,
+    /// How large the model's context is, when otag knows. Without it a
+    /// context meter has no denominator and is not drawn as a share.
+    #[serde(default)]
+    pub context_window: Option<u64>,
     /// How its program ended, if it has.
     #[serde(default)]
     pub exit: Option<PaneExit>,
@@ -1051,6 +1070,7 @@ mod tests {
                     status: PaneStatus::Idle,
                     session: None,
                     tokens: Default::default(),
+                    context_window: None,
                     exit: None,
                 }],
             },
@@ -1064,6 +1084,7 @@ mod tests {
                     status: PaneStatus::Working,
                     session: Some("a-session".to_owned()),
                     tokens: Default::default(),
+                    context_window: Some(200_000),
                     exit: Some(PaneExit {
                         code: Some(0),
                         signal: None,

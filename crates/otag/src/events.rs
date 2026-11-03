@@ -84,6 +84,7 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
             status: pane.status,
             session: pane.session,
             tokens: pane.tokens,
+            context_window: pane.context_window,
             exit: pane.exit,
         })
         .collect()

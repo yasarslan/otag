@@ -45,6 +45,8 @@ public final class SessionStore {
     public private(set) var usage = UsageReport()
     /// What the agents are waiting for the user to answer.
     public private(set) var asks: [AskView] = []
+    /// The readings behind the usage numbers, oldest first, for a timeline.
+    public private(set) var history: [UsageSample] = []
     /// How the connection stands.
     public private(set) var state: ConnectionState = .connecting
     /// The daemon's version, once it has said.
@@ -141,6 +143,11 @@ public final class SessionStore {
                 self.connection = connection
                 try connection.send(.subscribe)
                 try connection.send(.version)
+                // The daemon keeps its readings across restarts, so the
+                // timeline can be drawn at once rather than after an hour of
+                // watching.
+                try connection.send(.usageHistory)
+                try connection.send(.inbox)
                 state = .connected
 
                 for await response in connection.responses {
@@ -174,6 +181,8 @@ public final class SessionStore {
             usage = report
         case let .inbox(asks):
             self.asks = asks
+        case let .usageHistory(samples):
+            history = samples
         case let .version(version):
             daemonVersion = version
         case let .answered(ask, delivered, summary):
@@ -193,6 +202,25 @@ public final class SessionStore {
         }
     }
 
+    /// Keep a reading of each window, so the timeline grows while the app
+    /// is open even though the daemon is the one that remembers them.
+    private func remember(_ report: UsageReport) {
+        let now = Int64(Date().timeIntervalSince1970)
+        for row in report.rows {
+            let sample = UsageSample(
+                agent: row.agent,
+                window: row.window,
+                usedPercent: Double(row.usedTenths) / 10,
+                resetsAt: nil,
+                at: row.at == 0 ? now : row.at
+            )
+            // The daemon sends a report whenever anything about it changes,
+            // which is not the same as a new reading of this window.
+            if history.contains(where: { $0.id == sample.id }) { continue }
+            history.append(sample)
+        }
+    }
+
     /// Take in one event.
     private func apply(_ event: Event) {
         switch event {
@@ -200,6 +228,7 @@ public final class SessionStore {
             self.panes = panes
         case let .usage(report):
             usage = report
+            remember(report)
         case let .asked(ask):
             asks.removeAll { $0.pane == ask.pane }
             asks.append(ask)

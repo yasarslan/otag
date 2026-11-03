@@ -173,6 +173,53 @@ struct ProtocolTests {
         #expect(report.counted.first?.tokens == 1_234)
     }
 
+    @Test("the readings behind the numbers are read for the chart")
+    func historyDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"usage_history","samples":[{"agent":"claude","window":"five_hour",\
+            "used_pct":73.4,"resets_at":1700003600,"at":1700000000}]}
+            """
+        )
+        guard case let .usageHistory(samples) = decoded, let sample = samples.first else {
+            Issue.record("expected a history, got \(decoded)")
+            return
+        }
+        #expect(sample.agent == .claude)
+        #expect(sample.window == .fiveHour)
+        #expect(abs(sample.usedPercent - 73.4) < 0.001)
+        #expect(sample.at == 1_700_000_000)
+        #expect(sample.date == Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    @Test("a pane carries how large its model's context is, when otag knows")
+    func contextWindowDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"panes","panes":[{"id":1,"size":{"rows":2,"cols":2},\
+            "tokens":{"input":1,"output":2,"cache_read":3,"cache_written":4,\
+            "context":50000},"context_window":200000}]}
+            """
+        )
+        guard case let .panes(panes) = decoded, let pane = panes.first else {
+            Issue.record("expected one pane, got \(decoded)")
+            return
+        }
+        #expect(pane.tokens.context == 50_000)
+        #expect(pane.contextWindow == 200_000)
+
+        // A pane whose window otag does not know has none, rather than a
+        // guessed one.
+        let without = try response(
+            #"{"type":"panes","panes":[{"id":1,"size":{"rows":2,"cols":2}}]}"#
+        )
+        guard case let .panes(bare) = without else {
+            Issue.record("expected one pane")
+            return
+        }
+        #expect(bare.first?.contextWindow == nil)
+    }
+
     @Test("statuses are ordered by how much they want the user")
     func statusOrdering() {
         #expect(PaneStatus.needsApproval > PaneStatus.error)

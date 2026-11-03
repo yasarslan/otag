@@ -106,6 +106,7 @@ struct MainView: View {
     let store: SessionStore
     let workbench: Workbench
     @Binding var pending: PendingSession?
+    @State private var inspector = false
 
     var body: some View {
         NavigationSplitView {
@@ -120,6 +121,10 @@ struct MainView: View {
                 TabsView(store: store, workbench: workbench)
             }
         }
+        .inspector(isPresented: $inspector) {
+            UsageInspector(store: store, pane: workbench.focus.flatMap(store.pane))
+                .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -128,6 +133,15 @@ struct MainView: View {
                     Label("New Session", systemImage: "plus")
                 }
                 .help("Start a session (⌘N)")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    inspector.toggle()
+                } label: {
+                    Label("Usage", systemImage: "chart.line.uptrend.xyaxis")
+                }
+                .help("Usage and forecast (⌘⌥I)")
+                .keyboardShortcut("i", modifiers: [.command, .option])
             }
         }
         .sheet(item: $pending) { request in

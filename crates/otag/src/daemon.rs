@@ -270,6 +270,9 @@ impl Handler for Daemon {
                 None
             }
             Request::Subscribe => Some(events::start(&self.session, &self.events, outbox).await),
+            Request::UsageHistory => Some(Response::UsageHistory {
+                samples: self.usage.samples(),
+            }),
             Request::Inbox => Some(Response::Inbox { asks: self.asks() }),
             Request::Answer { ask, answer } => {
                 Some(self.answer(AskId::from_number(ask), answer).await)

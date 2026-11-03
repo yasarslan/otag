@@ -152,6 +152,11 @@ async fn read_session(
     // counted; both are kept, and the report decides which to show.
     shared.record_limits(agent, &transcript.limits);
     session.set_tokens(pane.id, transcript.tokens).await;
+    // Without the size of the model's context, a count of context tokens
+    // cannot be drawn as a share of anything.
+    if let Some(window) = transcript.context_window {
+        session.set_context_window(pane.id, window).await;
+    }
     true
 }
 

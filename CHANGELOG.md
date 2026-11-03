@@ -23,6 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktree of the session's own so that two agents cannot collide in one
   checkout. A worktree that cannot be made stops the session rather than
   quietly sharing the checkout.
+- The app shows how much of the limits is gone: a thin meter per window at
+  the bottom of the sidebar with the percentage, when the window resets and
+  — once there are three readings — when it would be full at the rate of the
+  last twenty minutes. `Cmd-Opt-I` opens an inspector with the same numbers,
+  a timeline chart of every reading otag has kept, this session's context
+  meter and what each session has spent.
+- A context meter per session, in the sidebar and the inspector, drawn only
+  when otag knows how large that model's context is: a share of an unknown
+  total would be a guess.
+- `usage_history` on the socket: the readings behind the numbers, which the
+  daemon already keeps across restarts, so a chart can be drawn the moment a
+  client connects.
 - The app finds you when its window does not: the questions the agents are
   waiting on sit at the top of the sidebar with **Allow** and **Deny** beside
   them (`Cmd-Shift-Y` / `Cmd-Shift-N` answer the oldest), the Dock icon

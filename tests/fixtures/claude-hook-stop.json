@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-projects-app/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/projects/app",
+  "stop_hook_active": false
+}

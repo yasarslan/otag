@@ -1,0 +1,17 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-projects-app/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/projects/app",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/projects/app/src/parser.rs",
+    "old_string": "mod tests {",
+    "new_string": "mod tests {\n    #[test]\n    fn it_parses() {}\n",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/projects/app/src/parser.rs",
+    "success": true
+  }
+}

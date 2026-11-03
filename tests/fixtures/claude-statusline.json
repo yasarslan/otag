@@ -1,0 +1,36 @@
+{
+  "hook_event_name": "Status",
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-projects-app/11111111-2222-3333-4444-555555555555.jsonl",
+  "cwd": "/projects/app",
+  "model": {
+    "id": "claude-opus-5",
+    "display_name": "Opus 5"
+  },
+  "workspace": {
+    "current_dir": "/projects/app",
+    "project_dir": "/projects/app"
+  },
+  "version": "2.0.0",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 1.2345,
+    "total_duration_ms": 123456,
+    "total_api_duration_ms": 65432,
+    "total_lines_added": 120,
+    "total_lines_removed": 8
+  },
+  "exceeds_200k_tokens": false,
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 70.0,
+      "resets_at": 1793660400
+    },
+    "seven_day": {
+      "used_percentage": 57.99999999999999,
+      "resets_at": 1793678400
+    }
+  }
+}

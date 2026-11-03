@@ -101,4 +101,40 @@ struct UsageTests {
     func provenanceOfNothing() {
         #expect(report([]).provenance(panes: []).contains("No reading yet"))
     }
+
+    @Test("a window that is still running keeps its number, old or not")
+    func anOldReadingIsStillANumber() {
+        // The bug this guards: a daemon restart left the numbers half an
+        // hour old, and the widget hid a perfectly good reading of a window
+        // that had hours to run.
+        let old = report([row(age: 1_860)])
+        #expect(!old.isFresh, "nobody has confirmed it recently")
+        #expect(old.hasNumbers, "but it is still the reading, and it is shown")
+        #expect(old.rows[0].usedPercent == 25)
+    }
+
+    @Test("one window being over does not hide another that is not")
+    func aResetWindowDoesNotHideTheOther() {
+        let mixed = report([
+            row(window: .fiveHour, tenths: 250, age: 1_860),
+            row(window: .weekly, tenths: nil, reset: true),
+        ])
+        #expect(mixed.hasNumbers, "the five-hour window still has a number")
+        #expect(mixed.rows[0].usedPercent == 25)
+        #expect(mixed.rows[1].usedPercent == nil, "and the weekly one still says it reset")
+    }
+
+    @Test("only a report where every window is waiting has nothing to show")
+    func nothingToShow() {
+        #expect(!report([]).hasNumbers)
+        #expect(!report([row(tenths: nil, reset: true)]).hasNumbers)
+        #expect(report([row()]).hasNumbers)
+    }
+
+    @Test("the hint says where numbers come from, not that otag is waiting")
+    func theHintSaysWhatToDo() {
+        let hint = UsageReport.whereNumbersComeFrom
+        #expect(hint.contains("after a Claude Code reply"))
+        #expect(hint.contains("any session"), "the limits are the account's, not a pane's")
+    }
 }

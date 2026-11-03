@@ -154,16 +154,22 @@ struct MenuBarView: View {
             Divider()
         }
 
-        ForEach(store.usage.rows) { row in
-            Text(line(row))
-        }
-        if !store.usage.isEmpty {
-            Text(store.usage.provenance(panes: store.panes))
-            Button("Refresh Usage", systemImage: "arrow.clockwise") {
-                store.refreshUsage()
+        if store.usage.hasNumbers {
+            ForEach(store.usage.rows) { row in
+                Text(line(row))
             }
-            Divider()
+            Text(store.usage.provenance(panes: store.panes))
+        } else {
+            Text(UsageReport.whereNumbersComeFrom)
         }
+        Button(
+            store.refreshingUsage ? "Refreshing Usage…" : "Refresh Usage",
+            systemImage: "arrow.clockwise"
+        ) {
+            store.refreshUsage()
+        }
+        .disabled(store.refreshingUsage)
+        Divider()
 
         Button("Open Otag") {
             NSApp.activate(ignoringOtherApps: true)

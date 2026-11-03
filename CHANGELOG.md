@@ -201,11 +201,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The app shows a short hint instead of a percentage when no reading
-  describes the limits as they are now, and the menu bar item shows its icon
-  rather than a number nobody has confirmed. There is no supported way to
-  ask Claude Code for the account's limits without spending tokens, so otag
-  never does: the numbers come from what the sessions report.
+- Every window says what it knows, one window at a time: a current number, a
+  number with its age on it and dimmed, or that it is waiting for the first
+  reading of a window that has reset. Where no window has a number at all,
+  the app says where numbers come from — "Limits appear after a Claude Code
+  reply in any session" — instead of saying only that otag is waiting. The
+  menu bar item still shows its icon rather than a number nobody has
+  confirmed. There is no supported way to ask Claude Code for the account's
+  limits without spending tokens, so otag never does: the numbers come from
+  what the sessions report.
 - `otag install-hooks` asks Claude Code to re-run the status line every 30
   seconds, so a session that is sitting idle keeps reporting the account's
   limits instead of going quiet until someone types. An interval already in
@@ -214,6 +218,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The refresh button is always there, not only when the numbers have gone
+  stale, and it has a hit area rather than a ten-point glyph to aim at. It
+  turns while otag is re-reading and says "Updated" when the answer lands.
+- A reading of a window that is still running no longer disappears because
+  another window has reset, or because nobody has confirmed it for a while.
+  One window being over said "waiting for fresh data" for the whole widget
+  and hid a perfectly good number next to it.
 - The app's terminals come back by themselves when the daemon is restarted.
   Each pane is picked up again — with its restored screen, at the size the
   view is drawing it — instead of showing "the otag daemon closed the

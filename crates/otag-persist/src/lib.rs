@@ -648,6 +648,56 @@ mod tests {
     }
 
     #[test]
+    fn a_database_file_an_older_otag_wrote_is_opened_and_read() {
+        // The path the user's own database takes: a file written by a build
+        // that had no `session` column, opened by one that has.
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let path = directory.path().join(DATABASE_FILE_NAME);
+        {
+            let old = Connection::open(&path).expect("a database file");
+            old.execute_batch(
+                "CREATE TABLE usage_samples (
+                     agent     TEXT    NOT NULL,
+                     window    TEXT    NOT NULL,
+                     at        INTEGER NOT NULL,
+                     used_pct  REAL    NOT NULL,
+                     resets_at INTEGER,
+                     PRIMARY KEY (agent, window, at)
+                 );
+                 INSERT INTO usage_samples
+                 VALUES ('claude', 'five_hour', 1700000000, 25.0, 1700007200);",
+            )
+            .expect("the older schema");
+        }
+
+        let store = Store::open(&path).expect("the file opens");
+        let read = store.load_usage().expect("and its readings are read");
+        assert_eq!(read.len(), 1, "a reading written before the column is kept");
+        assert_eq!(read[0].used_pct, 25.0);
+        assert_eq!(
+            read[0].resets_at,
+            Some(1_700_007_200),
+            "including when its window resets, which is what makes it current"
+        );
+        assert_eq!(read[0].session, None);
+
+        // And the file is writable from then on, with the new column.
+        store
+            .save_usage(&[Sample {
+                agent: otag_agents::AgentKind::Claude,
+                window: Window::FiveHour,
+                used_pct: 26.0,
+                resets_at: Some(1_700_007_200),
+                at: 1_700_000_100,
+                session: Some("sess-1".to_owned()),
+            }])
+            .expect("saved");
+        let read = store.load_usage().expect("read back");
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[1].session.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
     fn a_database_from_an_older_otag_gains_the_columns_it_is_missing() {
         let store = Store::open_in_memory().expect("a database");
         // The table as an older otag wrote it, with a reading already in it.

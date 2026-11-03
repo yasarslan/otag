@@ -54,6 +54,13 @@ public final class SessionStore {
     public private(set) var notice: String?
     /// How the connection stands.
     public private(set) var state: ConnectionState = .connecting
+    /// Whether a re-read of the usage numbers is in flight, so the button
+    /// that asked for it can show that something is happening.
+    public private(set) var refreshingUsage = false
+    /// When a usage report last arrived, for a word of feedback beside that
+    /// button. Any report counts: one otag asked for, or one pushed because
+    /// a session reported.
+    public private(set) var usageUpdatedAt: Date?
     /// The daemon's version, once it has said.
     public private(set) var daemonVersion: String?
 
@@ -63,6 +70,7 @@ public final class SessionStore {
     private var connection: DaemonConnection?
     private var listening: Task<Void, Never>?
     private var refreshing: Task<Void, Never>?
+    private var answerWaiting: Task<Void, Never>?
 
     public init(socket: URL = Paths.socket()) {
         self.socket = socket
@@ -131,8 +139,30 @@ public final class SessionStore {
     /// no supported way to ask Claude Code for the account's limits without
     /// spending tokens, so otag asks the daemon, never the agent.
     public func refreshUsage() {
+        guard connection != nil else { return }
+        refreshingUsage = true
         send(.usage)
         send(.usageHistory)
+
+        // Nothing may spin forever. A daemon that does not answer in a few
+        // seconds is a daemon with a problem of its own, and the connection
+        // state is where that belongs.
+        answerWaiting?.cancel()
+        answerWaiting = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, !Task.isCancelled else { return }
+            refreshingUsage = false
+        }
+    }
+
+    /// Take in a usage report, however it arrived.
+    private func took(_ report: UsageReport) {
+        usage = report
+        usageUpdatedAt = Date()
+        refreshingUsage = false
+        answerWaiting?.cancel()
+        answerWaiting = nil
+        remember(report)
     }
 
     /// Forget the report, so the window can be opened fresh.
@@ -173,6 +203,9 @@ public final class SessionStore {
         listening = nil
         refreshing?.cancel()
         refreshing = nil
+        answerWaiting?.cancel()
+        answerWaiting = nil
+        refreshingUsage = false
         connection?.close()
         connection = nil
     }
@@ -232,8 +265,7 @@ public final class SessionStore {
         case let .panes(panes):
             self.panes = panes
         case let .usage(report):
-            usage = report
-            remember(report)
+            took(report)
         case let .inbox(asks):
             self.asks = asks
         case let .usageHistory(samples):
@@ -289,8 +321,7 @@ public final class SessionStore {
         case let .panes(panes):
             self.panes = panes
         case let .usage(report):
-            usage = report
-            remember(report)
+            took(report)
         case let .asked(ask):
             asks.removeAll { $0.pane == ask.pane }
             asks.append(ask)

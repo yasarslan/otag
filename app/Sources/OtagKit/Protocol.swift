@@ -325,6 +325,22 @@ public struct UsageReport: Codable, Hashable, Sendable {
     /// Whether any window has a reading that describes it as it is now.
     public var isFresh: Bool { rows.contains(where: \.isCurrent) }
 
+    /// Whether any window has a number to show at all, current or not.
+    ///
+    /// A reading nobody has confirmed for a while is still the best thing
+    /// there is, as long as it is shown with its age on it. Only a report
+    /// where every window is waiting for its first reading has nothing.
+    public var hasNumbers: Bool { rows.contains { $0.usedTenths != nil } }
+
+    /// What to tell someone who has no numbers: where numbers come from.
+    ///
+    /// Claude Code reports the account's limits with its replies, from any
+    /// session on the machine, and there is no way to ask for them without
+    /// one. Saying so is more use than saying that otag is waiting.
+    public static let whereNumbersComeFrom =
+        "Limits appear after a Claude Code reply in any session."
+
+
     /// The newest reading in the report, which dates the whole of it.
     public var newest: UsageRow? {
         rows.min(by: { $0.age < $1.age })

@@ -11,83 +11,117 @@ struct UsageWidget: View {
     let store: SessionStore
 
     var body: some View {
-        if !store.usage.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                if store.usage.isFresh {
-                    ForEach(store.usage.rows) { row in
-                        UsageRowView(row: row)
-                    }
-                } else {
-                    // Nothing in the report describes the limits as they are
-                    // now, and a number nobody has confirmed is worse than
-                    // no number: it is the one thing a meter must not imply.
-                    UsageHint(store: store)
-                }
-                ForEach(store.usage.counted) { counted in
-                    // A count, not a percentage: nobody knows what such an
-                    // account's allowance is.
-                    Text("\(counted.agent.label) ~\(Readable.tokens(counted.tokens))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Text("Limits")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                UsageRefresh(store: store)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+
+            if store.usage.hasNumbers {
+                // Each window says what it knows: a current number, a number
+                // with its age on it, or that it is waiting for the first
+                // reading of a window that has reset. One window being over
+                // is no reason to hide another that is not.
+                ForEach(store.usage.rows) { row in
+                    UsageRowView(row: row)
+                }
+            } else {
+                UsageHint(report: store.usage)
+            }
+
+            ForEach(store.usage.counted) { counted in
+                // A count, not a percentage: nobody knows what such an
+                // account's allowance is.
+                Text("\(counted.agent.label) ~\(Readable.tokens(counted.tokens))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 }
 
 /// Ask the daemon for the numbers again.
 ///
-/// Small and quiet, beside the numbers it refreshes. Its tooltip is where
-/// the provenance lives: when the last reading arrived and which session
-/// otag heard it from.
+/// Always there, beside the numbers it refreshes, because the one moment a
+/// person wants it is the moment the numbers look wrong. Its tooltip carries
+/// the provenance: when the last reading arrived and which session otag
+/// heard it from.
 struct UsageRefresh: View {
     let store: SessionStore
 
+    /// Set while the icon turns, and again when the answer has landed, so
+    /// pressing the button is visibly something rather than nothing.
+    @State private var turn = 0.0
+    @State private var justUpdated = false
+
     var body: some View {
-        Button {
-            store.refreshUsage()
-        } label: {
-            Image(systemName: "arrow.clockwise")
-                .font(.caption)
+        HStack(spacing: 4) {
+            if justUpdated {
+                Text("Updated")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
+            Button {
+                store.refreshUsage()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(turn))
+                    // A hit area a person can actually hit: the glyph itself
+                    // is ten points across, and this is the whole square.
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help(store.usage.provenance(panes: store.panes))
+            .accessibilityLabel("Refresh usage")
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help(store.usage.provenance(panes: store.panes))
-        .accessibilityLabel("Refresh usage")
+        .onChange(of: store.refreshingUsage) { _, refreshing in
+            // One turn of the icon per re-read, started when the request
+            // goes out and finished when the answer arrives. Nothing spins
+            // forever: the store stops waiting on its own.
+            withAnimation(refreshing ? .linear(duration: 0.9).repeatForever(autoreverses: false)
+                : .easeOut(duration: 0.2)) {
+                turn = refreshing ? turn + 360 : turn.rounded()
+            }
+        }
+        .onChange(of: store.usageUpdatedAt) {
+            withAnimation { justUpdated = true }
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                withAnimation { justUpdated = false }
+            }
+        }
     }
 }
 
-/// What the widget says instead of a number nobody has confirmed.
+/// What the widget says when no window has a number to show.
 struct UsageHint: View {
-    let store: SessionStore
+    let report: UsageReport
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(headline)
-                    .font(.caption)
-                Text("An agent reports the limits as it works.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 4)
-            UsageRefresh(store: store)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(headline)
+                .font(.caption)
+            Text(UsageReport.whereNumbersComeFrom)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// One line on why there is no number, which is not always the same
-    /// reason: a window that has reset is waiting for its first reading,
-    /// and an old one was simply never confirmed.
+    /// Why there is nothing to show, which is not always the same reason: a
+    /// window that has reset is waiting for the first reading of the new
+    /// one, and an account otag has never heard about has none at all.
     private var headline: String {
-        if store.usage.rows.contains(where: \.reset) {
-            return "Window reset — waiting for fresh data"
-        }
-        if let age = store.usage.age {
-            return "No reading for \(Readable.duration(age))"
-        }
-        return "No reading yet"
+        report.rows.isEmpty ? "No limits yet" : "Windows have reset"
     }
 }
 
@@ -190,27 +224,29 @@ struct UsageInspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if store.usage.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("No numbers yet")
-                            .font(.headline)
-                        Text("The agents report their limits as they work. For Claude Code "
-                            + "that needs otag's hooks: run `otag install-hooks`.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    section("Limits", accessory: { UsageRefresh(store: store) }) {
-                        if !store.usage.isFresh {
-                            UsageHint(store: store)
-                        }
+                section("Limits", accessory: { UsageRefresh(store: store) }) {
+                    if store.usage.hasNumbers {
                         ForEach(store.usage.rows) { row in
                             UsageRowView(row: row)
                         }
                         Text(store.usage.provenance(panes: store.panes))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                    } else {
+                        // Nothing to draw, so this is the place to say where
+                        // numbers come from at all. For Claude Code that is
+                        // a reply in any session, which needs otag's hooks.
+                        Text(store.usage.rows.isEmpty ? "No numbers yet" : "Windows have reset")
+                            .font(.headline)
+                        Text(UsageReport.whereNumbersComeFrom
+                            + " If none ever do, otag's hooks are not installed: "
+                            + "run `otag install-hooks`.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                }
+                if !store.usage.isEmpty {
                     section("Timeline") {
                         UsageChart(samples: store.history)
                     }

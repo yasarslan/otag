@@ -77,8 +77,15 @@ otag install-hooks        # says what it will change, then asks
 ```
 
 It adds one command per event it needs, takes over the status line (and keeps
-running yours), and leaves a copy of the file as it was. `otag uninstall-hooks`
-puts everything back.
+running yours), asks for the status line to be re-run every 30 seconds so a
+session that is sitting idle keeps reporting the account's limits, and leaves a
+copy of the file as it was. An interval you chose yourself is left alone.
+`otag uninstall-hooks` puts everything back.
+
+The limits are account-wide, so otag counts what every Claude Code session on
+the machine reports, including sessions you started in your own terminal.
+Context and what each session spent are shown only for sessions running in an
+otag pane, because that is what otag can attribute.
 
 ## The macOS app
 

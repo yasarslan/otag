@@ -191,6 +191,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Daemon logging to a daily-rolling file in otag's state directory, filtered by
   `OTAG_LOG` or `--log`.
 
+### Changed
+
+- `otag install-hooks` asks Claude Code to re-run the status line every 30
+  seconds, so a session that is sitting idle keeps reporting the account's
+  limits instead of going quiet until someone types. An interval already in
+  the settings file is left as it is, and it survives otag taking the status
+  line over and handing it back.
+
 ### Fixed
 
 - Usage is read from every Claude Code session on the machine, not only from

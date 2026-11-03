@@ -24,6 +24,16 @@ const BACKUP_SUFFIX: &str = "otag-backup";
 /// The program name otag's own entries run.
 const PROGRAM: &str = "otag";
 
+/// How often otag asks Claude Code to re-run the status line, in seconds.
+///
+/// Claude Code runs a status line on events — a turn ending, a tool
+/// finishing — and those stop while a session sits idle. The limits it
+/// reports are the account's, so a session that is only sitting there is
+/// still worth hearing from: half a minute keeps the meters current without
+/// the command becoming something the user notices. Claude Code's minimum is
+/// one second, and leaving the field unset means events only.
+pub const STATUS_LINE_REFRESH: u64 = 30;
+
 /// What installing otag's bridge would do, or has done.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
@@ -38,6 +48,12 @@ pub struct Change {
     pub chained_status_line: Option<String>,
     /// Whether otag takes the statusLine command over at all.
     pub takes_status_line: bool,
+    /// The refresh interval otag would add to the status line, in seconds.
+    ///
+    /// `None` when there is nothing to do: either the file already has one —
+    /// whatever the user chose is theirs to keep — or otag is not the one
+    /// running the status line.
+    pub sets_refresh_interval: Option<u64>,
     /// Where the backup of the file as it was went.
     pub backup: Option<PathBuf>,
 }
@@ -46,7 +62,7 @@ impl Change {
     /// Whether this change would alter the file.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.events.is_empty() && !self.takes_status_line
+        self.events.is_empty() && !self.takes_status_line && self.sets_refresh_interval.is_none()
     }
 }
 
@@ -69,6 +85,10 @@ pub fn install(settings: &Path, otag: &Path) -> Result<Change> {
     }
 
     change.backup = backup(settings)?;
+    // Read before anything is replaced: an interval already in the file is
+    // the user's, and it is carried over to the entry otag writes rather
+    // than thrown away with the command it was set on.
+    let kept = refresh_interval(&value);
     let object = as_object(&mut value);
 
     if !change.events.is_empty() {
@@ -93,6 +113,13 @@ pub fn install(settings: &Path, otag: &Path) -> Result<Change> {
             json!({ "type": "command", "command": command(otag, STATUS_LINE) }),
         );
     }
+    // An idle session reports nothing on its own, and the limits it would
+    // report are the account's. A timer is what keeps them arriving.
+    if let Some(seconds) = kept.or(change.sets_refresh_interval)
+        && let Some(status_line) = object.get_mut("statusLine")
+    {
+        as_object(status_line).insert("refreshInterval".to_owned(), json!(seconds));
+    }
 
     write(settings, &value)?;
     Ok(change)
@@ -110,10 +137,15 @@ pub fn uninstall(settings: &Path, chained_status_line: Option<&str>) -> Result<C
         events: Vec::new(),
         chained_status_line: chained_status_line.map(str::to_owned),
         takes_status_line: false,
+        sets_refresh_interval: None,
         backup: None,
     };
 
     let ours = is_ours(status_line_command(&value));
+    // Which of the two set this is no longer knowable, so it goes back with
+    // the user's own command: an interval they chose must not be lost, and
+    // one otag chose is a sensible thing to leave on a status line.
+    let kept = refresh_interval(&value);
     let object = as_object(&mut value);
 
     if let Some(hooks) = object.get_mut("hooks").and_then(Value::as_object_mut) {
@@ -146,10 +178,11 @@ pub fn uninstall(settings: &Path, chained_status_line: Option<&str>) -> Result<C
         change.takes_status_line = true;
         match chained_status_line {
             Some(previous) => {
-                object.insert(
-                    "statusLine".to_owned(),
-                    json!({ "type": "command", "command": previous }),
-                );
+                let mut line = json!({ "type": "command", "command": previous });
+                if let Some(seconds) = kept {
+                    as_object(&mut line).insert("refreshInterval".to_owned(), json!(seconds));
+                }
+                object.insert("statusLine".to_owned(), line);
             }
             None => {
                 object.remove("statusLine");
@@ -170,6 +203,9 @@ pub fn uninstall(settings: &Path, chained_status_line: Option<&str>) -> Result<C
 fn decide(settings: &Path, value: &Value) -> Change {
     let installed = installed_events(value);
     let status_line = status_line_command(value);
+    // otag sets the interval on its own status line only, and only when the
+    // file has none: a user who chose an interval chose it.
+    let sets_refresh_interval = (refresh_interval(value).is_none()).then_some(STATUS_LINE_REFRESH);
 
     Change {
         settings: settings.to_path_buf(),
@@ -184,8 +220,17 @@ fn decide(settings: &Path, value: &Value) -> Change {
             .filter(|command| !is_ours(Some(command)))
             .map(str::to_owned),
         takes_status_line: !is_ours(status_line),
+        sets_refresh_interval,
         backup: None,
     }
+}
+
+/// The refresh interval the status line is set to run on, if any.
+fn refresh_interval(value: &Value) -> Option<u64> {
+    value
+        .get("statusLine")
+        .and_then(|line| line.get("refreshInterval"))
+        .and_then(Value::as_u64)
 }
 
 /// The events that already run one of otag's commands.
@@ -523,6 +568,92 @@ mod tests {
     }
 
     #[test]
+    fn installing_asks_for_the_status_line_to_be_re_run_on_a_timer() {
+        let (_home, path) = settings_with(None);
+
+        let change = install(&path, &otag()).expect("the settings are written");
+        assert_eq!(change.sets_refresh_interval, Some(STATUS_LINE_REFRESH));
+        assert_eq!(
+            refresh_interval(&read_back(&path)),
+            Some(STATUS_LINE_REFRESH),
+            "an idle session must keep reporting the account's limits"
+        );
+    }
+
+    #[test]
+    fn an_interval_the_user_chose_is_left_alone() {
+        let (_home, path) = settings_with(Some(
+            r#"{"statusLine":{"type":"command","command":"my-line","refreshInterval":5}}"#,
+        ));
+
+        let change = install(&path, &otag()).expect("the settings are written");
+        assert_eq!(change.sets_refresh_interval, None);
+        let value = read_back(&path);
+        assert_eq!(
+            refresh_interval(&value),
+            Some(5),
+            "a user who chose an interval chose it, and taking the command over does not lose it"
+        );
+        assert_eq!(
+            status_line_command(&value),
+            Some("/usr/local/bin/otag hook statusline")
+        );
+    }
+
+    #[test]
+    fn an_otag_status_line_from_before_the_timer_gains_one() {
+        // What `otag install-hooks` left behind before otag asked for a
+        // timer: everything is registered, and nothing re-runs it.
+        let (_home, path) = settings_with(None);
+        install(&path, &otag()).expect("the first install");
+        let mut value = read_back(&path);
+        as_object(value.get_mut("statusLine").expect("otag's status line"))
+            .remove("refreshInterval");
+        std::fs::write(&path, value.to_string()).expect("the settings file");
+
+        let plan = plan(&path).expect("a plan");
+        assert!(!plan.is_empty(), "there is something left to do");
+        assert!(plan.events.is_empty(), "the hooks are all registered");
+        assert!(!plan.takes_status_line, "the status line is already otag's");
+        assert_eq!(plan.sets_refresh_interval, Some(STATUS_LINE_REFRESH));
+
+        install(&path, &otag()).expect("the second install");
+        let value = read_back(&path);
+        assert_eq!(refresh_interval(&value), Some(STATUS_LINE_REFRESH));
+        assert_eq!(
+            status_line_command(&value),
+            Some("/usr/local/bin/otag hook statusline"),
+            "and otag's own command is still the one that runs"
+        );
+    }
+
+    #[test]
+    fn installing_twice_over_a_complete_install_changes_nothing() {
+        let (_home, path) = settings_with(None);
+        install(&path, &otag()).expect("the first install");
+        let after_first = read_back(&path);
+
+        let again = install(&path, &otag()).expect("the second install");
+        assert!(again.is_empty(), "there was nothing left to do");
+        assert_eq!(read_back(&path), after_first);
+    }
+
+    #[test]
+    fn uninstalling_takes_the_timer_out_with_otags_status_line() {
+        let (_home, path) = settings_with(None);
+        install(&path, &otag()).expect("the install");
+
+        uninstall(&path, None).expect("the uninstall");
+        let value = read_back(&path);
+        assert_eq!(value.get("statusLine"), None);
+        assert_eq!(
+            refresh_interval(&value),
+            None,
+            "otag's timer goes when otag's status line goes"
+        );
+    }
+
+    #[test]
     fn uninstalling_puts_back_what_the_user_had() {
         let (_home, path) = settings_with(Some(
             r#"{"model":"opus","statusLine":{"type":"command","command":"python3 line.py"}}"#,
@@ -537,6 +668,11 @@ mod tests {
         let value = read_back(&path);
         assert_eq!(value.get("hooks"), None, "no empty leftovers");
         assert_eq!(status_line_command(&value), Some("python3 line.py"));
+        assert_eq!(
+            refresh_interval(&value),
+            Some(STATUS_LINE_REFRESH),
+            "the timer goes back with the command it was set on"
+        );
         assert_eq!(value.get("model").and_then(Value::as_str), Some("opus"));
     }
 

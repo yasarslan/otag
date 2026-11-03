@@ -123,6 +123,12 @@ fn describe(planned: &Change) {
             None => println!("  + set statusLine to `otag hook statusline`"),
         }
     }
+    if let Some(seconds) = planned.sets_refresh_interval {
+        println!(
+            "  + re-run the status line every {seconds}s, so a session that is \
+             sitting idle keeps reporting the account's limits"
+        );
+    }
     println!("A copy of the file as it is now is kept next to it.");
 }
 
@@ -248,6 +254,7 @@ mod tests {
             events: vec!["Stop".to_owned()],
             chained_status_line: Some("my-line".to_owned()),
             takes_status_line: true,
+            sets_refresh_interval: Some(30),
             backup: None,
         });
         describe(&Change {
@@ -255,6 +262,7 @@ mod tests {
             events: Vec::new(),
             chained_status_line: None,
             takes_status_line: false,
+            sets_refresh_interval: None,
             backup: None,
         });
     }

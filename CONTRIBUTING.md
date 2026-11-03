@@ -8,6 +8,8 @@ open an issue describing what you want to do before writing a large patch.
 - A stable Rust toolchain, 1.88 or newer (the minimum supported Rust version is
   declared as `rust-version` in `Cargo.toml`).
 - macOS or Linux. Windows is not supported yet.
+- For the macOS app: Swift 5.9 or newer (Xcode 15+) and macOS 14 or newer. The
+  app is optional — otag's terminal client needs nothing but Rust.
 
 ## Build and test
 
@@ -28,6 +30,20 @@ cargo doc --no-deps --all-features
 
 Warnings are errors: `cargo clippy` must be clean, and `cargo doc` must build
 without warnings.
+
+### The macOS app
+
+The app lives in `app/` as a Swift package and is a client of the same daemon,
+so it is built and tested separately:
+
+```sh
+swift build --package-path app
+swift test --package-path app
+./scripts/bundle-app.sh            # assembles target/Otag.app
+```
+
+The bundle carries the daemon it was built with in `Contents/Resources`, and
+signing is ad-hoc, which is enough to run it on the machine that built it.
 
 ## Code expectations
 

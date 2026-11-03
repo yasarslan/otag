@@ -1,2 +1,6 @@
 /target/
 .otag/
+
+# Swift Package Manager build products for the macOS app.
+/app/.build/
+/app/.swiftpm/

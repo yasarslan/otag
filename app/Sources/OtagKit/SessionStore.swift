@@ -1,0 +1,187 @@
+import Foundation
+import Observation
+
+/// One project, with the sessions running in it.
+///
+/// The daemon calls these workspaces; in the app they are what the sidebar
+/// groups by, which is the folder the sessions are working in.
+public struct WorkspaceGroup: Identifiable, Hashable, Sendable {
+    public var name: String
+    public var panes: [PaneInfo]
+
+    public var id: String { name }
+
+    /// What the group is doing, taken from the session that most wants the
+    /// user — the same rule the terminal client's sidebar uses.
+    public var status: PaneStatus {
+        panes.map(\.status).max() ?? .idle
+    }
+
+    /// How many of its sessions are waiting for the user.
+    public var waiting: Int {
+        panes.filter { $0.status.wantsAttention }.count
+    }
+}
+
+/// How the app's connection to the daemon stands.
+public enum ConnectionState: Equatable, Sendable {
+    case connecting
+    case connected
+    /// Nothing is connected, and this is why.
+    case failed(String)
+}
+
+/// Everything the app knows about the daemon's session.
+///
+/// The daemon is the source of truth: this holds what it last said and
+/// nothing it worked out for itself. One subscription brings every change,
+/// so there is no polling anywhere in the app.
+@MainActor
+@Observable
+public final class SessionStore {
+    /// Every pane the daemon is running.
+    public private(set) var panes: [PaneInfo] = []
+    /// How much of the agents' limits is gone.
+    public private(set) var usage = UsageReport()
+    /// What the agents are waiting for the user to answer.
+    public private(set) var asks: [AskView] = []
+    /// How the connection stands.
+    public private(set) var state: ConnectionState = .connecting
+    /// The daemon's version, once it has said.
+    public private(set) var daemonVersion: String?
+
+    /// The socket this store talks to.
+    public let socket: URL
+
+    private var connection: DaemonConnection?
+    private var listening: Task<Void, Never>?
+
+    public init(socket: URL = Paths.socket()) {
+        self.socket = socket
+    }
+
+    /// The sessions grouped by project, in the order the daemon lists them.
+    public var workspaces: [WorkspaceGroup] {
+        var groups: [WorkspaceGroup] = []
+        for pane in panes {
+            let name = pane.workspace.isEmpty ? "otag" : pane.workspace
+            if let index = groups.firstIndex(where: { $0.name == name }) {
+                groups[index].panes.append(pane)
+            } else {
+                groups.append(WorkspaceGroup(name: name, panes: [pane]))
+            }
+        }
+        return groups
+    }
+
+    /// How many sessions are waiting for the user, for the Dock badge.
+    public var waiting: Int {
+        panes.filter { $0.status.wantsAttention }.count
+    }
+
+    /// One pane, by identifier.
+    public func pane(_ id: PaneID) -> PaneInfo? {
+        panes.first { $0.id == id }
+    }
+
+    /// Connect to the daemon — starting it if it is not running — and keep
+    /// the state up to date until `disconnect()`.
+    public func start() {
+        guard listening == nil else { return }
+        listening = Task { [weak self] in
+            await self?.run()
+        }
+    }
+
+    /// Stop listening and close the connection. The daemon keeps running.
+    public func disconnect() {
+        listening?.cancel()
+        listening = nil
+        connection?.close()
+        connection = nil
+    }
+
+    /// Send one request, if there is a connection to send it on.
+    public func send(_ request: Request) {
+        guard let connection else { return }
+        do {
+            try connection.send(request)
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Connect, subscribe, and apply everything that arrives; try again
+    /// after a pause if the daemon goes away.
+    private func run() async {
+        while !Task.isCancelled {
+            state = .connecting
+            do {
+                let connection = try await Daemon.connect(socket: socket)
+                self.connection = connection
+                try connection.send(.subscribe)
+                try connection.send(.version)
+                state = .connected
+
+                for await response in connection.responses {
+                    if Task.isCancelled { break }
+                    apply(response)
+                }
+                // The stream finished, which means the daemon closed the
+                // connection or stopped.
+                self.connection = nil
+                if Task.isCancelled { return }
+                state = .failed(DaemonError.disconnected.localizedDescription)
+            } catch {
+                connection = nil
+                state = .failed(error.localizedDescription)
+            }
+
+            // A daemon that has just been restarted is worth waiting for,
+            // but not worth hammering.
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    /// Take in one message from the daemon.
+    private func apply(_ response: Response) {
+        switch response {
+        case let .event(event):
+            apply(event)
+        case let .panes(panes):
+            self.panes = panes
+        case let .usage(report):
+            usage = report
+        case let .inbox(asks):
+            self.asks = asks
+        case let .version(version):
+            daemonVersion = version
+        case let .answered(ask, _, _):
+            asks.removeAll { $0.id == ask }
+        case let .error(message):
+            state = .failed(message)
+        case .pong, .ok, .paneScreen, .output, .paneEnded, .handoffDone, .sessionEnded,
+             .unknown:
+            // Pane bytes belong to whichever terminal view asked for them,
+            // and the rest needs nothing from the store.
+            break
+        }
+    }
+
+    /// Take in one event.
+    private func apply(_ event: Event) {
+        switch event {
+        case let .panes(panes):
+            self.panes = panes
+        case let .usage(report):
+            usage = report
+        case let .asked(ask):
+            asks.removeAll { $0.pane == ask.pane }
+            asks.append(ask)
+        case let .resolved(ask, _):
+            asks.removeAll { $0.id == ask }
+        case .handoff, .notice, .unknown:
+            break
+        }
+    }
+}

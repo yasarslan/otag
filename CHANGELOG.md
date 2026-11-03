@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Otag.app**, a native macOS window onto the same daemon: it starts the
+  daemon if none is running and lists every session, grouped by project, with
+  what each one is doing. Build it with `scripts/bundle-app.sh`. The terminal
+  client is unchanged and stays the way to use otag on Linux and over SSH.
+
 - A second way to watch a pane, for clients that run a terminal emulator of
   their own: `attach_pane` answers with the escape sequences that recreate
   the pane's screen and then forwards the program's output unchanged, and
@@ -24,17 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than assumed.
 - Bytes on the socket now travel as base64, which is a third of the size of
   the list of numbers they used to be. A list of numbers is still read.
-
-### Fixed
-
-- otag no longer paints a background of its own. Everything it draws keeps
-  the terminal's own background and foreground, so a light terminal no longer
-  shows dark bands behind an agent's own interface.
-- A reset more than a day away is written in days (`resets 6d 17h`) instead
-  of as a count of hours nobody reads.
-
-### Added
-
 - A desktop notification the moment an agent starts waiting for you: once
   per agent per situation, never once a second, and silent on a system that
   has no way to show one. `OTAG_NO_NOTIFY` turns them off.
@@ -132,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- otag no longer paints a background of its own. Everything it draws keeps
+  the terminal's own background and foreground, so a light terminal no longer
+  shows dark bands behind an agent's own interface.
+- A reset more than a day away is written in days (`resets 6d 17h`) instead
+  of as a count of hours nobody reads.
 - The last thing a program prints always reaches the screen before otag
   reports that the program ended, so a crash message is no longer lost on
   the way out.

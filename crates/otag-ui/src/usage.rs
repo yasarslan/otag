@@ -51,13 +51,28 @@ pub fn offers_handoff(report: &Report) -> bool {
     report.rows.iter().any(|row| row.used_pct() >= 100)
 }
 
-/// A duration a person reads at a glance: `2h`, `1h20m`, `45m`, `30s`.
+/// A duration a person reads at a glance: `6d 17h`, `2h`, `1h20m`, `45m`,
+/// `30s`.
+///
+/// Weekly windows reset days away, and `161h` is not a number anyone reads;
+/// past a day the minutes stop mattering, so they are dropped.
 #[must_use]
 pub fn duration(seconds: i64) -> String {
+    /// Hours in a day.
+    const DAY: i64 = 24;
+
     let seconds = seconds.max(0);
     let minutes = seconds / 60;
     let hours = minutes / 60;
 
+    if hours >= DAY {
+        let days = hours / DAY;
+        let rest = hours % DAY;
+        if rest == 0 {
+            return format!("{days}d");
+        }
+        return format!("{days}d {rest}h");
+    }
     if hours > 0 {
         let rest = minutes % 60;
         if rest == 0 {
@@ -233,6 +248,15 @@ mod tests {
             "0s",
             "a window that has reset is not negative"
         );
+    }
+
+    #[test]
+    fn a_reset_days_away_is_shown_in_days() {
+        // A weekly window: `161h` is not a number anyone reads.
+        assert_eq!(duration(579_600), "6d 17h");
+        assert_eq!(duration(86_400), "1d");
+        assert_eq!(duration(86_399), "23h59m");
+        assert_eq!(duration(604_800), "7d");
     }
 
     #[test]

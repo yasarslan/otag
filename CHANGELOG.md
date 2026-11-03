@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- otag no longer paints a background of its own. Everything it draws keeps
+  the terminal's own background and foreground, so a light terminal no longer
+  shows dark bands behind an agent's own interface.
+- A reset more than a day away is written in days (`resets 6d 17h`) instead
+  of as a count of hours nobody reads.
+
 ### Added
 
 - A desktop notification the moment an agent starts waiting for you: once

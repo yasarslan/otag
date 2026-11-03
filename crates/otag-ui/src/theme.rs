@@ -5,15 +5,20 @@
 //! border rather than with a bright fill or anything that blinks. What a
 //! pane's program draws is never recoloured — only otag's own sidebar, tab
 //! bar and borders use these.
+//!
+//! Neither the background nor the plain text colour is otag's to choose:
+//! both are the terminal's own. Painting a background of its own would put
+//! bands of the wrong colour behind every agent UI that leaves its own
+//! background alone, and would fight the user's terminal theme for no gain.
 
 use ratatui::style::{Color, Modifier, Style};
 
 /// One palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
-    /// Behind otag's own furniture.
+    /// Behind otag's own furniture: the terminal's own background.
     pub background: Color,
-    /// Text that matters.
+    /// Text that matters: the terminal's own foreground.
     pub text: Color,
     /// Text that is only there when looked for.
     pub muted: Color,
@@ -32,8 +37,8 @@ pub struct Theme {
 impl Theme {
     /// The default: a low-contrast dark palette.
     pub const CALM_DARK: Self = Self {
-        background: Color::Rgb(0x1b, 0x1d, 0x21),
-        text: Color::Rgb(0xc5, 0xc9, 0xd0),
+        background: Color::Reset,
+        text: Color::Reset,
         muted: Color::Rgb(0x6c, 0x71, 0x7a),
         border: Color::Rgb(0x3a, 0x3f, 0x47),
         border_focus: Color::Rgb(0x7c, 0x9c, 0xbf),
@@ -44,8 +49,8 @@ impl Theme {
 
     /// A low-contrast light palette.
     pub const CALM_LIGHT: Self = Self {
-        background: Color::Rgb(0xf4, 0xf2, 0xee),
-        text: Color::Rgb(0x3b, 0x3f, 0x45),
+        background: Color::Reset,
+        text: Color::Reset,
         muted: Color::Rgb(0x87, 0x8c, 0x94),
         border: Color::Rgb(0xd2, 0xcf, 0xc8),
         border_focus: Color::Rgb(0x4f, 0x74, 0x96),
@@ -101,6 +106,18 @@ mod tests {
     #[test]
     fn the_default_theme_is_the_calm_dark_one() {
         assert_eq!(Theme::default(), Theme::CALM_DARK);
+    }
+
+    #[test]
+    fn no_palette_paints_a_background_or_recolours_plain_text() {
+        for theme in [Theme::CALM_DARK, Theme::CALM_LIGHT] {
+            assert_eq!(theme.background, Color::Reset);
+            assert_eq!(theme.text, Color::Reset);
+            assert_eq!(
+                theme.plain(),
+                Style::new().fg(Color::Reset).bg(Color::Reset)
+            );
+        }
     }
 
     #[test]

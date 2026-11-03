@@ -84,11 +84,9 @@ pub fn draw(
     theme: Theme,
     notice: Option<&str>,
 ) {
-    let whole = frame.area();
-    // otag's own background, so that the parts no pane covers are otag's
-    // rather than whatever the terminal had.
-    frame.render_widget(Block::new().style(Style::new().bg(theme.background)), whole);
-
+    // Nothing paints a background: every cell otag does not write keeps the
+    // terminal's own colours, which is also what a pane's program expects of
+    // the cells it leaves alone.
     frame.render_widget(Sidebar { view, theme }, rect(view.sidebar));
     frame.render_widget(
         crate::usage::Usage {

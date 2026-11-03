@@ -67,6 +67,11 @@ public final class SessionStore {
     /// The socket this store talks to.
     public let socket: URL
 
+    /// How long the app waits for an answer to a re-read before it stops
+    /// saying one is in flight. Shortened in tests.
+    static let defaultUsageTimeout = Duration.seconds(5)
+    var usageTimeout = SessionStore.defaultUsageTimeout
+
     private var connection: DaemonConnection?
     private var listening: Task<Void, Never>?
     private var refreshing: Task<Void, Never>?
@@ -144,12 +149,20 @@ public final class SessionStore {
         send(.usage)
         send(.usageHistory)
 
-        // Nothing may spin forever. A daemon that does not answer in a few
-        // seconds is a daemon with a problem of its own, and the connection
+        guard case .connected = state else {
+            // The request could not be written, so no answer is coming and
+            // there is nothing to wait for.
+            refreshingUsage = false
+            return
+        }
+
+        // Nothing may wait forever. A daemon that does not answer within
+        // this is a daemon with a problem of its own, and the connection
         // state is where that belongs.
         answerWaiting?.cancel()
         answerWaiting = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            let waiting = self?.usageTimeout ?? Self.defaultUsageTimeout
+            try? await Task.sleep(for: waiting)
             guard let self, !Task.isCancelled else { return }
             refreshingUsage = false
         }

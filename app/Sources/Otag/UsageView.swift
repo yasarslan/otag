@@ -54,10 +54,18 @@ struct UsageWidget: View {
 struct UsageRefresh: View {
     let store: SessionStore
 
-    /// Set while the icon turns, and again when the answer has landed, so
-    /// pressing the button is visibly something rather than nothing.
+    /// How far the icon has turned, and the task turning it.
+    ///
+    /// One finite step at a time rather than one endless animation: an
+    /// animation told to repeat forever is only stopped by changing the
+    /// value it animates, and the value it had already reached was the
+    /// value it was going to be set to. So it never stopped.
     @State private var turn = 0.0
+    @State private var spinning: Task<Void, Never>?
     @State private var justUpdated = false
+
+    /// How long one step of the turn takes.
+    private static let step = Duration.milliseconds(250)
 
     var body: some View {
         HStack(spacing: 4) {
@@ -84,13 +92,7 @@ struct UsageRefresh: View {
             .accessibilityLabel("Refresh usage")
         }
         .onChange(of: store.refreshingUsage) { _, refreshing in
-            // One turn of the icon per re-read, started when the request
-            // goes out and finished when the answer arrives. Nothing spins
-            // forever: the store stops waiting on its own.
-            withAnimation(refreshing ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-                : .easeOut(duration: 0.2)) {
-                turn = refreshing ? turn + 360 : turn.rounded()
-            }
+            spin(refreshing)
         }
         .onChange(of: store.usageUpdatedAt) {
             withAnimation { justUpdated = true }
@@ -98,6 +100,31 @@ struct UsageRefresh: View {
                 try? await Task.sleep(for: .seconds(2))
                 withAnimation { justUpdated = false }
             }
+        }
+        .onDisappear {
+            spinning?.cancel()
+            spinning = nil
+        }
+    }
+
+    /// Turn the icon while a re-read is in flight, and stop when it is not.
+    ///
+    /// Each step is an animation that ends, so the icon stops as soon as
+    /// nothing is asking it to turn: the store clears its flag when the
+    /// report arrives, and gives up by itself if none does.
+    private func spin(_ refreshing: Bool) {
+        spinning?.cancel()
+        guard refreshing else {
+            withAnimation(.easeOut(duration: 0.2)) { turn = 0 }
+            return
+        }
+
+        spinning = Task { @MainActor in
+            while !Task.isCancelled, store.refreshingUsage {
+                withAnimation(.linear(duration: 0.25)) { turn += 120 }
+                try? await Task.sleep(for: Self.step)
+            }
+            withAnimation(.easeOut(duration: 0.2)) { turn = 0 }
         }
     }
 }

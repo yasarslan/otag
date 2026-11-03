@@ -227,7 +227,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knows when it resets and the projection lands before then.
 - The refresh button is always there, not only when the numbers have gone
   stale, and it has a hit area rather than a ten-point glyph to aim at. It
-  turns while otag is re-reading and says "Updated" when the answer lands.
+  turns while otag is re-reading and says "Updated" when the answer lands,
+  and it stops turning when the answer arrives — whether or not the numbers
+  in it changed — or within five seconds if none does.
 - A reading of a window that is still running no longer disappears because
   another window has reset, or because nobody has confirmed it for a while.
   One window being over said "waiting for fresh data" for the whole widget

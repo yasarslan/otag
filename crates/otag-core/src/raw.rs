@@ -151,13 +151,27 @@ pub async fn attach_pane(
     pane: PaneId,
     size: Option<PaneSize>,
 ) -> Result<Response> {
-    if let Some(size) = size {
+    // The handle is taken before anything else, and everything after it
+    // works through that handle rather than looking the pane up again. A
+    // program can print its last line and end at any moment, including
+    // between these two statements, and a client that asked to watch it is
+    // still owed that line and the news that the program ended.
+    let handle = match session.pane(pane) {
+        Some(handle) => handle,
+        // Already over by the time the attach arrived, which is the normal
+        // case for a program that prints one line and exits.
+        None => session
+            .ended_pane(pane)
+            .ok_or(Error::PaneGone { id: Some(pane) })?,
+    };
+
+    // Resizing is for a pane that is still running; a pane that has ended
+    // has nothing to resize, and the client is only being shown what it
+    // left behind.
+    if let Some(size) = size.filter(|_| !handle.is_finished()) {
         session.resize_pane_to(pane, size).await?;
     }
 
-    let handle = session
-        .pane(pane)
-        .ok_or(Error::PaneGone { id: Some(pane) })?;
     let attach = handle.attach_raw().await?;
     let first = screen_response(pane, &attach);
 

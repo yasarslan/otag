@@ -16,7 +16,7 @@
 //! that clients watch, which is how they learn to ask for a new view instead
 //! of being sent one they then have to reconcile.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -53,6 +53,12 @@ const OUTPUT_QUEUE: usize = 256;
 
 /// What a tab is called before anything better is known about it.
 const SHELL_TITLE: &str = "shell";
+
+/// How many panes that have ended stay reachable.
+///
+/// Enough that every client watching a pane as it ends can still be served,
+/// and few enough that the screens they hold are never worth counting.
+const ENDED_KEPT: usize = 8;
 
 /// How long a hook's word on what an agent is doing outlasts the words on
 /// its screen.
@@ -144,12 +150,41 @@ impl PaneHandle {
     /// A receiver that falls far enough behind that otag has dropped output
     /// it never received is told it lagged, and the only correct answer to
     /// that is to ask for this again.
+    ///
+    /// A pane whose program has ended answers from its last published
+    /// screen instead: that screen is everything the program ever printed,
+    /// including its last line, and there is nothing more to come.
     pub async fn attach_raw(&self) -> Result<RawAttach> {
         let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
-        self.send(PaneCommand::Attach(attach_tx)).await?;
-        attach_rx
-            .await
-            .map_err(|_| Error::PaneGone { id: Some(self.id) })
+        if self.send(PaneCommand::Attach(attach_tx)).await.is_ok()
+            && let Ok(attach) = attach_rx.await
+        {
+            return Ok(attach);
+        }
+        self.last_attach()
+    }
+
+    /// What a client needs in order to show a pane that is already over.
+    ///
+    /// The pane's task is gone, so nobody can build this from the emulator
+    /// any more; the last state the task published is the whole truth, and
+    /// an output channel with no sender tells the stream straight away that
+    /// there is nothing to follow.
+    fn last_attach(&self) -> Result<RawAttach> {
+        let state = self.snapshot();
+        if state.exit.is_none() {
+            // The task is unreachable without having reported an end, which
+            // is not a pane a client can be given.
+            return Err(Error::PaneGone { id: Some(self.id) });
+        }
+
+        let (sender, output) = broadcast::channel(1);
+        drop(sender);
+        Ok(RawAttach {
+            snapshot: crate::replay::snapshot(&state.screen),
+            size: state.screen.size(),
+            output,
+        })
     }
 
     /// Write bytes to the program's input.
@@ -325,6 +360,15 @@ struct State {
     /// How the pane that ended most recently ended, for the client's last
     /// word on a session that is over.
     last_exit: Option<PaneExit>,
+    /// Handles on the panes that have ended, newest last.
+    ///
+    /// A client can ask to watch a pane at any moment, including just after
+    /// its program printed its last line and ended. Looking the pane up in
+    /// `panes` then finds nothing, and the client would be told the pane is
+    /// gone instead of being shown what the program left on the screen. The
+    /// handle is kept so that attaching late still works; it holds no
+    /// pseudo-terminal and no process, only the last screen.
+    ended: VecDeque<(PaneId, PaneHandle)>,
     /// How much of the agents' limits is used, as the daemon last worked it
     /// out. The session does not compute this; it carries it to the clients
     /// with everything else they draw.
@@ -429,6 +473,7 @@ impl Session {
                 sidebar: true,
                 generation: 0,
                 last_exit: None,
+                ended: VecDeque::new(),
                 usage: Report::default(),
             }),
         })
@@ -714,6 +759,22 @@ impl Session {
     pub fn pane(&self, id: PaneId) -> Option<PaneHandle> {
         let state = self.state.lock().ok()?;
         state.panes.get(&id).map(|pane| pane.handle.clone())
+    }
+
+    /// A pane whose program has ended, if it is still remembered.
+    ///
+    /// Only for showing what is over: the pane is out of the layout, nothing
+    /// can be typed into it, and the one thing it can still answer is what
+    /// its program left on the screen and how it ended.
+    #[must_use]
+    pub fn ended_pane(&self, id: PaneId) -> Option<PaneHandle> {
+        let state = self.state.lock().ok()?;
+        state
+            .ended
+            .iter()
+            .rev()
+            .find(|(ended, _)| *ended == id)
+            .map(|(_, handle)| handle.clone())
     }
 
     /// The pane the user is typing into.
@@ -1181,8 +1242,15 @@ impl Session {
     async fn close_pane(self: &Arc<Self>, id: PaneId, exit: Option<PaneExit>) {
         {
             let Ok(mut state) = self.lock() else { return };
-            if state.panes.remove(&id).is_none() {
+            let Some(pane) = state.panes.remove(&id) else {
                 return;
+            };
+            // A client may still be about to ask for this pane: it is kept
+            // reachable so that the last thing the program printed, and the
+            // news that it ended, are still there to be sent.
+            state.ended.push_back((id, pane.handle));
+            while state.ended.len() > ENDED_KEPT {
+                state.ended.pop_front();
             }
             if exit.is_some() {
                 state.last_exit = exit;

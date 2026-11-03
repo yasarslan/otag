@@ -375,3 +375,53 @@ async fn a_pane_whose_program_ends_says_so() {
     stop.shutdown();
     let _ = tokio::time::timeout(TIMEOUT, serving).await;
 }
+
+#[tokio::test]
+async fn a_pane_watched_only_after_its_program_ended_still_shows_what_it_printed() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let socket = directory.path().join("otag.sock");
+
+    let session = Session::new(PaneSpec::command(["/bin/sh", "-c", "printf 'bye\\n'"]));
+    session
+        .attach(PaneSize::new(24, 80), None)
+        .await
+        .expect("a pane");
+    let pane = *session.visible_panes().first().expect("one pane");
+
+    let server = Server::bind(&socket).await.expect("the server binds");
+    let stop = server.shutdown_handle();
+    let daemon = TestDaemon {
+        session: Arc::clone(&session),
+        attachments: Attachments::new(),
+    };
+    let serving = tokio::spawn(async move { server.run(daemon).await });
+
+    // Wait for the program to be over before anyone asks to watch it. This
+    // is the race the raw path used to lose — a client's attach arriving
+    // after the exit was answered with "the pane is gone", and the line the
+    // program printed was never sent at all.
+    let ended = tokio::time::timeout(TIMEOUT, async {
+        loop {
+            if session.visible_panes().is_empty() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "the program never ended");
+
+    {
+        let mut client = RawClient::attach(&socket, pane, None).await;
+        assert!(
+            client.text().contains("bye"),
+            "the pane's last screen is the replay: {}",
+            client.text()
+        );
+        // And the news that it ended still follows.
+        client.read_until_ended().await;
+    }
+
+    stop.shutdown();
+    let _ = tokio::time::timeout(TIMEOUT, serving).await;
+}

@@ -209,3 +209,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The last thing a program prints always reaches the screen before otag
   reports that the program ended, so a crash message is no longer lost on
   the way out.
+- Watching a pane whose program has just ended shows what it printed and
+  then that it ended, instead of answering that the pane is gone. A program
+  that prints one line and exits is no longer a blank window.

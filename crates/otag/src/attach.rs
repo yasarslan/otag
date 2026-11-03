@@ -600,6 +600,7 @@ mod tests {
                 },
             ],
             focus: Some(pane_id(2)),
+            usage: Default::default(),
         }
     }
 

@@ -1001,9 +1001,11 @@ dependencies = [
  "crossterm",
  "otag-agents",
  "otag-core",
+ "otag-features",
  "otag-persist",
  "otag-ui",
  "portable-pty",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
@@ -1028,6 +1030,7 @@ name = "otag-core"
 version = "0.1.0"
 dependencies = [
  "otag-agents",
+ "otag-features",
  "portable-pty",
  "serde",
  "serde_json",
@@ -1041,12 +1044,19 @@ dependencies = [
 [[package]]
 name = "otag-features"
 version = "0.1.0"
+dependencies = [
+ "otag-agents",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "otag-persist"
 version = "0.1.0"
 dependencies = [
+ "otag-agents",
  "otag-core",
+ "otag-features",
  "rusqlite",
  "serde_json",
  "tempfile",
@@ -1062,6 +1072,7 @@ dependencies = [
  "crossterm",
  "otag-agents",
  "otag-core",
+ "otag-features",
  "ratatui",
  "tracing",
 ]

@@ -14,10 +14,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use otag_agents::{AgentKind, adapter_for_process};
+use otag_core::pane::PaneId;
 use otag_core::session::{AgentPane, Session};
+
+use crate::usage;
 
 /// How often the processes are listed.
 ///
@@ -34,19 +37,30 @@ const INTERVAL: Duration = Duration::from_secs(1);
 const PS: [&str; 3] = ["-ax", "-o", "pid=,ppid=,args="];
 
 /// Watch the panes for agents until the daemon stops.
-pub async fn keep_watching(session: Arc<Session>) {
+pub async fn keep_watching(session: Arc<Session>, shared: Arc<usage::Shared>) {
     let home = home_dir();
     let mut ticks = tokio::time::interval(INTERVAL);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut read = Read::default();
 
     loop {
         ticks.tick().await;
-        watch_once(&session, home.as_deref()).await;
+        watch_once(&session, home.as_deref(), &shared, &mut read).await;
     }
 }
 
-/// One pass: find the agents, their status, and the sessions they resume by.
-async fn watch_once(session: &Arc<Session>, home: Option<&Path>) {
+/// When each pane's session file was last read, so that an unchanged file is
+/// not parsed again every second.
+type Read = HashMap<PaneId, SystemTime>;
+
+/// One pass: find the agents, what they are doing, the sessions they resume
+/// by, and what they have spent.
+async fn watch_once(
+    session: &Arc<Session>,
+    home: Option<&Path>,
+    shared: &Arc<usage::Shared>,
+    read: &mut Read,
+) {
     let panes = session.agent_panes();
     if panes.is_empty() {
         return;
@@ -60,6 +74,8 @@ async fn watch_once(session: &Arc<Session>, home: Option<&Path>) {
         None => return,
     };
     let tree = Tree::of(&processes);
+    let ids: Vec<PaneId> = panes.iter().map(|pane| pane.id).collect();
+    let mut fresh = false;
 
     for pane in panes {
         let found = pane.pid.and_then(|pid| tree.agent_in(pid));
@@ -78,8 +94,65 @@ async fn watch_once(session: &Arc<Session>, home: Option<&Path>) {
 
         if pane.session_id.is_none() {
             adopt_session(session, home, &pane, agent).await;
+            continue;
+        }
+        if read_session(session, shared, &pane, agent, read).await {
+            fresh = true;
         }
     }
+
+    if fresh {
+        // What each pane spent has changed, and with it what otag can say
+        // about an agent that reports no percentage of its own.
+        for (agent, tokens) in usage::per_agent(session) {
+            shared.record_tokens(agent, tokens);
+        }
+        usage::publish(session, shared).await;
+    }
+    read.retain(|pane, _| ids.contains(pane));
+}
+
+/// Read one pane's session file, when it has changed since otag last did.
+///
+/// Returns whether anything new was learned. The file belongs to the agent
+/// and may be large, so it is parsed on a thread that may block, and only
+/// when the filesystem says it has moved on.
+async fn read_session(
+    session: &Arc<Session>,
+    shared: &Arc<usage::Shared>,
+    pane: &AgentPane,
+    agent: AgentKind,
+    read: &mut Read,
+) -> bool {
+    let Some(path) = pane.session_path.clone() else {
+        return false;
+    };
+    let Ok(modified) = std::fs::metadata(&path).and_then(|data| data.modified()) else {
+        return false;
+    };
+    if read.get(&pane.id) == Some(&modified) {
+        return false;
+    }
+    read.insert(pane.id, modified);
+
+    let parsed = tokio::task::spawn_blocking(move || agent.adapter().read_transcript(&path)).await;
+    let transcript = match parsed {
+        Ok(Ok(transcript)) => transcript,
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "a session file could not be read");
+            return false;
+        }
+        Err(error) => {
+            tracing::debug!(%error, "reading a session file was cancelled");
+            return false;
+        }
+    };
+
+    // What the agent says about its own limits always wins over what otag
+    // counted; both are kept, and the report decides which to show.
+    shared.record_limits(agent, &transcript.limits);
+    session.set_tokens(pane.id, transcript.tokens).await;
+    true
 }
 
 /// Find the agent session a pane is running, and how to resume it.
@@ -100,6 +173,7 @@ async fn adopt_session(
     // The command that brings this pane back is the one that continues the
     // session, so a restored pane carries on rather than starting over.
     let resume = adapter.resume_command(&found);
+    session.set_session_path(pane.id, found.path).await;
     session.set_session_id(pane.id, found.id).await;
     session.set_restore_command(pane.id, resume).await;
 }
@@ -325,7 +399,8 @@ mod tests {
     #[tokio::test]
     async fn a_pass_over_a_session_without_panes_does_nothing() {
         let session = Session::new(otag_core::pane::PaneSpec::shell());
-        watch_once(&session, None).await;
+        let shared = usage::Shared::new();
+        watch_once(&session, None, &shared, &mut Read::default()).await;
         assert!(session.is_empty());
     }
 
@@ -349,9 +424,11 @@ mod tests {
 
         // The pane has to draw its first line and `ps` has to see it, so the
         // pass is repeated rather than waited for with a fixed delay.
+        let shared = usage::Shared::new();
+        let mut read = Read::default();
         let mut found = None;
         for _ in 0..50 {
-            watch_once(&session, Some(dir.path())).await;
+            watch_once(&session, Some(dir.path()), &shared, &mut read).await;
             let panes = session.agent_panes();
             let pane = panes.first().expect("the pane is still there");
             if pane.agent.is_some() && pane.status != otag_agents::PaneStatus::Idle {
@@ -391,5 +468,73 @@ mod tests {
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).expect("the file can be made runnable");
+    }
+
+    /// Where the redacted samples of real agent files live.
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
+
+    /// A pane as the watcher sees it, pointed at a session file.
+    fn pane_with_session(path: &Path) -> AgentPane {
+        AgentPane {
+            id: otag_core::pane::PaneId::FIRST,
+            pid: None,
+            cwd: None,
+            started_at: SystemTime::now(),
+            agent: Some(AgentKind::Codex),
+            status: otag_agents::PaneStatus::Working,
+            session_id: Some("a-session".to_owned()),
+            session_path: Some(path.to_path_buf()),
+            tokens: otag_agents::Tokens::default(),
+            trusts_the_screen: true,
+            screen: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn what_a_rollout_file_says_about_the_limits_reaches_the_usage_report() {
+        let session = Session::new(otag_core::pane::PaneSpec::shell());
+        let shared = usage::Shared::new();
+        let path = Path::new(FIXTURES).join("codex-rollout.jsonl");
+        let pane = pane_with_session(&path);
+        let mut read = Read::default();
+
+        assert!(
+            read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await,
+            "the file was read"
+        );
+
+        let report = shared.report();
+        assert_eq!(report.rows.len(), 2, "both windows the rollout carries");
+        assert_eq!(report.rows[0].used_pct(), 36);
+        assert_eq!(report.rows[1].used_pct(), 9);
+    }
+
+    #[tokio::test]
+    async fn a_session_file_that_has_not_changed_is_not_read_again() {
+        let session = Session::new(otag_core::pane::PaneSpec::shell());
+        let shared = usage::Shared::new();
+        let path = Path::new(FIXTURES).join("codex-rollout.jsonl");
+        let pane = pane_with_session(&path);
+        let mut read = Read::default();
+
+        assert!(read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+        assert!(
+            !read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await,
+            "parsing a transcript every second would be the daemon's whole budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pane_with_no_session_file_is_not_read() {
+        let session = Session::new(otag_core::pane::PaneSpec::shell());
+        let shared = usage::Shared::new();
+        let mut pane = pane_with_session(Path::new("/no/such/file.jsonl"));
+        let mut read = Read::default();
+
+        assert!(!read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+
+        pane.session_path = None;
+        assert!(!read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+        assert!(shared.report().is_empty());
     }
 }

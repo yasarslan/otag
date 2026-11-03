@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A usage widget at the bottom of the sidebar: how much of each agent's
+  five-hour and weekly windows is gone, when the window resets, and — once
+  there are three readings — when it would be full at the rate of the last
+  twenty minutes. It turns amber at 70% and red at 90%, and nothing blinks.
+- `otag usage` prints the same numbers, and `otag usage --json` prints them
+  for a script or an agent to read, with what each pane has spent.
+- The numbers come from the agents themselves: Claude Code reports them
+  through otag's status line, Codex in its session files. An agent that
+  reports no percentage is shown as a token count, marked `~`, because no
+  one knows what such an account's allowance is.
+- The usage history survives a restart, so a projection is available again
+  immediately rather than after three more readings.
 - otag notices the agents in its panes. A pane running Claude Code or Codex
   gets the agent's name on its border, and a mark saying whether it is
   working, done, looping, failing or waiting for permission — in the pane's

@@ -250,3 +250,35 @@ fn help_and_version_flags_work_without_a_daemon() {
         "`--help` does not start a daemon"
     );
 }
+
+#[test]
+fn usage_says_there_is_nothing_yet_and_how_to_get_it() {
+    let sandbox = Sandbox::new();
+    succeeds(sandbox.otag().arg("ping"));
+
+    let reported = succeeds(sandbox.otag().arg("usage"));
+    assert!(
+        reported.contains("no usage yet") && reported.contains("install-hooks"),
+        "a user with no numbers is told how to get them: {reported}"
+    );
+}
+
+#[test]
+fn usage_prints_json_for_a_script_to_read() {
+    let sandbox = Sandbox::new();
+    succeeds(sandbox.otag().arg("ping"));
+
+    let reported = succeeds(sandbox.otag().args(["usage", "--json"]));
+    let document: serde_json::Value = serde_json::from_str(&reported).expect("the output is JSON");
+    assert!(
+        document["report"]["rows"].is_array(),
+        "the shape is stable even when there is nothing to report: {reported}"
+    );
+}
+
+#[test]
+fn usage_without_a_daemon_says_so_rather_than_failing() {
+    let sandbox = Sandbox::new();
+    let reported = succeeds(sandbox.otag().arg("usage"));
+    assert_eq!(reported.trim(), "no daemon is running");
+}

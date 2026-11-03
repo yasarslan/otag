@@ -180,6 +180,33 @@ pub async fn keep_saving(session: Arc<Session>, snapshots: Snapshots) {
     }
 }
 
+/// Put the usage history back after a restart.
+///
+/// A projection needs the samples of the last twenty minutes, so a daemon
+/// that has just started would otherwise show percentages with no slope
+/// behind them for as long as it takes to collect three more.
+pub async fn restore_usage(shared: &crate::usage::Shared, snapshots: &Snapshots) {
+    let samples = snapshots.with(|store| store.load_usage()).await;
+    let Some(samples) = samples else {
+        return;
+    };
+    if !samples.is_empty() {
+        tracing::info!(samples = samples.len(), "usage history restored");
+        shared.load(samples);
+    }
+}
+
+/// Save the usage history.
+pub async fn save_usage(shared: &crate::usage::Shared, snapshots: &Snapshots) {
+    let samples = shared.samples();
+    if samples.is_empty() {
+        return;
+    }
+    snapshots
+        .with(move |store| store.save_usage(&samples))
+        .await;
+}
+
 /// Save the session and the lines every pane has shown.
 pub async fn save_everything(session: &Session, snapshots: &Snapshots) {
     snapshots.save_session(session.snapshot()).await;

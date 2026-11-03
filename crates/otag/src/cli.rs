@@ -45,6 +45,12 @@ pub enum Command {
     KillServer,
     /// List workspaces and panes.
     Ls,
+    /// Print how much of the agents' limits is used.
+    Usage {
+        /// Print the numbers as JSON instead of as lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report an agent event to the daemon. Agents run this themselves.
     ///
     /// The event is the name otag registered the command under; the payload
@@ -102,6 +108,10 @@ pub fn run() -> Result<()> {
         Command::Ls => {
             logging::init_client(cli.log.as_deref());
             client_runtime()?.block_on(crate::client::ls(&socket))
+        }
+        Command::Usage { json } => {
+            logging::init_client(cli.log.as_deref());
+            client_runtime()?.block_on(crate::client::usage(&socket, json))
         }
         Command::Hook { event } => {
             // A hook is logged nowhere by default: it runs inside an agent's

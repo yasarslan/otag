@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use otag_core::client;
 use otag_core::paths::Dirs;
 use otag_core::proto::{Request, Response};
+use otag_ui::usage as ui_usage;
 
 /// How long to wait for a freshly spawned daemon to start listening.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -79,6 +80,71 @@ pub async fn ls(socket: &Path) -> Result<()> {
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// Print how much of the agents' limits is used.
+///
+/// `--json` prints exactly what the daemon reported, for a script or for an
+/// agent asking about its own budget; without it the same numbers are
+/// printed the way the widget shows them.
+pub async fn usage(socket: &Path, as_json: bool) -> Result<()> {
+    let (report, panes) = match client::request(socket, &Request::Usage).await {
+        Ok(Response::Usage { report, panes }) => (*report, panes),
+        Ok(other) => bail!(unexpected(other)),
+        Err(otag_core::Error::NotRunning { .. }) => {
+            println!("no daemon is running");
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    if as_json {
+        let document = serde_json::json!({ "report": report, "panes": panes });
+        println!("{document}");
+        return Ok(());
+    }
+
+    if report.is_empty() {
+        println!(
+            "no usage yet. Claude Code reports its limits through otag's status line              (`otag install-hooks`), and Codex reports them in its session files."
+        );
+    }
+    for row in &report.rows {
+        let mut line = format!(
+            "{} {} {:>3}%",
+            row.agent,
+            row.window.label(),
+            row.used_pct()
+        );
+        if let Some(full_in) = row.full_in {
+            line.push_str(&format!(" · full in {}", ui_usage::duration(full_in)));
+        }
+        if let Some(resets_in) = row.resets_in.filter(|resets_in| *resets_in > 0) {
+            line.push_str(&format!(" · resets {}", ui_usage::duration(resets_in)));
+        }
+        println!("{line}");
+    }
+    for counted in &report.counted {
+        println!(
+            "{} ~{} tokens (it reports no limits of its own)",
+            counted.agent,
+            ui_usage::tokens(counted.tokens)
+        );
+    }
+
+    for pane in panes
+        .iter()
+        .filter(|pane| pane.agent.is_some() && pane.tokens.total() > 0)
+    {
+        println!(
+            "  pane {}: {} {} tokens",
+            pane.pane,
+            pane.agent
+                .map_or_else(String::new, |agent| agent.to_string()),
+            ui_usage::tokens(pane.tokens.total())
+        );
+    }
+    Ok(())
 }
 
 /// Print this binary's version, and the running daemon's version if there is

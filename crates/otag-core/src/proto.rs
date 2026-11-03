@@ -17,7 +17,8 @@ use crate::frame::ScreenFrame;
 use crate::layout::{Area, Direction, Side};
 use crate::pane::{PaneExit, PaneId, PaneSize};
 use crate::workspace::{TabId, WorkspaceId};
-use otag_agents::{AgentKind, PaneStatus};
+use otag_agents::{AgentKind, PaneStatus, Tokens};
+use otag_features::usage::Report;
 
 /// A command sent from a client to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +34,9 @@ pub enum Request {
     /// List the panes the daemon is running. Answered with
     /// [`Response::Panes`].
     ListPanes,
+    /// Ask how much of the agents' limits is used. Answered with
+    /// [`Response::Usage`].
+    Usage,
     /// Attach to the session, starting a workspace and a pane if the daemon
     /// has none.
     ///
@@ -150,6 +154,15 @@ pub enum Response {
         /// Every pane the daemon is running.
         panes: Vec<PaneInfo>,
     },
+    /// Answer to [`Request::Usage`].
+    Usage {
+        /// How much of each agent's windows is used.
+        report: Box<Report>,
+        /// What each pane has spent, so the user can see which agent is
+        /// doing the spending.
+        #[serde(default)]
+        panes: Vec<PaneUsage>,
+    },
     /// Everything the client has to draw.
     ///
     /// Sent as the answer to [`Request::Attach`] and again whenever the
@@ -206,9 +219,26 @@ pub struct PaneInfo {
     /// The agent session otag would resume.
     #[serde(default)]
     pub session: Option<String>,
+    /// What the agent in it has spent.
+    #[serde(default)]
+    pub tokens: Tokens,
     /// How its program ended, if it has.
     #[serde(default)]
     pub exit: Option<PaneExit>,
+}
+
+/// What one pane has spent, for attributing usage to the agent that caused
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneUsage {
+    /// Which pane this is.
+    pub pane: PaneId,
+    /// The agent otag has noticed in it.
+    #[serde(default)]
+    pub agent: Option<AgentKind>,
+    /// What that agent has spent.
+    #[serde(default)]
+    pub tokens: Tokens,
 }
 
 /// One workspace, as the sidebar shows it.
@@ -307,6 +337,9 @@ pub struct SessionView {
     /// The pane the user is typing into.
     #[serde(default)]
     pub focus: Option<PaneId>,
+    /// How much of the agents' limits is used, for the widget.
+    #[serde(default)]
+    pub usage: Report,
 }
 
 impl SessionView {
@@ -439,6 +472,7 @@ mod tests {
                 exit: None,
             }],
             focus: Some(PaneId::FIRST),
+            usage: Default::default(),
         }
     }
 
@@ -531,6 +565,7 @@ mod tests {
                     agent: None,
                     status: PaneStatus::Idle,
                     session: None,
+                    tokens: Default::default(),
                     exit: None,
                 }],
             },
@@ -543,6 +578,7 @@ mod tests {
                     agent: Some(AgentKind::Claude),
                     status: PaneStatus::Working,
                     session: Some("a-session".to_owned()),
+                    tokens: Default::default(),
                     exit: Some(PaneExit {
                         code: Some(0),
                         signal: None,

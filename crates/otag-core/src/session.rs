@@ -32,7 +32,8 @@ use crate::screen::Screen;
 use crate::snapshot::{self, PaneSnapshot, Snapshot, TabSnapshot, WorkspaceSnapshot};
 use crate::workspace::{Tab, TabId, Workspace, WorkspaceId};
 use crate::{Error, Result};
-use otag_agents::{AgentKind, PaneStatus};
+use otag_agents::{AgentKind, PaneStatus, Tokens};
+use otag_features::usage::Report;
 
 /// Shortest time between two published screens.
 ///
@@ -157,6 +158,8 @@ pub struct PaneSummary {
     pub status: PaneStatus,
     /// The agent session otag would resume.
     pub session: Option<String>,
+    /// What the agent in it has spent.
+    pub tokens: Tokens,
     /// How its program ended, if it has.
     pub exit: Option<PaneExit>,
 }
@@ -178,6 +181,10 @@ pub struct AgentPane {
     pub status: PaneStatus,
     /// The agent session otag would resume.
     pub session_id: Option<String>,
+    /// The file that session is kept in.
+    pub session_path: Option<PathBuf>,
+    /// What the agent in it has spent, as far as otag has read.
+    pub tokens: Tokens,
     /// Whether a guess from the screen may set the status.
     pub trusts_the_screen: bool,
     /// What is on the screen, for the guess.
@@ -218,6 +225,10 @@ struct Pane {
     status: PaneStatus,
     /// The agent session otag would resume.
     session_id: Option<String>,
+    /// The file that session is kept in, for reading what it has spent.
+    session_path: Option<PathBuf>,
+    /// What the agent in it has spent, as far as otag has read.
+    tokens: Tokens,
     /// When a hook last said what the agent is doing.
     ///
     /// Hooks report what the agent is actually doing; the words on its
@@ -258,6 +269,10 @@ struct State {
     /// How the pane that ended most recently ended, for the client's last
     /// word on a session that is over.
     last_exit: Option<PaneExit>,
+    /// How much of the agents' limits is used, as the daemon last worked it
+    /// out. The session does not compute this; it carries it to the clients
+    /// with everything else they draw.
+    usage: Report,
 }
 
 impl State {
@@ -354,6 +369,7 @@ impl Session {
                 sidebar: true,
                 generation: 0,
                 last_exit: None,
+                usage: Report::default(),
             }),
         })
     }
@@ -643,6 +659,7 @@ impl Session {
             active_tab: state.workspace().map_or(0, Workspace::active),
             panes,
             focus: state.focus(),
+            usage: state.usage.clone(),
         }
     }
 
@@ -663,6 +680,7 @@ impl Session {
                     agent: pane.agent,
                     status: pane.status,
                     session: pane.session_id.clone(),
+                    tokens: pane.tokens,
                     workspace: state
                         .workspaces
                         .iter()
@@ -708,6 +726,8 @@ impl Session {
                 agent: pane.agent,
                 status: pane.status,
                 session_id: pane.session_id.clone(),
+                session_path: pane.session_path.clone(),
+                tokens: pane.tokens,
                 trusts_the_screen: pane.trusts_the_screen(),
                 screen: pane.handle.snapshot().screen.text(),
             })
@@ -772,6 +792,66 @@ impl Session {
         });
         self.commit(changed).await;
         changed
+    }
+
+    /// Record where the agent's session file is, for reading what it has
+    /// spent.
+    pub async fn set_session_path(self: &Arc<Self>, pane: PaneId, path: PathBuf) {
+        let changed = self.change(pane, |pane| {
+            if pane.session_path.as_deref() == Some(path.as_path()) {
+                return false;
+            }
+            pane.session_path = Some(path.clone());
+            true
+        });
+        // Nothing a client can see changed.
+        let _ = changed;
+    }
+
+    /// Record what the agent in a pane has spent.
+    pub async fn set_tokens(self: &Arc<Self>, pane: PaneId, tokens: Tokens) {
+        let changed = self.change(pane, |pane| {
+            if pane.tokens == tokens {
+                return false;
+            }
+            pane.tokens = tokens;
+            true
+        });
+        // Only the usage widget shows this, and it is published with the
+        // report rather than per pane.
+        let _ = changed;
+    }
+
+    /// Carry a new usage report to the clients.
+    ///
+    /// Reports that say the same thing are dropped, because publishing one
+    /// makes every client redraw.
+    pub async fn set_usage(self: &Arc<Self>, report: Report) {
+        let changed = match self.lock() {
+            Ok(mut state) => {
+                if state.usage == report {
+                    false
+                } else {
+                    state.usage = report;
+                    true
+                }
+            }
+            Err(_) => false,
+        };
+        self.commit(changed).await;
+    }
+
+    /// What each pane has spent, for attributing usage to an agent.
+    #[must_use]
+    pub fn pane_usage(&self) -> Vec<(PaneId, Option<AgentKind>, Tokens)> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+        state
+            .panes
+            .values()
+            .map(|pane| (pane.handle.id(), pane.agent, pane.tokens))
+            .collect()
     }
 
     /// Record the command that would bring a pane back as it is now.
@@ -1022,6 +1102,8 @@ impl Session {
             agent: None,
             status: PaneStatus::default(),
             session_id: None,
+            session_path: None,
+            tokens: Tokens::default(),
             last_hook: None,
         })
     }

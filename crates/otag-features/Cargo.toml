@@ -1,6 +1,6 @@
 [package]
 name = "otag-features"
-description = "Usage, inbox, handoff, guard and conflict features for otag"
+description = "Usage limits, burn rate and the rest of otag's agent-facing features"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,8 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+otag-agents = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

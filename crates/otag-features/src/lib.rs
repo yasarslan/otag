@@ -1,5 +1,9 @@
-//! Feature modules for otag: usage accounting, the approval inbox, handoff,
-//! the token guard and the conflict radar.
+//! The features otag builds on top of its panes and its adapters.
 //!
-//! This crate is a placeholder until the features are implemented.
+//! Each one is a small model with its own rules, kept away from both the
+//! terminal plumbing in `otag-core` and the file formats in `otag-agents`:
+//! what is here is arithmetic and judgement, which is the part worth testing
+//! on its own.
 #![forbid(unsafe_code)]
+
+pub mod usage;

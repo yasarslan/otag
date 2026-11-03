@@ -97,6 +97,7 @@ impl Handler for TestDaemon {
                         agent: pane.agent,
                         status: pane.status,
                         session: pane.session,
+                        tokens: pane.tokens,
                         exit: pane.exit,
                     })
                     .collect(),

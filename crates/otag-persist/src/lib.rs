@@ -16,10 +16,29 @@ use std::path::{Path, PathBuf};
 
 use otag_core::pane::PaneId;
 use otag_core::snapshot::Snapshot;
+use otag_features::usage::{self, Sample, Window};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// Name of the database file inside otag's state directory.
 pub const DATABASE_FILE_NAME: &str = "state.sqlite";
+
+/// The name a window is stored under.
+///
+/// Spelled out here rather than taken from the enum, so that renaming a
+/// variant cannot silently orphan a week of samples.
+const fn window_name(window: Window) -> &'static str {
+    match window {
+        Window::FiveHour => "five_hour",
+        Window::Weekly => "weekly",
+    }
+}
+
+/// The window one of those names means, if this build knows it.
+fn window_from_name(name: &str) -> Option<Window> {
+    Window::ALL
+        .into_iter()
+        .find(|window| window_name(*window) == name)
+}
 
 /// How hard a pane's saved lines are compressed.
 ///
@@ -112,6 +131,14 @@ impl Store {
                  pane     INTEGER PRIMARY KEY,
                  saved_at INTEGER NOT NULL,
                  lines    BLOB    NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS usage_samples (
+                 agent     TEXT    NOT NULL,
+                 window    TEXT    NOT NULL,
+                 at        INTEGER NOT NULL,
+                 used_pct  REAL    NOT NULL,
+                 resets_at INTEGER,
+                 PRIMARY KEY (agent, window, at)
              );",
         )
     }
@@ -195,9 +222,99 @@ impl Store {
         self.execute(&format!("DELETE FROM history WHERE pane NOT IN ({kept})"))
     }
 
+    /// Save usage samples, and forget what is older than a week.
+    ///
+    /// A sample otag already has is left alone: the same reading arriving
+    /// twice is one reading, and the key says so.
+    pub fn save_usage(&self, samples: &[Sample]) -> Result<()> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let newest = samples.iter().map(|sample| sample.at).max().unwrap_or(0);
+
+        let mut statement = self
+            .connection
+            .prepare(
+                "INSERT INTO usage_samples (agent, window, at, used_pct, resets_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (agent, window, at) DO UPDATE
+                 SET used_pct = ?4, resets_at = ?5",
+            )
+            .map_err(|source| self.failed(source))?;
+        for sample in samples {
+            statement
+                .execute(params![
+                    sample.agent.name(),
+                    window_name(sample.window),
+                    sample.at,
+                    f64::from(sample.used_pct),
+                    sample.resets_at,
+                ])
+                .map_err(|source| self.failed(source))?;
+        }
+        drop(statement);
+
+        self.connection
+            .execute(
+                "DELETE FROM usage_samples WHERE at < ?1",
+                params![newest.saturating_sub(usage::HISTORY)],
+            )
+            .map_err(|source| self.failed(source))?;
+        Ok(())
+    }
+
+    /// Every usage sample that was saved, oldest first.
+    ///
+    /// A row whose agent or window this build does not know is skipped: it
+    /// was written by a newer otag, and inventing a meaning for it would be
+    /// worse than one missing reading.
+    pub fn load_usage(&self) -> Result<Vec<Sample>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT agent, window, at, used_pct, resets_at
+                 FROM usage_samples ORDER BY at",
+            )
+            .map_err(|source| self.failed(source))?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                ))
+            })
+            .map_err(|source| self.failed(source))?;
+
+        let mut samples = Vec::new();
+        for row in rows {
+            let (agent, window, at, used_pct, resets_at) =
+                row.map_err(|source| self.failed(source))?;
+            let (Ok(agent), Some(window)) = (agent.parse(), window_from_name(&window)) else {
+                continue;
+            };
+            samples.push(Sample {
+                agent,
+                window,
+                used_pct: used_pct as f32,
+                resets_at,
+                at,
+            });
+        }
+        Ok(samples)
+    }
+
     /// Forget the whole saved session.
     pub fn clear(&self) -> Result<()> {
         self.execute("DELETE FROM session; DELETE FROM history;")
+    }
+
+    /// Forget every usage sample.
+    pub fn clear_usage(&self) -> Result<()> {
+        self.execute("DELETE FROM usage_samples;")
     }
 
     fn execute(&self, sql: &str) -> Result<()> {
@@ -470,5 +587,121 @@ mod tests {
         let error = Store::open("/no/such/directory/anywhere/state.sqlite")
             .expect_err("the database cannot be opened");
         assert!(error.to_string().contains("state.sqlite"), "{error}");
+    }
+
+    #[test]
+    fn usage_samples_survive_a_round_trip() {
+        let store = Store::open_in_memory().expect("a database");
+        let samples = [
+            Sample {
+                agent: otag_agents::AgentKind::Claude,
+                window: Window::FiveHour,
+                used_pct: 62.5,
+                resets_at: Some(1_700_000_000),
+                at: 1_699_999_000,
+            },
+            Sample {
+                agent: otag_agents::AgentKind::Codex,
+                window: Window::Weekly,
+                used_pct: 3.0,
+                resets_at: None,
+                at: 1_699_999_500,
+            },
+        ];
+
+        store.save_usage(&samples).expect("the samples are saved");
+        let read = store.load_usage().expect("and read back");
+
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].used_pct, 62.5);
+        assert_eq!(read[0].resets_at, Some(1_700_000_000));
+        assert_eq!(read[1].agent, otag_agents::AgentKind::Codex);
+        assert_eq!(read[1].window, Window::Weekly);
+        assert_eq!(read[1].resets_at, None);
+    }
+
+    #[test]
+    fn the_same_reading_saved_twice_is_one_row() {
+        let store = Store::open_in_memory().expect("a database");
+        let sample = Sample {
+            agent: otag_agents::AgentKind::Claude,
+            window: Window::FiveHour,
+            used_pct: 10.0,
+            resets_at: None,
+            at: 1_700_000_000,
+        };
+
+        store.save_usage(&[sample]).expect("saved");
+        store
+            .save_usage(&[Sample {
+                used_pct: 11.0,
+                ..sample
+            }])
+            .expect("saved again");
+
+        let read = store.load_usage().expect("read back");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].used_pct, 11.0, "the newer reading wins");
+    }
+
+    #[test]
+    fn usage_samples_older_than_a_week_are_dropped_on_save() {
+        let store = Store::open_in_memory().expect("a database");
+        let old = Sample {
+            agent: otag_agents::AgentKind::Claude,
+            window: Window::FiveHour,
+            used_pct: 1.0,
+            resets_at: None,
+            at: 1_000_000,
+        };
+        store.save_usage(&[old]).expect("saved");
+        store
+            .save_usage(&[Sample {
+                at: 1_000_000 + usage::HISTORY + 1,
+                ..old
+            }])
+            .expect("saved");
+
+        let read = store.load_usage().expect("read back");
+        assert_eq!(read.len(), 1, "a week of samples is enough");
+    }
+
+    #[test]
+    fn a_sample_written_by_a_newer_otag_is_skipped_rather_than_guessed_at() {
+        let store = Store::open_in_memory().expect("a database");
+        store
+            .connection
+            .execute(
+                "INSERT INTO usage_samples (agent, window, at, used_pct, resets_at)
+                 VALUES ('gemini', 'five_hour', 1, 5.0, NULL),
+                        ('claude', 'fortnight', 2, 5.0, NULL)",
+                [],
+            )
+            .expect("rows from the future");
+
+        assert!(store.load_usage().expect("read back").is_empty());
+    }
+
+    #[test]
+    fn saving_no_samples_does_nothing() {
+        let store = Store::open_in_memory().expect("a database");
+        store.save_usage(&[]).expect("nothing to do");
+        assert!(store.load_usage().expect("read back").is_empty());
+    }
+
+    #[test]
+    fn usage_samples_can_be_forgotten() {
+        let store = Store::open_in_memory().expect("a database");
+        store
+            .save_usage(&[Sample {
+                agent: otag_agents::AgentKind::Claude,
+                window: Window::FiveHour,
+                used_pct: 1.0,
+                resets_at: None,
+                at: 1,
+            }])
+            .expect("saved");
+        store.clear_usage().expect("forgotten");
+        assert!(store.load_usage().expect("read back").is_empty());
     }
 }

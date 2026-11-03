@@ -8,11 +8,11 @@ use otag_agents::{AgentKind, SessionRef, claude, hooks};
 use otag_core::attach;
 use otag_core::pane::{PaneId, PaneSize, PaneSpec};
 use otag_core::paths::{Dirs, SOCKET_ENV};
-use otag_core::proto::{PaneInfo, Request, Response};
+use otag_core::proto::{PaneInfo, PaneUsage, Request, Response};
 use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 
-use crate::{agents, persist};
+use crate::{agents, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -61,12 +61,24 @@ async fn serve(socket: &Path) -> Result<()> {
         None => None,
     };
 
+    // The usage history outlives one daemon run: a projection needs the last
+    // twenty minutes of samples, which a restart would otherwise throw away.
+    let shared_usage = usage::Shared::new();
+    if let Some(snapshots) = &snapshots {
+        persist::restore_usage(&shared_usage, snapshots).await;
+    }
+    usage::publish(&session, &shared_usage).await;
+
     // Agents are noticed whether or not the user installed otag's hooks, so
     // this runs for every daemon.
-    let watching = tokio::spawn(agents::keep_watching(Arc::clone(&session)));
+    let watching = tokio::spawn(agents::keep_watching(
+        Arc::clone(&session),
+        Arc::clone(&shared_usage),
+    ));
 
     let daemon = Daemon {
         session: Arc::clone(&session),
+        usage: Arc::clone(&shared_usage),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
     watching.abort();
@@ -78,6 +90,7 @@ async fn serve(socket: &Path) -> Result<()> {
             saving.abort();
         }
         persist::save_everything(&session, snapshots).await;
+        persist::save_usage(&shared_usage, snapshots).await;
     }
 
     tracing::info!("otag daemon stopped");
@@ -110,6 +123,7 @@ fn open_snapshots() -> Option<persist::Snapshots> {
 /// Everything one daemon owns.
 struct Daemon {
     session: Arc<Session>,
+    usage: Arc<usage::Shared>,
 }
 
 impl Handler for Daemon {
@@ -138,7 +152,21 @@ impl Handler for Daemon {
                         agent: pane.agent,
                         status: pane.status,
                         session: pane.session,
+                        tokens: pane.tokens,
                         exit: pane.exit,
+                    })
+                    .collect(),
+            }),
+            Request::Usage => Some(Response::Usage {
+                report: Box::new(self.usage.report()),
+                panes: self
+                    .session
+                    .pane_usage()
+                    .into_iter()
+                    .map(|(pane, agent, tokens)| PaneUsage {
+                        pane,
+                        agent,
+                        tokens,
                     })
                     .collect(),
             }),
@@ -254,8 +282,15 @@ impl Daemon {
             return;
         };
         if let Some(id) = line.session_id.clone() {
-            self.remember_session(pane, id, line.transcript_path, line.cwd)
+            self.remember_session(pane, id, line.transcript_path.clone(), line.cwd.clone())
                 .await;
+        }
+
+        // The status line is the only place Claude Code says how much of the
+        // account's limits is gone. Everything else otag shows about usage is
+        // counted, and says so.
+        if self.usage.record_limits(AgentKind::Claude, &line.limits()) {
+            usage::publish(&self.session, &self.usage).await;
         }
     }
 
@@ -267,6 +302,9 @@ impl Daemon {
         transcript: Option<PathBuf>,
         cwd: Option<PathBuf>,
     ) {
+        if let Some(path) = transcript.clone() {
+            self.session.set_session_path(pane, path).await;
+        }
         if !self.session.set_session_id(pane, id.clone()).await {
             // Already known, so the restore command is already right.
             return;
@@ -356,7 +394,13 @@ mod tests {
             .first()
             .copied()
             .expect("the pane is there");
-        (Daemon { session }, pane)
+        (
+            Daemon {
+                session,
+                usage: usage::Shared::new(),
+            },
+            pane,
+        )
     }
 
     #[tokio::test]
@@ -457,5 +501,63 @@ mod tests {
         let found = panes.first().expect("the pane");
         assert_eq!(found.status, PaneStatus::Idle);
         assert_eq!(found.session_id, None);
+    }
+
+    /// Where the redacted samples of real agent files live.
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
+
+    #[tokio::test]
+    async fn the_status_line_of_a_real_session_becomes_the_usage_report() {
+        let (daemon, pane) = with_one_pane().await;
+        let payload =
+            std::fs::read_to_string(std::path::Path::new(FIXTURES).join("claude-statusline.json"))
+                .expect("the fixture");
+
+        daemon
+            .hook(otag_agents::hooks::STATUS_LINE, Some(pane), &payload)
+            .await;
+
+        let report = daemon.usage.report();
+        assert_eq!(report.rows.len(), 2, "both windows the agent reported");
+        assert_eq!(
+            report.rows[0].window,
+            otag_features::usage::Window::FiveHour
+        );
+        assert_eq!(
+            report.rows[0].used_pct(),
+            70,
+            "what the widget shows is what the agent said"
+        );
+        assert_eq!(
+            report.rows[1].used_pct(),
+            58,
+            "the weekly window, rounded from the 57.99 the agent sent"
+        );
+        assert_eq!(
+            report.level(),
+            otag_features::usage::Level::Amber,
+            "seventy per cent is worth knowing about"
+        );
+
+        // The clients are told without asking.
+        assert_eq!(daemon.session.view().usage, report);
+    }
+
+    #[tokio::test]
+    async fn a_status_line_from_an_account_without_limits_adds_no_numbers() {
+        let (daemon, pane) = with_one_pane().await;
+        let payload = std::fs::read_to_string(
+            std::path::Path::new(FIXTURES).join("claude-statusline-no-usage.json"),
+        )
+        .expect("the fixture");
+
+        daemon
+            .hook(otag_agents::hooks::STATUS_LINE, Some(pane), &payload)
+            .await;
+
+        assert!(
+            daemon.usage.report().is_empty(),
+            "an account with no limits to report is not shown as zero per cent"
+        );
     }
 }

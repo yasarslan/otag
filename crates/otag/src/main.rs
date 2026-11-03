@@ -10,6 +10,7 @@ mod hook;
 mod install;
 mod logging;
 mod persist;
+mod usage;
 
 use std::process::ExitCode;
 

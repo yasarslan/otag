@@ -84,6 +84,13 @@ pub fn draw(frame: &mut Frame, view: &SessionView, screens: &Screens, theme: The
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), whole);
 
     frame.render_widget(Sidebar { view, theme }, rect(view.sidebar));
+    frame.render_widget(
+        crate::usage::Usage {
+            report: &view.usage,
+            theme,
+        },
+        usage_area(rect(view.sidebar), &view.usage),
+    );
     frame.render_widget(TabBar { view, theme }, rect(view.tabs_area));
 
     for pane in &view.panes {
@@ -173,6 +180,30 @@ impl Widget for Sidebar<'_> {
                 );
             }
         }
+    }
+}
+
+/// Where the usage widget goes: the bottom of the sidebar.
+///
+/// It takes only the rows it needs, and nothing at all when the sidebar is
+/// hidden or too short to hold both a workspace and a number. The workspaces
+/// keep the top, because a sidebar whose list moves when a percentage appears
+/// would be unreadable.
+fn usage_area(sidebar: Rect, report: &otag_features::usage::Report) -> Rect {
+    /// Rows kept for the header and at least one workspace.
+    const KEPT: u16 = 2;
+
+    let wanted = crate::usage::height(report);
+    if sidebar.is_empty() || wanted == 0 || sidebar.height <= KEPT {
+        return Rect::ZERO;
+    }
+
+    let height = wanted.min(sidebar.height.saturating_sub(KEPT));
+    Rect {
+        x: sidebar.x,
+        y: sidebar.bottom().saturating_sub(height),
+        width: sidebar.width,
+        height,
     }
 }
 
@@ -381,6 +412,7 @@ mod tests {
                 },
             ],
             focus: Some(pane_id(2)),
+            usage: Default::default(),
         }
     }
 

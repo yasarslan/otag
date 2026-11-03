@@ -12,6 +12,7 @@ authors.workspace = true
 [dependencies]
 otag-agents = { workspace = true }
 otag-core = { workspace = true }
+otag-features = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
 tracing = { workspace = true }

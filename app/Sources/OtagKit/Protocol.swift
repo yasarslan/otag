@@ -81,7 +81,7 @@ public enum AgentKind: String, Codable, Sendable {
     /// What the agent is called in the interface.
     public var label: String {
         switch self {
-        case .claude: return "Claude Code"
+        case .claude: return "Claude"
         case .codex: return "Codex"
         }
     }
@@ -164,7 +164,7 @@ public enum UsageWindow: String, Codable, Sendable {
     public var label: String {
         switch self {
         case .fiveHour: return "5h"
-        case .weekly: return "7d"
+        case .weekly: return "week"
         }
     }
 }
@@ -176,31 +176,27 @@ public enum UsageLevel: String, Codable, Sendable {
     case red
 }
 
-/// One window, as the widget shows it.
+/// One window, as the app shows it.
+///
+/// Three facts and nothing else: whose window it is, what the agent last
+/// reported about it, and when it resets. Everything the app used to add
+/// around those — an age, a projection, a hint — made the reading itself
+/// look like one more guess.
 public struct UsageRow: Codable, Hashable, Sendable, Identifiable {
     public var agent: AgentKind
     public var window: UsageWindow
     /// Tenths of a percentage point, as the daemon sends it, or nothing when
-    /// the window has reset and no reading of the new one has arrived.
+    /// otag has never had a reading of this window.
     public var usedTenths: UInt16?
-    public var resetsIn: Int64?
-    public var fullIn: Int64?
+    /// When the window resets, in seconds since the epoch, when the agent
+    /// said so and the reset is still to come.
+    public var resetsAt: Int64?
     public var level: UsageLevel = .calm
-    public var at: Int64 = 0
-    /// How old the reading is, in seconds, as the daemon measured it.
-    public var age: Int64 = 0
-    /// Whether the window has reset since the reading was taken, so that
-    /// otag is waiting for fresh data rather than showing a percentage.
-    public var reset: Bool = false
-    /// The agent session the reading came from, when it said which.
-    ///
-    /// Usage is account-wide, so this can be a session otag is not running.
-    public var session: String?
 
     public var id: String { "\(agent.rawValue)-\(window.rawValue)" }
 
     /// The percentage as a whole number, which is what is shown, or nothing
-    /// when there is no current reading to show.
+    /// when otag has had no reading of this window.
     public var usedPercent: Int? {
         usedTenths.map { Int($0 / 10) }
     }
@@ -210,65 +206,41 @@ public struct UsageRow: Codable, Hashable, Sendable, Identifiable {
         usedTenths.map { Double($0) / 1_000 } ?? 0
     }
 
-    /// Whether the reading is old enough that it should be shown as old.
-    ///
-    /// The daemon measures the age, so the app never compares the user's
-    /// clock with the daemon's.
-    public var isStale: Bool { age > 600 }
-
-    /// Whether this window has a reading that describes it as it is now.
-    ///
-    /// A number nobody has confirmed for a while, and a window waiting for
-    /// its first reading, are both shown as what they are rather than as
-    /// the state of things.
-    public var isCurrent: Bool { !reset && !isStale && usedTenths != nil }
+    /// When the window resets.
+    public var resetsDate: Date? {
+        resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
 
     enum CodingKeys: String, CodingKey {
         case agent, window
         case usedTenths = "used_tenths"
-        case resetsIn = "resets_in"
-        case fullIn = "full_in"
-        case level, at, age, reset, session
+        case resetsAt = "resets_at"
+        case level
     }
 
     public init(
         agent: AgentKind,
         window: UsageWindow,
         usedTenths: UInt16?,
-        resetsIn: Int64? = nil,
-        fullIn: Int64? = nil,
-        level: UsageLevel = .calm,
-        at: Int64 = 0,
-        age: Int64 = 0,
-        reset: Bool = false,
-        session: String? = nil
+        resetsAt: Int64? = nil,
+        level: UsageLevel = .calm
     ) {
         self.agent = agent
         self.window = window
         self.usedTenths = usedTenths
-        self.resetsIn = resetsIn
-        self.fullIn = fullIn
+        self.resetsAt = resetsAt
         self.level = level
-        self.at = at
-        self.age = age
-        self.reset = reset
-        self.session = session
     }
 
     /// Everything but the window itself may be missing, as from every other
-    /// message: an older daemon sends no age and no reset at all.
+    /// message: an older daemon sends neither a percentage nor a reset.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         agent = try container.decode(AgentKind.self, forKey: .agent)
         window = try container.decode(UsageWindow.self, forKey: .window)
         usedTenths = try container.decodeIfPresent(UInt16.self, forKey: .usedTenths)
-        resetsIn = try container.decodeIfPresent(Int64.self, forKey: .resetsIn)
-        fullIn = try container.decodeIfPresent(Int64.self, forKey: .fullIn)
+        resetsAt = try container.decodeIfPresent(Int64.self, forKey: .resetsAt)
         level = (try? container.decodeIfPresent(UsageLevel.self, forKey: .level)) ?? .calm
-        at = try container.decodeIfPresent(Int64.self, forKey: .at) ?? 0
-        age = try container.decodeIfPresent(Int64.self, forKey: .age) ?? 0
-        reset = try container.decodeIfPresent(Bool.self, forKey: .reset) ?? false
-        session = try container.decodeIfPresent(String.self, forKey: .session)
     }
 }
 
@@ -320,59 +292,13 @@ public struct UsageReport: Codable, Hashable, Sendable {
         case rows, counted
     }
 
-    public var isEmpty: Bool { rows.isEmpty && counted.isEmpty }
-
-    /// Whether any window has a reading that describes it as it is now.
-    public var isFresh: Bool { rows.contains(where: \.isCurrent) }
-
-    /// Whether any window has a number to show at all, current or not.
+    /// Whether no agent has reported anything at all.
     ///
-    /// A reading nobody has confirmed for a while is still the best thing
-    /// there is, as long as it is shown with its age on it. Only a report
-    /// where every window is waiting for its first reading has nothing.
-    public var hasNumbers: Bool { rows.contains { $0.usedTenths != nil } }
-
-    /// What to tell someone who has no numbers: where numbers come from.
-    ///
-    /// Claude Code reports the account's limits with its replies, from any
-    /// session on the machine, and there is no way to ask for them without
-    /// one. Saying so is more use than saying that otag is waiting.
-    public static let whereNumbersComeFrom =
-        "Limits appear after a Claude Code reply in any session."
-
-
-    /// The newest reading in the report, which dates the whole of it.
-    public var newest: UsageRow? {
-        rows.min(by: { $0.age < $1.age })
-    }
-
-    /// How old the newest reading is, in seconds.
-    public var age: Int64? { newest?.age }
-
-    /// Where the numbers come from, in one line for a tooltip.
-    ///
-    /// Usage is account-wide: a reading can come from any Claude Code
-    /// session on the machine, including one otag is not running. Saying
-    /// which session it was, and how long ago, is what tells a current
-    /// number from one nobody has refreshed.
-    public func provenance(panes: [PaneInfo]) -> String {
-        guard let newest else {
-            return "No reading yet. A session reports the account's limits as it works."
-        }
-
-        let when = newest.age < 60 ? "just now" : Readable.ago(newest.age)
-        var line = newest.age < 60 ? "Last reading just now" : "Last reading \(when)"
-        if let session = newest.session {
-            // A session otag is running can be named by what it is working
-            // on, which means more to a person than an identifier.
-            if let pane = panes.first(where: { $0.session == session }) {
-                let what = pane.workspace.isEmpty ? pane.title : pane.workspace
-                line += what.isEmpty ? "" : ", from the session in \(what)"
-            } else {
-                line += ", from session \(Readable.sessionLabel(session))"
-            }
-        }
-        return line + ". Click to re-read."
+    /// Not the same as having no rows: the windows that are always worth a
+    /// line are there from the start, carrying a dash until the first
+    /// reading arrives.
+    public var isEmpty: Bool {
+        !rows.contains { $0.usedTenths != nil } && counted.isEmpty
     }
 }
 

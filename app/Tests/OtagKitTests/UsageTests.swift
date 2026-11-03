@@ -5,31 +5,26 @@ import Testing
 
 /// Reading a usage report the way the app has to show it.
 ///
-/// Usage is account-wide, so a report is a mix of readings from every
+/// A report is what the agents last said about their windows, from any
 /// session on the machine. What matters here is the part the app decides:
-/// whether there is anything current to show, and what it says about where
-/// the numbers came from.
+/// the line it draws for one window, and what it draws before any agent has
+/// said anything at all.
 @Suite("How much of the limits is gone")
 struct UsageTests {
     /// One window, as the daemon sends it.
     func row(
         window: UsageWindow = .fiveHour,
         tenths: UInt16? = 250,
-        age: Int64 = 0,
-        reset: Bool = false,
-        session: String? = nil
+        resetsAt: Int64? = nil,
+        level: UsageLevel = .calm
     ) -> UsageRow {
-        var row = UsageRow(
+        UsageRow(
             agent: .claude,
             window: window,
             usedTenths: tenths,
-            resetsIn: 3_600,
-            fullIn: nil
+            resetsAt: resetsAt,
+            level: level
         )
-        row.age = age
-        row.reset = reset
-        row.session = session
-        return row
     }
 
     func report(_ rows: [UsageRow]) -> UsageReport {
@@ -38,103 +33,56 @@ struct UsageTests {
         return report
     }
 
-    @Test("a fresh reading is current, an old one and a reset one are not")
-    func currentReadings() {
-        #expect(row().isCurrent)
-        #expect(!row(age: 1_860).isCurrent, "nobody has confirmed this for half an hour")
-        #expect(!row(tenths: nil, reset: true).isCurrent)
-        #expect(row(age: 600).isCurrent, "ten minutes is still current")
+    @Test("a percentage is a whole number, and the meter a fraction of one")
+    func aRowReadsAsThePercentageItCarries() {
+        #expect(row(tenths: 734).usedPercent == 73)
+        #expect(row(tenths: 734).fraction == 0.734)
+        #expect(row(tenths: nil).usedPercent == nil, "a window nobody has read")
+        #expect(row(tenths: nil).fraction == 0, "and a meter with nothing in it")
     }
 
-    @Test("a report is fresh when any one window has a current reading")
-    func freshness() {
-        #expect(report([row()]).isFresh)
-        #expect(!report([row(age: 1_860)]).isFresh)
-        #expect(!report([]).isFresh)
+    @Test("a report with no reading anywhere has nothing to show")
+    func anEmptyReportSaysSo() {
+        #expect(report([]).isEmpty)
         #expect(
-            report([row(age: 1_860), row(window: .weekly)]).isFresh,
-            "one current window is enough to draw something true"
+            report([row(tenths: nil), row(window: .weekly, tenths: nil)]).isEmpty,
+            "the windows are there, but no agent has reported one"
         )
+        #expect(!report([row()]).isEmpty)
     }
 
-    @Test("the newest reading dates the whole report")
-    func newestReading() {
-        let newest = report([row(age: 1_800), row(window: .weekly, age: 120)]).newest
-        #expect(newest?.window == .weekly)
-        #expect(newest?.age == 120)
-        #expect(report([]).age == nil)
-    }
-
-    @Test("where a number came from is named by the session that reported it")
-    func provenanceNamesTheSession() {
-        let line = report([row(age: 10_800, session: "a9f87cc5-726a-4466")])
-            .provenance(panes: [])
-        #expect(line.contains("updated 3h ago"))
-        #expect(line.contains("a9f87cc5"), "the identifier is shortened, not shown whole")
-        #expect(!line.contains("726a"), "and not the rest of it")
-    }
-
-    @Test("a session otag is running is named by what it is working on")
-    func provenanceNamesThePane() throws {
-        let pane = try JSONDecoder().decode(
-            PaneInfo.self,
-            from: Data(
-                """
-                {"id":2,"size":{"rows":24,"cols":80},"workspace":"api",\
-                "title":"claude","session":"a9f87cc5-726a"}
-                """.utf8
-            )
+    @Test("a reset within the day is a clock, and one days away carries its date")
+    func aResetIsAClockAPersonReads() throws {
+        let now = Date(timeIntervalSince1970: 1_793_741_700)
+        let soon = try #require(
+            Readable.resetClock(Int64(now.timeIntervalSince1970) + 3 * 60 * 60, now: now)
         )
-        let line = report([row(session: "a9f87cc5-726a")]).provenance(panes: [pane])
-        #expect(line.contains("the session in api"))
-        #expect(!line.contains("a9f87cc5"), "a name beats an identifier")
+        #expect(!soon.isEmpty)
+        let week = try #require(
+            Readable.resetClock(Int64(now.timeIntervalSince1970) + 7 * 24 * 60 * 60, now: now)
+        )
+        #expect(
+            week.count > soon.count,
+            "a week away needs its date too: \(week) against \(soon)"
+        )
+        #expect(Readable.resetClock(nil) == nil, "a window with no reset says nothing")
     }
 
-    @Test("a reading from the last minute is not given an age")
-    func provenanceOfAFreshReading() {
-        let line = report([row(age: 20)]).provenance(panes: [])
-        #expect(line.contains("just now"))
-        #expect(line.hasSuffix("Click to re-read."))
+    @Test("a window with no reading at all is a dash")
+    func noReadingIsADash() {
+        #expect(Readable.noReading == "–")
     }
 
-    @Test("a report with nothing in it says so rather than guessing")
-    func provenanceOfNothing() {
-        #expect(report([]).provenance(panes: []).contains("No reading yet"))
-    }
-
-    @Test("a window that is still running keeps its number, old or not")
-    func anOldReadingIsStillANumber() {
-        // The bug this guards: a daemon restart left the numbers half an
-        // hour old, and the widget hid a perfectly good reading of a window
-        // that had hours to run.
-        let old = report([row(age: 1_860)])
-        #expect(!old.isFresh, "nobody has confirmed it recently")
-        #expect(old.hasNumbers, "but it is still the reading, and it is shown")
-        #expect(old.rows[0].usedPercent == 25)
-    }
-
-    @Test("one window being over does not hide another that is not")
-    func aResetWindowDoesNotHideTheOther() {
-        let mixed = report([
-            row(window: .fiveHour, tenths: 250, age: 1_860),
-            row(window: .weekly, tenths: nil, reset: true),
-        ])
-        #expect(mixed.hasNumbers, "the five-hour window still has a number")
-        #expect(mixed.rows[0].usedPercent == 25)
-        #expect(mixed.rows[1].usedPercent == nil, "and the weekly one still says it reset")
-    }
-
-    @Test("only a report where every window is waiting has nothing to show")
-    func nothingToShow() {
-        #expect(!report([]).hasNumbers)
-        #expect(!report([row(tenths: nil, reset: true)]).hasNumbers)
-        #expect(report([row()]).hasNumbers)
-    }
-
-    @Test("the hint says where numbers come from, not that otag is waiting")
-    func theHintSaysWhatToDo() {
-        let hint = UsageReport.whereNumbersComeFrom
-        #expect(hint.contains("after a Claude Code reply"))
-        #expect(hint.contains("any session"), "the limits are the account's, not a pane's")
+    @Test("a reading that has not moved is not a second point on the timeline")
+    func theTimelineKeepsOneOfEachReading() {
+        #expect(
+            UsageSample(
+                agent: .claude,
+                window: .fiveHour,
+                usedPercent: 25,
+                resetsAt: 1_700_003_600,
+                at: 1_700_000_000
+            ).date == Date(timeIntervalSince1970: 1_700_000_000)
+        )
     }
 }

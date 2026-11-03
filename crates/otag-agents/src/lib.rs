@@ -48,6 +48,29 @@ impl AgentKind {
         }
     }
 
+    /// The name otag shows in the interface, where there is room for a
+    /// capital letter.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+        }
+    }
+
+    /// Whether otag shows this agent's limit windows before it has reported
+    /// one.
+    ///
+    /// Claude Code reports the account's limits with every reply, so its two
+    /// windows are always worth a line: a line with a dash in it says "no
+    /// reading yet", which is a different thing from the window not
+    /// existing. Codex reports limits only in some of its session files, so
+    /// a window of its own appears once it has reported one.
+    #[must_use]
+    pub const fn shows_limit_windows(self) -> bool {
+        matches!(self, Self::Claude)
+    }
+
     /// The adapter for this agent.
     #[must_use]
     pub fn adapter(self) -> &'static dyn AgentAdapter {

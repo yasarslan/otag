@@ -148,7 +148,6 @@ mod tests {
         assert!(shared.record_limits(AgentKind::Claude, &limits(91.0), None));
 
         let report = shared.report();
-        assert_eq!(report.rows.len(), 1);
         assert_eq!(report.rows[0].agent, AgentKind::Claude);
         assert_eq!(report.rows[0].window, Window::FiveHour);
         assert_eq!(report.rows[0].used_pct(), Some(91));
@@ -176,7 +175,10 @@ mod tests {
         );
 
         let report = shared.report();
-        assert!(report.rows.is_empty());
+        assert!(
+            report.rows.iter().all(|row| row.used_tenths.is_none()),
+            "no agent has reported a percentage, so no window has a number"
+        );
         assert_eq!(report.counted.len(), 1);
         assert_eq!(report.counted[0].agent, AgentKind::Codex);
         assert_eq!(report.counted[0].tokens, 120);
@@ -213,22 +215,18 @@ mod tests {
         }]);
 
         let report = shared.report();
-        assert_eq!(report.rows.len(), 1);
         assert_eq!(
             report.rows[0].used_pct(),
-            None,
-            "68% is an hour out of date"
+            Some(0),
+            "68% is an hour out of date, and the new window starts empty"
         );
-        assert!(report.rows[0].reset);
-        assert!(report.rows[0].is_stale());
+        assert_eq!(report.rows[0].resets_at, None);
         assert_eq!(report.level(), Level::Calm);
 
         // And a fresh reading of the new window takes over.
         shared.record_limits(AgentKind::Claude, &limits(4.0), None);
         let report = shared.report();
         assert_eq!(report.rows[0].used_pct(), Some(4));
-        assert!(!report.rows[0].reset);
-        assert!(!report.rows[0].is_stale());
     }
 
     #[tokio::test]
@@ -246,7 +244,11 @@ mod tests {
             after_first,
             "the same numbers must not make every client redraw"
         );
-        assert_eq!(session.view().usage.rows.len(), 1);
+        assert_eq!(
+            session.view().usage.rows[0].used_pct(),
+            Some(10),
+            "and the numbers are still there to draw"
+        );
     }
 
     #[tokio::test]

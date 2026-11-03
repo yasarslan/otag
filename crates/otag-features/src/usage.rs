@@ -1,13 +1,17 @@
-//! How much of each agent's limits is gone, and how fast.
+//! How much of each agent's limits is gone.
 //!
 //! An agent tells otag how much of its windows it has used as a percentage,
-//! every time it answers. otag keeps those samples, and from the last few
-//! minutes of them works out how fast the percentage is climbing and when it
-//! would reach a hundred. That projection is the whole point of the widget:
-//! a number that is already at 90% is too late to be useful.
+//! every time it answers. otag keeps those readings and shows the last one
+//! for each window: the percentage, and when the window resets. Nothing
+//! else. What a client draws is what the agent last said, so the number in
+//! otag and the number in the agent are never two different numbers.
+//!
+//! The burn rate and the projection built on it are still measured here —
+//! the handoff decides on them — but no client shows them: a prediction
+//! beside a reading makes the reading look like a prediction too.
 //!
 //! Two rules run through this module. Everything an agent says is optional,
-//! so a window otag has never been told about is absent rather than zero.
+//! so a window otag has never been told about is a dash rather than a zero.
 //! And nothing is invented: when otag has no percentage, it says so and
 //! reports the tokens it counted instead, marked as an estimate.
 
@@ -46,13 +50,6 @@ pub const AMBER: f32 = 70.0;
 
 /// Where the widget turns red and otag offers a handoff, as a percentage.
 pub const RED: f32 = 90.0;
-
-/// How old a reading may be before it is shown as old, in seconds.
-///
-/// An agent reports its limits every time it answers, so a reading from ten
-/// minutes ago means nobody has been working, not that the number moved. It
-/// is still the best information there is, but it is shown as what it is.
-pub const FRESH: i64 = 10 * 60;
 
 /// One of an agent's limit windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -95,7 +92,7 @@ impl Window {
     pub const fn label(self) -> &'static str {
         match self {
             Self::FiveHour => "5h",
-            Self::Weekly => "7d",
+            Self::Weekly => "week",
         }
     }
 }
@@ -245,45 +242,34 @@ impl Usage {
 
     /// The reading that describes a window as it stands now.
     ///
-    /// Readings arrive from every session on the machine, and a session that
-    /// has been idle for an hour still reports the percentage it was last
-    /// told — so "the one that arrived last" is not "the one that knows
-    /// most". What a window has used only climbs until it resets, so within
-    /// one window the highest reading is the most current one, and the
-    /// newest confirmation of that height carries the freshest time.
+    /// Readings arrive from every session on the machine, and the newest
+    /// arrival is not the best informed one. A session that has been idle
+    /// for hours re-runs its status line on a timer and reports the
+    /// `rate_limits` snapshot it was handed when it last answered — which
+    /// can name a window that ended days ago. A resumed session does the
+    /// same before its first reply.
     ///
-    /// Windows are told apart by when they reset: a reading of a later
-    /// window always wins over one of an earlier window, however high the
-    /// earlier one got. Readings with no reset time cannot be grouped that
-    /// way, so there the newest arrival is all otag has to go on.
+    /// So readings are ranked by the window they describe rather than by
+    /// when they arrived. A window is named by when it resets, and a later
+    /// reset is a later window; a reading that does not say when its window
+    /// resets is placed by when it arrived, which puts it ahead of a window
+    /// whose reset has passed and behind one still to come. Within one
+    /// window the percentage only climbs, so the highest reading is the
+    /// latest state of it, and the newest arrival at that height wins the
+    /// tie and so carries the window's freshness.
     #[must_use]
     pub fn latest(&self, agent: AgentKind, window: Window) -> Option<Sample> {
-        let mut current: Option<&Sample> = None;
-        for sample in self
-            .samples
+        self.samples
             .iter()
             .filter(|sample| sample.agent == agent && sample.window == window)
-        {
-            current = Some(match current {
-                // Two readings of the same window, told apart by both
-                // naming the same reset: the higher one is the later state
-                // of that window, and a reading that merely repeats it
-                // keeps the window's freshness because it arrived after.
-                Some(kept)
-                    if kept.resets_at.is_some()
-                        && kept.resets_at == sample.resets_at
-                        && kept.used_pct > sample.used_pct =>
-                {
-                    kept
-                }
-                // Anything else: a reading of a window that resets at some
-                // other time is a reading of another window, and a reading
-                // that does not say when it resets cannot be compared with
-                // one that does. Either way the newer arrival is the answer.
-                _ => sample,
-            });
-        }
-        current.cloned()
+            .max_by_key(|sample| {
+                (
+                    sample.resets_at.unwrap_or(sample.at),
+                    tenths(sample.used_pct),
+                    sample.at,
+                )
+            })
+            .cloned()
     }
 
     /// What otag counted for an agent itself.
@@ -386,39 +372,38 @@ impl Usage {
     }
 
     /// Everything the widget and `otag usage` show.
+    ///
+    /// One row per window, carrying the three facts a client draws: whose
+    /// window it is, how much of it the agent last reported, and when it
+    /// resets. A window whose reset has passed reads zero until a reading of
+    /// the new one arrives — the allowance is back, and that is what zero
+    /// means. A window otag has never had a reading for carries no
+    /// percentage at all, which clients draw as a dash.
     #[must_use]
     pub fn report(&self, now: i64) -> Report {
         let mut rows = Vec::new();
         for agent in AgentKind::ALL {
             for window in Window::ALL {
-                if let Some(sample) = self.latest(agent, window) {
-                    // A reading of a window that is over says nothing about
-                    // the one running now: it is reported as a window
-                    // waiting for its first reading, not as a percentage.
-                    let reset = sample.has_reset(now);
-                    rows.push(Row {
-                        agent,
-                        window,
-                        used_tenths: (!reset).then(|| tenths(sample.used_pct)),
-                        resets_in: if reset {
-                            None
-                        } else {
-                            sample
-                                .resets_at
-                                .map(|resets_at| resets_at.saturating_sub(now))
-                        },
-                        full_in: self.full_in(agent, window, now),
-                        level: if reset {
-                            Level::Calm
-                        } else {
-                            Level::of(sample.used_pct)
-                        },
-                        at: sample.at,
-                        age: now.saturating_sub(sample.at).max(0),
-                        reset,
-                        session: sample.session.clone(),
-                    });
-                }
+                let sample = self.latest(agent, window);
+                let (used_tenths, resets_at) = match &sample {
+                    // The window is over, so the percentage of it is over
+                    // too, and the reset it named is in the past. The new
+                    // window starts empty and otag does not know when it
+                    // ends until an agent says so.
+                    Some(sample) if sample.has_reset(now) => (Some(0), None),
+                    Some(sample) => (Some(tenths(sample.used_pct)), sample.resets_at),
+                    // Nothing has ever been reported for this window.
+                    None if agent.shows_limit_windows() => (None, None),
+                    None => continue,
+                };
+                rows.push(Row {
+                    agent,
+                    window,
+                    used_tenths,
+                    resets_at,
+                    level: used_tenths
+                        .map_or_else(Level::default, |tenths| Level::of(f32::from(tenths) / 10.0)),
+                });
             }
         }
 
@@ -455,10 +440,14 @@ pub struct Report {
 }
 
 impl Report {
-    /// Whether there is nothing to show.
+    /// Whether no agent has reported anything at all.
+    ///
+    /// Not the same as having no rows: the windows that are always worth a
+    /// line are there from the start, carrying a dash until the first
+    /// reading arrives.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.rows.is_empty() && self.counted.is_empty()
+        !self.rows.iter().any(|row| row.used_tenths.is_some()) && self.counted.is_empty()
     }
 
     /// The worst level any window is at.
@@ -472,11 +461,15 @@ impl Report {
     }
 }
 
-/// One window, as the widget shows it.
+/// One window, as every client shows it.
 ///
 /// Percentages are carried in tenths of a point rather than as a fraction:
 /// what is drawn is a whole number, and an integer can be compared, sent and
 /// stored without the surprises a float brings.
+///
+/// There is deliberately nothing else here. A row is what the agent last
+/// said about one window, and every client draws the same two things from
+/// it, so that otag never shows a number the agent would not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
     /// Which agent it belongs to.
@@ -484,49 +477,27 @@ pub struct Row {
     /// Which window it reads.
     pub window: Window,
     /// How much of the window is used, in tenths of a percentage point, or
-    /// nothing when the window has reset and no reading of the new one has
-    /// arrived yet.
+    /// nothing when otag has never had a reading of it.
     #[serde(default)]
     pub used_tenths: Option<u16>,
-    /// How long until the window resets, in seconds.
+    /// When the window resets, in seconds since the epoch, when the agent
+    /// said so and the reset is still to come.
     #[serde(default)]
-    pub resets_in: Option<i64>,
-    /// How long until the window is used up, in seconds.
-    #[serde(default)]
-    pub full_in: Option<i64>,
+    pub resets_at: Option<i64>,
     /// How worried the user should be.
     #[serde(default)]
     pub level: Level,
-    /// When the reading was taken, in seconds since the epoch.
-    #[serde(default)]
-    pub at: i64,
-    /// How old the reading is, in seconds.
-    #[serde(default)]
-    pub age: i64,
-    /// Whether the window has reset since the reading was taken, so that
-    /// otag is waiting for fresh data rather than showing a percentage.
-    #[serde(default)]
-    pub reset: bool,
-    /// The agent session the reading came from, when it said which.
-    #[serde(default)]
-    pub session: Option<String>,
 }
 
 impl Row {
     /// The percentage as a whole number, which is what is drawn, or nothing
-    /// when there is no current reading to draw.
+    /// when otag has had no reading of this window.
     #[must_use]
     pub const fn used_pct(&self) -> Option<u16> {
         match self.used_tenths {
             Some(tenths) => Some(tenths / 10),
             None => None,
         }
-    }
-
-    /// Whether the reading is old enough that it should be shown as old.
-    #[must_use]
-    pub const fn is_stale(&self) -> bool {
-        self.age > FRESH
     }
 }
 
@@ -585,6 +556,17 @@ mod tests {
     use otag_agents::LimitWindow;
 
     use super::*;
+
+    /// The row of one window, from a report that now always carries a line
+    /// for the windows otag shows before they are read.
+    fn row_of(report: &Report, agent: AgentKind, window: Window) -> Row {
+        report
+            .rows
+            .iter()
+            .find(|row| row.agent == agent && row.window == window)
+            .cloned()
+            .expect("the window has a row")
+    }
 
     fn at(agent: AgentKind, used_pct: f32, at: i64) -> Sample {
         Sample {
@@ -820,13 +802,36 @@ mod tests {
         });
 
         let report = usage.report(600);
-        assert_eq!(report.rows.len(), 2);
-        assert_eq!(report.rows[0].agent, AgentKind::Claude);
-        assert_eq!(report.rows[0].used_pct(), Some(62));
-        assert_eq!(report.rows[0].used_tenths, Some(624));
-        assert_eq!(report.rows[1].agent, AgentKind::Codex);
-        assert_eq!(report.rows[1].resets_in, Some(1200));
+        let claude = row_of(&report, AgentKind::Claude, Window::FiveHour);
+        assert_eq!(claude.used_pct(), Some(62));
+        assert_eq!(claude.used_tenths, Some(624));
+        let codex = row_of(&report, AgentKind::Codex, Window::Weekly);
+        assert_eq!(codex.resets_at, Some(1800));
         assert_eq!(report.level(), Level::Red, "the worst window decides");
+        assert!(
+            !report
+                .rows
+                .iter()
+                .any(|row| row.agent == AgentKind::Codex && row.window == Window::FiveHour),
+            "an agent that has never reported a window gets no line for it"
+        );
+    }
+
+    #[test]
+    fn the_windows_claude_reports_have_a_line_before_the_first_reading() {
+        let report = Usage::new().report(0);
+        assert_eq!(
+            report.rows.len(),
+            2,
+            "Claude Code reports both windows with every reply, so both are \
+             worth a line that says otag has not been told yet"
+        );
+        for window in Window::ALL {
+            let row = row_of(&report, AgentKind::Claude, window);
+            assert_eq!(row.used_tenths, None, "which clients draw as a dash");
+            assert_eq!(row.resets_at, None);
+        }
+        assert!(report.is_empty(), "but nothing has been reported");
     }
 
     #[test]
@@ -895,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reading_whose_window_has_reset_is_no_longer_a_percentage() {
+    fn a_reading_whose_window_has_reset_reads_nothing_used() {
         let mut usage = Usage::new();
         // 68% of a window that reset an hour ago.
         usage.record(Sample {
@@ -908,20 +913,19 @@ mod tests {
         });
 
         let report = usage.report(13_600);
-        assert_eq!(report.rows.len(), 1, "the window is still worth a line");
-        let row = &report.rows[0];
-        assert!(row.reset, "otag is waiting for a reading of the new window");
-        assert_eq!(row.used_pct(), None, "68% belongs to a window that is over");
-        assert_eq!(row.full_in, None, "there is nothing to project from");
-        assert_eq!(row.resets_in, None, "the reset already happened");
+        let row = row_of(&report, AgentKind::Claude, Window::FiveHour);
+        assert_eq!(
+            row.used_pct(),
+            Some(0),
+            "the allowance is back, and 68% belongs to a window that is over"
+        );
+        assert_eq!(row.resets_at, None, "the reset it named already happened");
         assert_eq!(row.level, Level::Calm, "a window that reset worries nobody");
-        assert_eq!(row.age, 4_600);
-        assert!(row.is_stale());
         assert_eq!(report.level(), Level::Calm);
     }
 
     #[test]
-    fn a_reading_of_the_window_running_now_is_current_however_close_the_reset() {
+    fn a_reading_of_the_window_running_now_stands_however_close_the_reset() {
         let mut usage = Usage::new();
         usage.record(Sample {
             agent: AgentKind::Claude,
@@ -932,10 +936,10 @@ mod tests {
             session: None,
         });
 
-        let row = &usage.report(9_999).rows[0];
-        assert!(!row.reset, "the window has not reset yet");
+        let report = usage.report(9_999);
+        let row = row_of(&report, AgentKind::Claude, Window::FiveHour);
         assert_eq!(row.used_pct(), Some(68));
-        assert_eq!(row.resets_in, Some(1));
+        assert_eq!(row.resets_at, Some(10_000));
     }
 
     #[test]
@@ -959,12 +963,10 @@ mod tests {
             session: None,
         });
 
-        let row = &usage.report(13_600).rows[0];
-        assert!(!row.reset);
+        let report = usage.report(13_600);
+        let row = row_of(&report, AgentKind::Claude, Window::FiveHour);
         assert_eq!(row.used_pct(), Some(4), "the new window's own number");
-        assert_eq!(row.resets_in, Some(14_400));
-        assert_eq!(row.age, 240);
-        assert!(!row.is_stale(), "four minutes old is current");
+        assert_eq!(row.resets_at, Some(28_000));
     }
 
     #[test]
@@ -972,34 +974,14 @@ mod tests {
         let mut usage = Usage::new();
         usage.record(at(AgentKind::Claude, 50.0, 0));
 
-        let row = &usage.report(HISTORY).rows[0];
-        assert!(
-            !row.reset,
+        let report = usage.report(HISTORY);
+        let row = row_of(&report, AgentKind::Claude, Window::FiveHour);
+        assert_eq!(
+            row.used_pct(),
+            Some(50),
             "otag was never told when this window resets, so it cannot claim it did"
         );
-        assert_eq!(row.used_pct(), Some(50));
-        assert!(
-            row.is_stale(),
-            "but it is honest about how old the number is"
-        );
-    }
-
-    #[test]
-    fn a_reading_is_old_only_past_the_freshness_window() {
-        let mut usage = Usage::new();
-        usage.record(at(AgentKind::Claude, 50.0, 0));
-
-        assert!(!usage.report(FRESH).rows[0].is_stale());
-        assert!(usage.report(FRESH + 1).rows[0].is_stale());
-    }
-
-    #[test]
-    fn a_clock_that_went_backwards_does_not_make_a_reading_younger_than_new() {
-        let mut usage = Usage::new();
-        usage.record(at(AgentKind::Claude, 50.0, 1_000));
-        let row = &usage.report(500).rows[0];
-        assert_eq!(row.age, 0, "an age is never negative");
-        assert!(!row.is_stale());
+        assert_eq!(row.resets_at, None);
     }
 
     /// A reading of one window, as one session would report it.
@@ -1023,13 +1005,38 @@ mod tests {
         // that, later, because its status line runs on a timer.
         usage.record(reading(8.0, 20_000, 2_000, "idle"));
 
-        let row = &usage.report(2_000).rows[0];
+        let latest = usage
+            .latest(AgentKind::Claude, Window::FiveHour)
+            .expect("a reading");
         assert_eq!(
-            row.used_pct(),
-            Some(25),
+            latest.used_pct, 25.0,
             "a window's usage only climbs, so the highest reading of it is the current one"
         );
-        assert_eq!(row.session.as_deref(), Some("busy"));
+        assert_eq!(latest.session.as_deref(), Some("busy"));
+    }
+
+    #[test]
+    fn a_session_reporting_a_window_that_has_ended_never_replaces_the_one_running() {
+        let mut usage = Usage::new();
+        // The window running now, read at 69% by the session doing the work.
+        usage.record(reading(69.0, 20_000, 10_000, "working"));
+        // A session resumed from last week re-runs its status line on a
+        // timer and reports the snapshot it was handed then: 85% of a window
+        // that ended days ago. It arrives later, and it is still older news.
+        usage.record(reading(85.0, 20_000 - 11 * 24 * 60 * 60, 10_100, "resumed"));
+
+        let latest = usage
+            .latest(AgentKind::Claude, Window::FiveHour)
+            .expect("a reading");
+        assert_eq!(
+            latest.used_pct, 69.0,
+            "a reading of a window that is over says nothing about the one running"
+        );
+        assert_eq!(latest.session.as_deref(), Some("working"));
+
+        let row = row_of(&usage.report(10_100), AgentKind::Claude, Window::FiveHour);
+        assert_eq!(row.used_pct(), Some(69), "so the report still reads 69%");
+        assert_eq!(row.resets_at, Some(20_000));
     }
 
     #[test]
@@ -1039,22 +1046,28 @@ mod tests {
         // Another session, otag may not even be running it, reports more.
         usage.record(reading(27.0, 20_000, 1_100, "two"));
 
-        let row = &usage.report(1_100).rows[0];
-        assert_eq!(row.used_pct(), Some(27));
-        assert_eq!(row.session.as_deref(), Some("two"));
-        assert_eq!(row.age, 0, "and it is as fresh as the reading that said so");
+        let latest = usage
+            .latest(AgentKind::Claude, Window::FiveHour)
+            .expect("a reading");
+        assert_eq!(latest.used_pct, 27.0);
+        assert_eq!(latest.session.as_deref(), Some("two"));
     }
 
     #[test]
-    fn repeating_the_same_number_keeps_the_window_fresh() {
+    fn repeating_the_same_number_keeps_the_newest_arrival() {
         let mut usage = Usage::new();
         usage.record(reading(25.0, 20_000, 1_000, "one"));
         usage.record(reading(25.0, 20_000, 4_000, "two"));
 
-        let row = &usage.report(4_000).rows[0];
-        assert_eq!(row.used_pct(), Some(25));
-        assert_eq!(row.age, 0, "the newest confirmation dates the reading");
-        assert_eq!(row.session.as_deref(), Some("two"));
+        let latest = usage
+            .latest(AgentKind::Claude, Window::FiveHour)
+            .expect("a reading");
+        assert_eq!(latest.used_pct, 25.0);
+        assert_eq!(
+            latest.at, 4_000,
+            "the newest confirmation dates the reading"
+        );
+        assert_eq!(latest.session.as_deref(), Some("two"));
     }
 
     #[test]
@@ -1064,14 +1077,14 @@ mod tests {
         // The window reset, and the first reading of the new one is low.
         usage.record(reading(3.0, 38_000, 20_100, "after"));
 
-        let row = &usage.report(20_100).rows[0];
+        let report = usage.report(20_100);
+        let row = row_of(&report, AgentKind::Claude, Window::FiveHour);
         assert_eq!(
             row.used_pct(),
             Some(3),
             "a later window always wins, however high the one before it got"
         );
-        assert_eq!(row.resets_in, Some(17_900));
-        assert_eq!(row.session.as_deref(), Some("after"));
+        assert_eq!(row.resets_at, Some(38_000));
     }
 
     #[test]
@@ -1104,8 +1117,12 @@ mod tests {
         );
 
         assert_eq!(
-            usage.report(1_000).rows[0].session.as_deref(),
-            Some("a9f87cc5-726a")
+            usage
+                .latest(AgentKind::Claude, Window::FiveHour)
+                .and_then(|sample| sample.session)
+                .as_deref(),
+            Some("a9f87cc5-726a"),
+            "usage is account-wide, so which session said so is worth keeping"
         );
     }
 

@@ -510,9 +510,17 @@ mod tests {
         );
 
         let report = shared.report();
-        assert_eq!(report.rows.len(), 2, "both windows the rollout carries");
-        assert_eq!(report.rows[0].used_pct(), Some(36));
-        assert_eq!(report.rows[1].used_pct(), Some(9));
+        let codex: Vec<Option<u16>> = report
+            .rows
+            .iter()
+            .filter(|row| row.agent == AgentKind::Codex)
+            .map(otag_features::usage::Row::used_pct)
+            .collect();
+        assert_eq!(
+            codex,
+            vec![Some(36), Some(9)],
+            "both windows the rollout carries"
+        );
     }
 
     #[tokio::test]

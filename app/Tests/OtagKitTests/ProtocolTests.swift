@@ -156,7 +156,7 @@ struct ProtocolTests {
         let decoded = try response(
             """
             {"type":"usage","report":{"rows":[{"agent":"claude","window":"five_hour",\
-            "used_tenths":734,"resets_in":3600,"level":"amber","at":1700000000}],\
+            "used_tenths":734,"resets_at":1700003600,"level":"amber"}],\
             "counted":[{"agent":"codex","tokens":1234}]}}
             """
         )
@@ -167,49 +167,60 @@ struct ProtocolTests {
         #expect(row.agent == .claude)
         #expect(row.window == .fiveHour)
         #expect(row.usedPercent == 73)
-        #expect(row.resetsIn == 3_600)
-        #expect(row.fullIn == nil)
+        #expect(row.resetsAt == 1_700_003_600)
         #expect(row.level == .amber)
-        #expect(!row.reset)
-        #expect(!row.isStale, "a report without an age is not old")
         #expect(report.counted.first?.tokens == 1_234)
     }
 
-    @Test("a window that has reset carries no percentage at all")
+    @Test("a window with no reading yet carries no percentage at all")
+    func unreadWindowDecodes() throws {
+        let decoded = try response(
+            """
+            {"type":"usage","report":{"rows":[{"agent":"claude","window":"five_hour",\
+            "used_tenths":null,"resets_at":null,"level":"calm"}],"counted":[]}}
+            """
+        )
+        guard case let .usage(report) = decoded, let row = report.rows.first else {
+            Issue.record("expected a usage report, got \(decoded)")
+            return
+        }
+        #expect(row.usedPercent == nil, "otag has not been told, and says so")
+        #expect(row.fraction == 0, "and the meter has nothing to fill")
+        #expect(report.isEmpty)
+    }
+
+    @Test("a window that has reset reads nothing used")
     func resetWindowDecodes() throws {
         let decoded = try response(
             """
             {"type":"usage","report":{"rows":[{"agent":"claude","window":"five_hour",\
-            "used_tenths":null,"resets_in":null,"full_in":null,"level":"calm",\
-            "at":1700000000,"age":10800,"reset":true}],"counted":[]}}
+            "used_tenths":0,"resets_at":null,"level":"calm"}],"counted":[]}}
             """
         )
         guard case let .usage(report) = decoded, let row = report.rows.first else {
             Issue.record("expected a usage report, got \(decoded)")
             return
         }
-        #expect(row.usedPercent == nil, "the old window's number is not this one's")
-        #expect(row.fraction == 0, "and the meter has nothing to fill")
-        #expect(row.reset)
-        #expect(row.isStale)
-        #expect(row.age == 10_800)
+        #expect(row.usedPercent == 0, "the allowance is back")
+        #expect(row.resetsAt == nil)
+        #expect(!report.isEmpty, "zero is a number, and it was reported")
     }
 
-    @Test("an old reading of the window running now keeps its percentage")
-    func staleWindowDecodes() throws {
+    @Test("a report from an older daemon still reads")
+    func anOlderReportDecodes() throws {
         let decoded = try response(
             """
             {"type":"usage","report":{"rows":[{"agent":"claude","window":"five_hour",\
-            "used_tenths":680,"resets_in":3600,"level":"calm","at":1700000000,\
-            "age":10800,"reset":false}],"counted":[]}}
+            "used_tenths":680,"resets_in":3600,"full_in":null,"age":10800,\
+            "reset":false,"at":1700000000,"session":"abc"}],"counted":[]}}
             """
         )
         guard case let .usage(report) = decoded, let row = report.rows.first else {
             Issue.record("expected a usage report, got \(decoded)")
             return
         }
-        #expect(row.usedPercent == 68, "it is still the best number there is")
-        #expect(row.isStale, "but the app says how old it is")
+        #expect(row.usedPercent == 68, "the fields the app no longer shows cost it nothing")
+        #expect(row.resetsAt == nil, "an older daemon sent a countdown, not a time")
     }
 
     @Test("the readings behind the numbers are read for the chart")

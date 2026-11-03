@@ -3,42 +3,33 @@ import Foundation
 /// Numbers written the way a person reads them at a glance.
 ///
 /// The same rules as the terminal client's, so the two never disagree about
-/// the same number: a duration past a day drops its minutes, and a token
-/// count is shortened but never rounded to nothing.
+/// the same number: a reset is a time of day, and a token count is
+/// shortened but never rounded to nothing.
 public enum Readable {
-    /// A duration: `6d 17h`, `2h`, `1h20m`, `45m`, `30s`.
+    /// What a window with no reading yet shows instead of a percentage.
+    public static let noReading = "–"
+
+    /// When a window resets, as a person reads a clock: `02:40` tonight, and
+    /// `10 Nov 06:00` for a week away.
     ///
-    /// Past a day the minutes stop mattering; `161h` is not a number anyone
-    /// reads.
-    public static func duration(_ seconds: Int64) -> String {
-        let seconds = max(seconds, 0)
-        let minutes = seconds / 60
-        let hours = minutes / 60
+    /// The same rule as the terminal client's: within the day the clock
+    /// alone is how a person thinks of it, and further out the clock alone
+    /// would be a riddle, so it carries its date. In the machine's own time
+    /// zone, because that is the clock the user is looking at.
+    public static func resetClock(_ resetsAt: Int64?, now: Date = Date()) -> String? {
+        guard let resetsAt else { return nil }
 
-        if hours >= 24 {
-            let days = hours / 24
-            let rest = hours % 24
-            return rest == 0 ? "\(days)d" : "\(days)d \(rest)h"
+        let when = Date(timeIntervalSince1970: TimeInterval(resetsAt))
+        let clock = when.formatted(
+            Date.FormatStyle(date: .omitted, time: .shortened)
+        )
+        if when.timeIntervalSince(now) < 24 * 60 * 60 {
+            return clock
         }
-        if hours > 0 {
-            let rest = minutes % 60
-            return rest == 0 ? "\(hours)h" : "\(hours)h\(String(format: "%02d", rest))m"
-        }
-        if minutes > 0 {
-            return "\(minutes)m"
-        }
-        return "\(seconds)s"
-    }
-
-    /// How long ago a reading was taken: `updated 3h ago`.
-    public static func ago(_ seconds: Int64) -> String {
-        "updated \(duration(seconds)) ago"
-    }
-
-    /// An agent session identifier short enough to show: the first eight
-    /// characters, which is what the agents themselves print.
-    public static func sessionLabel(_ id: String) -> String {
-        String(id.prefix(8))
+        let day = when.formatted(
+            Date.FormatStyle().day().month(.abbreviated)
+        )
+        return "\(day) \(clock)"
     }
 
     /// A token count: `840`, `12k`, `1.2M`.

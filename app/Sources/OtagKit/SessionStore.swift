@@ -143,6 +143,9 @@ public final class SessionStore {
     /// only ever be as fresh as the last session that reported one. There is
     /// no supported way to ask Claude Code for the account's limits without
     /// spending tokens, so otag asks the daemon, never the agent.
+    /// How often the app asks for the numbers again, in seconds.
+    static let usageRefresh = 30
+
     public func refreshUsage() {
         guard connection != nil else { return }
         refreshingUsage = true
@@ -196,14 +199,15 @@ public final class SessionStore {
         }
     }
 
-    /// Ask for the numbers again every minute, while the app is open.
+    /// Ask for the numbers again every half minute, while the app is open.
     ///
-    /// The daemon's own copy changes only when a session reports, so this
-    /// costs one small request a minute and keeps the age the app shows
-    /// honest even when nothing else happens.
+    /// The same interval the agents' status lines run on, so what the app
+    /// shows is never more than one reporting round behind. The daemon's own
+    /// copy changes only when a session reports, so this costs one small
+    /// request and usually no redraw at all.
     private func keepUsageCurrent() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(60))
+            try? await Task.sleep(for: .seconds(Self.usageRefresh))
             if Task.isCancelled { return }
             guard case .connected = state else { continue }
             refreshUsage()
@@ -311,19 +315,24 @@ public final class SessionStore {
     private func remember(_ report: UsageReport) {
         let now = Int64(Date().timeIntervalSince1970)
         for row in report.rows {
-            // A window waiting for fresh data has no reading to put on the
-            // timeline; the line picks up again when one arrives.
+            // A window otag has never had a reading of has nothing to put
+            // on the timeline; the line starts when the first one arrives.
             guard let usedTenths = row.usedTenths else { continue }
             let sample = UsageSample(
                 agent: row.agent,
                 window: row.window,
                 usedPercent: Double(usedTenths) / 10,
-                resetsAt: nil,
-                at: row.at == 0 ? now : row.at
+                resetsAt: row.resetsAt,
+                at: now
             )
             // The daemon sends a report whenever anything about it changes,
-            // which is not the same as a new reading of this window.
-            if history.contains(where: { $0.id == sample.id }) { continue }
+            // which is not the same as a new reading of this window: a
+            // percentage that has not moved is the same reading arriving
+            // again, and the timeline already has it.
+            let last = history.last {
+                $0.agent == row.agent && $0.window == row.window
+            }
+            if last?.usedPercent == sample.usedPercent { continue }
             history.append(sample)
         }
     }

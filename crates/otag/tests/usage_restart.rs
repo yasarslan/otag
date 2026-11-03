@@ -170,11 +170,7 @@ fn a_reading_whose_window_is_still_running_survives_a_restart() {
     let before = daemon.usage();
     let row = five_hour(&before).expect("the window otag was told about");
     assert_eq!(row["used_tenths"], 250, "before the restart: {before}");
-    assert_eq!(row["reset"], false);
-    assert_eq!(
-        row["session"], "sess-abc12345-6789",
-        "and otag knows which session said so"
-    );
+    assert_eq!(row["resets_at"], resets_at);
 
     // The daemon is stopped and started again, which is what an upgrade or
     // `otag kill-server` does.
@@ -189,28 +185,17 @@ fn a_reading_whose_window_is_still_running_survives_a_restart() {
         )
     });
     assert_eq!(
-        row["reset"], false,
-        "the window has not reset, so otag is not waiting for fresh data: {after}"
-    );
-    assert_eq!(
         row["used_tenths"], 250,
         "a reading of a window that is still running is still the reading: {after}"
     );
-    assert!(
-        row["resets_in"]
-            .as_i64()
-            .expect("the window still says when it resets")
-            > 0,
-        "the reset is still ahead: {after}"
-    );
     assert_eq!(
-        row["session"], "sess-abc12345-6789",
-        "which session reported it survives too: {after}"
+        row["resets_at"], resets_at,
+        "and it still says when that window resets: {after}"
     );
 }
 
 #[test]
-fn a_reading_whose_window_reset_while_the_daemon_was_down_is_not_current() {
+fn a_reading_whose_window_reset_while_the_daemon_was_down_reads_nothing_used() {
     let mut daemon = Daemon::start();
 
     // A window that ends in a second, read at 68%.
@@ -228,9 +213,116 @@ fn a_reading_whose_window_reset_while_the_daemon_was_down_is_not_current() {
 
     let after = daemon.usage();
     let row = five_hour(&after).expect("the window is still worth a line");
-    assert_eq!(row["reset"], true, "the window reset: {after}");
-    assert!(
-        row["used_tenths"].is_null(),
-        "68% of a window that is over is not this window's number: {after}"
+    assert_eq!(
+        row["used_tenths"], 0,
+        "the window reset, so the allowance is back: {after}"
     );
+    assert!(
+        row["resets_at"].is_null(),
+        "and otag does not know when the new one ends until an agent says: {after}"
+    );
+}
+
+#[test]
+fn a_reading_outlives_every_payload_that_carries_no_limits() {
+    let mut daemon = Daemon::start();
+
+    // The session doing the work reports 69% of a window that resets in
+    // three hours.
+    let resets_at = now() + 3 * 60 * 60;
+    daemon.run(&["hook", "statusline"], &status_line(69.0, resets_at));
+
+    // Payloads without `rate_limits` arrive from everywhere: another session
+    // on the machine, one resumed from last week before its first reply, an
+    // account on an API key, and a session whose windows are explicitly
+    // null. None of them knows anything about the limits, so none of them
+    // may touch what otag was told.
+    let silent = [
+        serde_json::json!({ "session_id": "sess-other-00000000" }).to_string(),
+        serde_json::json!({
+            "session_id": "sess-resumed-11111111",
+            "transcript_path": "/tmp/otag-test/resumed.jsonl",
+        })
+        .to_string(),
+        serde_json::json!({
+            "session_id": "sess-null-22222222",
+            "rate_limits": serde_json::Value::Null,
+        })
+        .to_string(),
+        serde_json::json!({
+            "session_id": "sess-empty-33333333",
+            "rate_limits": { "five_hour": serde_json::Value::Null, "seven_day": serde_json::Value::Null },
+        })
+        .to_string(),
+        serde_json::json!({
+            "session_id": "sess-partial-44444444",
+            // A window with a reset but no percentage is not a reading.
+            "rate_limits": { "five_hour": { "resets_at": now() - 7 * 24 * 60 * 60 } },
+        })
+        .to_string(),
+    ];
+    for payload in &silent {
+        daemon.run(&["hook", "statusline"], payload);
+        let report = daemon.usage();
+        let row = five_hour(&report).unwrap_or_else(|| {
+            panic!("a payload with no limits took the window away: {report}");
+        });
+        assert_eq!(
+            row["used_tenths"], 690,
+            "a payload that says nothing about the limits says nothing: {report}\n{payload}"
+        );
+        assert_eq!(row["resets_at"], resets_at, "{report}\n{payload}");
+    }
+
+    // And a restart, which reads the readings back out of the database.
+    daemon.kill_server();
+    daemon.spawn();
+
+    let after = daemon.usage();
+    let row = five_hour(&after).unwrap_or_else(|| {
+        panic!(
+            "the window is gone after a restart: {after}\n{}",
+            daemon.log()
+        )
+    });
+    assert_eq!(
+        row["used_tenths"], 690,
+        "the last thing an agent actually said is still 69%: {after}"
+    );
+    assert_eq!(
+        row["resets_at"], resets_at,
+        "resetting at the time it was given: {after}"
+    );
+}
+
+#[test]
+fn a_session_reporting_a_window_that_has_ended_cannot_undo_the_one_running() {
+    let daemon = Daemon::start();
+
+    // The session doing the work: 69% of the window running now.
+    let resets_at = now() + 3 * 60 * 60;
+    daemon.run(&["hook", "statusline"], &status_line(69.0, resets_at));
+
+    // A session resumed from last week re-runs its status line on a timer
+    // and reports the snapshot it was handed then: a higher percentage of a
+    // window that ended days ago. It arrives later and is still older news.
+    let ended = now() - 11 * 24 * 60 * 60;
+    daemon.run(
+        &["hook", "statusline"],
+        &serde_json::json!({
+            "session_id": "sess-resumed-55555555",
+            "rate_limits": {
+                "five_hour": { "used_percentage": 85.0, "resets_at": ended },
+            },
+        })
+        .to_string(),
+    );
+
+    let after = daemon.usage();
+    let row = five_hour(&after).expect("the window");
+    assert_eq!(
+        row["used_tenths"], 690,
+        "a reading of a window that is over says nothing about this one: {after}"
+    );
+    assert_eq!(row["resets_at"], resets_at, "{after}");
 }

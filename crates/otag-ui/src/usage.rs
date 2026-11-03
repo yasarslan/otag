@@ -2,13 +2,17 @@
 //!
 //! It lives at the bottom of the sidebar, which is sixteen columns wide, so
 //! every line here is written to fit in very little space and to say the one
-//! thing that matters: the percentage, and when the window would be full at
-//! the rate of the last twenty minutes.
+//! thing that matters: what the agent last reported, and when that window
+//! resets.
 //!
 //! The widget is calm by design. There is no blinking and no bar that fills
 //! up; a number that needs the user turns amber and then red, and that is
-//! all the emphasis there is.
+//! all the emphasis there is. Nothing here is a projection, an age or a
+//! hint — a reading stands on its own, and a line of explanation beside it
+//! only makes a person wonder which of the two to believe.
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use otag_features::usage::{Level, Report, Row};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -24,17 +28,27 @@ use crate::theme::Theme;
 /// the other agent.
 pub const OFFER: &str = "out · ^b g hands over";
 
+/// What a window with no reading yet shows instead of a percentage.
+pub const NO_READING: &str = "–";
+
+/// How far ahead a reset is still told by the clock alone, in seconds.
+///
+/// A five-hour window always resets today or tonight, and `02:40` is how a
+/// person thinks of that. A weekly window resets days away, where the clock
+/// alone would be a riddle, so it gets the date too.
+const CLOCK_ONLY: i64 = 24 * 60 * 60;
+
 /// How many rows the widget needs for a report.
 ///
-/// One per window, one more for each window with a projection, one per agent
-/// that reports no percentage at all, and one for the offer when a window is
-/// used up.
+/// One per window, one more for each window that says when it resets, one
+/// per agent that reports no percentage at all, and one for the offer when
+/// a window is used up.
 #[must_use]
 pub fn height(report: &Report) -> u16 {
     let rows: usize = report
         .rows
         .iter()
-        .map(|row| 1 + usize::from(detail(row).is_some()))
+        .map(|row| 1 + usize::from(row.resets_at.is_some()))
         .sum();
     let offer = usize::from(offers_handoff(report));
     u16::try_from(
@@ -54,39 +68,32 @@ pub fn offers_handoff(report: &Report) -> bool {
         .any(|row| row.used_pct().is_some_and(|used_pct| used_pct >= 100))
 }
 
-/// A duration a person reads at a glance: `6d 17h`, `2h`, `1h20m`, `45m`,
-/// `30s`.
+/// When a window resets, as a person reads a clock: `02:40` tonight, and
+/// `10 Nov 06:00` for a week away.
 ///
-/// Weekly windows reset days away, and `161h` is not a number anyone reads;
-/// past a day the minutes stop mattering, so they are dropped.
+/// In the machine's own time zone, because that is the clock the user is
+/// looking at. A time zone the system cannot tell us leaves the reset in
+/// UTC rather than nothing: a wrong hour is obvious and a missing line is
+/// not.
 #[must_use]
-pub fn duration(seconds: i64) -> String {
-    /// Hours in a day.
-    const DAY: i64 = 24;
+pub fn reset_clock(resets_at: i64, now: i64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
 
-    let seconds = seconds.max(0);
-    let minutes = seconds / 60;
-    let hours = minutes / 60;
+    let Ok(stamp) = Timestamp::from_second(resets_at) else {
+        return String::new();
+    };
+    let when = TimeZone::system().to_datetime(stamp);
+    let clock = format!("{:02}:{:02}", when.hour(), when.minute());
+    if resets_at.saturating_sub(now) < CLOCK_ONLY {
+        return clock;
+    }
 
-    if hours >= DAY {
-        let days = hours / DAY;
-        let rest = hours % DAY;
-        if rest == 0 {
-            return format!("{days}d");
-        }
-        return format!("{days}d {rest}h");
-    }
-    if hours > 0 {
-        let rest = minutes % 60;
-        if rest == 0 {
-            return format!("{hours}h");
-        }
-        return format!("{hours}h{rest:02}m");
-    }
-    if minutes > 0 {
-        return format!("{minutes}m");
-    }
-    format!("{seconds}s")
+    let month = MONTHS
+        .get(usize::from(when.month().unsigned_abs()).saturating_sub(1))
+        .unwrap_or(&"");
+    format!("{} {month} {clock}", when.day())
 }
 
 /// A token count short enough for a sidebar: `840`, `12k`, `1.2M`.
@@ -108,55 +115,25 @@ pub fn tokens(count: u64) -> String {
     count.to_string()
 }
 
-/// How long ago a reading was taken: `updated 3h ago`.
-#[must_use]
-pub fn ago(seconds: i64) -> String {
-    format!("updated {} ago", duration(seconds))
-}
-
-/// An agent session identifier short enough to show: the first eight
-/// characters, which is what the agents themselves print.
-#[must_use]
-pub fn session_label(id: &str) -> String {
-    const SHOWN: usize = 8;
-
-    let short: String = id.chars().take(SHOWN).collect();
-    short
-}
-
 /// The first line of a window: who, which window, how much is gone.
 ///
-/// A window that has reset shows no percentage at all. The last one otag was
-/// told belongs to a window that is over, and showing it as the number of
-/// the window running now is the one thing this widget must never do.
+/// A window otag has never had a reading of shows a dash. A window whose
+/// reset has passed shows nothing left used, because the allowance is back;
+/// what it must never show is the percentage of the window before it.
 #[must_use]
 pub fn headline(row: &Row) -> String {
-    match row.used_pct() {
-        Some(used_pct) => format!("{} {} {used_pct:>3}%", row.agent, row.window.label()),
-        None => format!("{} {} reset", row.agent, row.window.label()),
-    }
+    let used = match row.used_pct() {
+        Some(used_pct) => format!("{used_pct}%"),
+        None => NO_READING.to_owned(),
+    };
+    format!("{} {} {used:>4}", row.agent.label(), row.window.label())
 }
 
-/// The second line of a window, when there is something to add.
-///
-/// A window waiting for its first reading says so, and an old reading says
-/// how old it is: both of those change what the line above it means. After
-/// that comes the projection, because it is the useful number, and the reset
-/// when nothing is climbing, so the user knows how long they are waiting.
+/// The second line of a window: when it resets, if the agent said so.
 #[must_use]
-pub fn detail(row: &Row) -> Option<String> {
-    if row.reset {
-        return Some("awaiting data".to_owned());
-    }
-    if row.is_stale() {
-        return Some(ago(row.age));
-    }
-    if let Some(full_in) = row.full_in {
-        return Some(format!("full in {}", duration(full_in)));
-    }
-    row.resets_in
-        .filter(|resets_in| *resets_in > 0)
-        .map(|resets_in| format!("resets {}", duration(resets_in)))
+pub fn detail(row: &Row, now: i64) -> Option<String> {
+    row.resets_at
+        .map(|resets_at| format!("resets {}", reset_clock(resets_at, now)))
 }
 
 /// What otag counted for an agent that reports no percentage of its own.
@@ -166,7 +143,7 @@ pub fn detail(row: &Row) -> Option<String> {
 /// percentage would be a lie.
 #[must_use]
 pub fn counted_line(agent: otag_agents::AgentKind, count: u64) -> String {
-    format!("{agent} ~{}", tokens(count))
+    format!("{} ~{}", agent.label(), tokens(count))
 }
 
 /// The usage widget.
@@ -176,6 +153,8 @@ pub struct Usage<'a> {
     pub report: &'a Report,
     /// Colours to draw it in.
     pub theme: Theme,
+    /// Now, in seconds since the epoch, which is what a reset is told from.
+    pub now: i64,
 }
 
 impl Widget for Usage<'_> {
@@ -196,7 +175,7 @@ impl Widget for Usage<'_> {
 
         for row in &self.report.rows {
             put(&headline(row), self.row_style(row), &mut y);
-            if let Some(detail) = detail(row) {
+            if let Some(detail) = detail(row, self.now) {
                 // Indented and dim: it is the explanation, not the number.
                 put(&format!(" {detail}"), self.theme.dim(), &mut y);
             }
@@ -217,14 +196,15 @@ impl Widget for Usage<'_> {
 impl Usage<'_> {
     /// How a window is drawn.
     ///
-    /// A number otag cannot vouch for is dimmed rather than coloured: an old
-    /// reading must not shout, and a window waiting for data has nothing to
-    /// shout about.
+    /// By what it says, and by nothing else: a reading is never dimmed for
+    /// its age. Either otag has a number, and it is the agent's own number
+    /// drawn in the colour that number deserves, or it has none and draws a
+    /// dash.
     fn row_style(&self, row: &Row) -> Style {
-        if row.reset || row.is_stale() {
-            return self.theme.dim();
+        match row.used_tenths {
+            Some(_) => self.style(row.level),
+            None => self.theme.dim(),
         }
-        self.style(row.level)
     }
 
     /// How a level is drawn.
@@ -244,34 +224,27 @@ mod tests {
 
     use super::*;
 
-    fn row(used_tenths: u16, full_in: Option<i64>, resets_in: Option<i64>) -> Row {
+    /// A moment in a known time zone: 2 November 2026, 23:35 UTC.
+    const NOW: i64 = 1_793_741_700;
+
+    fn row(used_tenths: u16, resets_at: Option<i64>) -> Row {
         Row {
             agent: AgentKind::Claude,
             window: Window::FiveHour,
             used_tenths: Some(used_tenths),
-            resets_in,
-            full_in,
+            resets_at,
             level: Level::of(f32::from(used_tenths) / 10.0),
-            at: 0,
-            age: 0,
-            reset: false,
-            session: None,
         }
     }
 
-    /// A window that reset, with no reading of the new one yet.
-    fn reset_row(age: i64) -> Row {
+    /// A window otag has never had a reading of.
+    fn unread(window: Window) -> Row {
         Row {
             agent: AgentKind::Claude,
-            window: Window::FiveHour,
+            window,
             used_tenths: None,
-            resets_in: None,
-            full_in: None,
+            resets_at: None,
             level: Level::Calm,
-            at: 0,
-            age,
-            reset: true,
-            session: None,
         }
     }
 
@@ -281,6 +254,7 @@ mod tests {
         Usage {
             report,
             theme: Theme::CALM_DARK,
+            now: NOW,
         }
         .render(area, &mut buffer);
 
@@ -296,29 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn a_duration_is_read_at_a_glance() {
-        assert_eq!(duration(30), "30s");
-        assert_eq!(duration(90), "1m");
-        assert_eq!(duration(2_700), "45m");
-        assert_eq!(duration(4_800), "1h20m");
-        assert_eq!(duration(7_200), "2h");
-        assert_eq!(
-            duration(-5),
-            "0s",
-            "a window that has reset is not negative"
-        );
-    }
-
-    #[test]
-    fn a_reset_days_away_is_shown_in_days() {
-        // A weekly window: `161h` is not a number anyone reads.
-        assert_eq!(duration(579_600), "6d 17h");
-        assert_eq!(duration(86_400), "1d");
-        assert_eq!(duration(86_399), "23h59m");
-        assert_eq!(duration(604_800), "7d");
-    }
-
-    #[test]
     fn a_token_count_is_shortened_but_never_rounded_to_nothing() {
         assert_eq!(tokens(0), "0");
         assert_eq!(tokens(840), "840");
@@ -328,38 +279,87 @@ mod tests {
     }
 
     #[test]
-    fn a_window_is_one_line_with_the_projection_below_it() {
+    fn a_reset_within_the_day_is_a_clock_and_nothing_else() {
+        // Three hours ahead of NOW, whatever the machine's time zone is:
+        // the hour is the machine's, the shape of the answer is not.
+        let clock = reset_clock(NOW + 3 * 60 * 60, NOW);
+        assert_eq!(clock.len(), 5, "`02:40`, and no date: {clock}");
+        assert_eq!(&clock[2..3], ":", "{clock}");
+    }
+
+    #[test]
+    fn a_reset_days_away_carries_its_date() {
+        let clock = reset_clock(NOW + 7 * 24 * 60 * 60, NOW);
+        assert!(
+            clock.len() > 8 && clock.contains(' '),
+            "`10 Nov 06:00`, because a clock alone would be a riddle: {clock}"
+        );
+    }
+
+    #[test]
+    fn a_reset_at_a_time_no_clock_can_hold_costs_a_line_and_not_the_client() {
+        assert_eq!(reset_clock(i64::MAX, NOW), "");
+    }
+
+    #[test]
+    fn a_window_is_its_percentage_and_when_it_resets() {
         let report = Report {
-            rows: vec![row(624, Some(4_800), Some(5_040))],
+            rows: vec![row(690, Some(NOW + 3 * 60 * 60))],
             counted: Vec::new(),
         };
 
         assert_eq!(height(&report), 2);
         let lines = render(&report, 16, 2);
-        assert_eq!(lines[0], "claude 5h  62%");
+        assert_eq!(lines[0], "Claude 5h  69%");
         assert_eq!(
-            lines[1], " full in 1h20m",
-            "the projection is what the widget is for"
+            lines[1],
+            format!(" resets {}", reset_clock(NOW + 3 * 60 * 60, NOW)),
+            "the reset is a time of day, not a countdown"
         );
     }
 
     #[test]
-    fn a_window_with_nothing_climbing_shows_when_it_resets_instead() {
+    fn a_window_that_never_reported_its_reset_is_one_line() {
         let report = Report {
-            rows: vec![row(380, None, Some(5_040))],
-            counted: Vec::new(),
-        };
-        assert_eq!(render(&report, 16, 2)[1], " resets 1h24m");
-    }
-
-    #[test]
-    fn a_window_with_nothing_to_add_is_one_line() {
-        let report = Report {
-            rows: vec![row(380, None, None)],
+            rows: vec![row(380, None)],
             counted: Vec::new(),
         };
         assert_eq!(height(&report), 1);
+        assert_eq!(render(&report, 16, 2)[0], "Claude 5h  38%");
         assert_eq!(render(&report, 16, 2)[1], "");
+    }
+
+    #[test]
+    fn a_window_with_no_reading_at_all_is_a_dash() {
+        let report = Report {
+            rows: vec![unread(Window::FiveHour), unread(Window::Weekly)],
+            counted: Vec::new(),
+        };
+
+        assert_eq!(height(&report), 2);
+        let lines = render(&report, 16, 2);
+        assert_eq!(
+            lines[0], "Claude 5h    –",
+            "a dash says otag has not been told, which no percentage can say"
+        );
+        assert_eq!(lines[1], "Claude week    –");
+        assert!(
+            !offers_handoff(&report),
+            "a window with no number is not a window that is used up"
+        );
+    }
+
+    #[test]
+    fn a_window_that_has_reset_reads_nothing_used() {
+        let report = Report {
+            rows: vec![row(0, None)],
+            counted: Vec::new(),
+        };
+        assert_eq!(
+            render(&report, 16, 1)[0],
+            "Claude 5h   0%",
+            "the allowance is back, which is what nothing used means"
+        );
     }
 
     #[test]
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(height(&report), 1);
         assert_eq!(
             render(&report, 16, 1)[0],
-            "codex ~1.2M",
+            "Codex ~1.2M",
             "a count is never shown as a percentage"
         );
     }
@@ -385,6 +385,7 @@ mod tests {
         let widget = Usage {
             report: &Report::default(),
             theme: Theme::CALM_DARK,
+            now: NOW,
         };
         assert_eq!(widget.style(Level::Calm), Theme::CALM_DARK.plain());
         assert_eq!(
@@ -400,32 +401,32 @@ mod tests {
     #[test]
     fn a_report_with_more_rows_than_space_draws_what_fits() {
         let report = Report {
-            rows: vec![row(100, None, None), row(200, None, None)],
+            rows: vec![row(100, None), row(200, None)],
             counted: Vec::new(),
         };
         let lines = render(&report, 16, 1);
         assert_eq!(lines.len(), 1, "nothing is drawn outside the widget");
-        assert_eq!(lines[0], "claude 5h  10%");
+        assert_eq!(lines[0], "Claude 5h  10%");
     }
 
     #[test]
     fn a_window_that_is_used_up_offers_the_handoff() {
         let report = Report {
-            rows: vec![row(1_000, None, Some(600))],
+            rows: vec![row(1_000, None)],
             counted: Vec::new(),
         };
 
         assert!(offers_handoff(&report));
-        assert_eq!(height(&report), 3);
-        let lines = render(&report, 22, 3);
-        assert_eq!(lines[0], "claude 5h 100%");
-        assert_eq!(lines[2], OFFER, "the user is told what to do about it");
+        assert_eq!(height(&report), 2);
+        let lines = render(&report, 22, 2);
+        assert_eq!(lines[0], "Claude 5h 100%");
+        assert_eq!(lines[1], OFFER, "the user is told what to do about it");
     }
 
     #[test]
     fn a_window_that_is_merely_worrying_offers_nothing() {
         let report = Report {
-            rows: vec![row(950, None, None)],
+            rows: vec![row(950, None)],
             counted: Vec::new(),
         };
         assert!(!offers_handoff(&report));
@@ -433,80 +434,22 @@ mod tests {
     }
 
     #[test]
-    fn how_long_ago_a_reading_was_taken_reads_as_a_sentence() {
-        assert_eq!(ago(10_800), "updated 3h ago");
-        assert_eq!(ago(900), "updated 15m ago");
-        assert_eq!(ago(4_800), "updated 1h20m ago");
-        assert_eq!(ago(0), "updated 0s ago");
-    }
-
-    #[test]
-    fn a_window_that_has_reset_shows_no_percentage() {
-        let report = Report {
-            rows: vec![reset_row(10_800)],
-            counted: Vec::new(),
-        };
-
-        assert_eq!(height(&report), 2);
-        let lines = render(&report, 16, 2);
-        assert_eq!(
-            lines[0], "claude 5h reset",
-            "the percentage from the window before is not shown as this one's"
-        );
-        assert_eq!(lines[1], " awaiting data");
-        assert!(
-            !offers_handoff(&report),
-            "a window with no number is not a window that is used up"
-        );
-    }
-
-    #[test]
-    fn an_old_reading_says_how_old_it_is() {
-        let mut row = row(680, None, Some(5_040));
-        row.age = 10_800;
-        let report = Report {
-            rows: vec![row],
-            counted: Vec::new(),
-        };
-
-        let lines = render(&report, 16, 2);
-        assert_eq!(lines[0], "claude 5h  68%");
-        assert_eq!(
-            lines[1], " updated 3h ago",
-            "how old the number is matters more than when the window resets"
-        );
-    }
-
-    #[test]
-    fn a_fresh_reading_shows_the_projection_and_not_an_age() {
-        let mut row = row(680, Some(4_800), Some(5_040));
-        row.age = 30;
-        let report = Report {
-            rows: vec![row],
-            counted: Vec::new(),
-        };
-        assert_eq!(render(&report, 16, 2)[1], " full in 1h20m");
-    }
-
-    #[test]
-    fn a_number_otag_cannot_vouch_for_is_dimmed_rather_than_coloured() {
+    fn a_reading_is_drawn_by_what_it_says_and_never_dimmed_for_its_age() {
         let widget = Usage {
             report: &Report::default(),
             theme: Theme::CALM_DARK,
+            now: NOW,
         };
-        let mut old = row(950, None, None);
-        old.age = 10_800;
 
         assert_eq!(
-            widget.row_style(&old),
-            Theme::CALM_DARK.dim(),
-            "an old number must not shout"
-        );
-        assert_eq!(widget.row_style(&reset_row(60)), Theme::CALM_DARK.dim());
-        assert_eq!(
-            widget.row_style(&row(950, None, None)),
+            widget.row_style(&row(950, None)),
             Style::new().fg(Theme::CALM_DARK.error),
-            "a current number still says what it has to"
+            "a reading says what it has to however long ago it arrived"
+        );
+        assert_eq!(
+            widget.row_style(&unread(Window::FiveHour)),
+            Theme::CALM_DARK.dim(),
+            "a dash is not a number and is not coloured like one"
         );
     }
 
@@ -519,7 +462,7 @@ mod tests {
     #[test]
     fn a_widget_with_no_space_draws_nothing_and_does_not_panic() {
         let report = Report {
-            rows: vec![row(624, Some(60), None)],
+            rows: vec![row(624, Some(NOW + 60))],
             counted: Vec::new(),
         };
         let area = Rect::new(0, 0, 0, 0);
@@ -527,6 +470,7 @@ mod tests {
         Usage {
             report: &report,
             theme: Theme::CALM_DARK,
+            now: NOW,
         }
         .render(area, &mut buffer);
     }

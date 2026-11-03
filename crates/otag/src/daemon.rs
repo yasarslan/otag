@@ -957,9 +957,10 @@ mod tests {
         let report = daemon.usage.report();
         assert_eq!(report.rows.len(), 2, "the account's windows are known");
         assert_eq!(report.rows[0].used_pct(), Some(70));
-        assert!(
-            report.rows[0].session.is_some(),
-            "and otag can say which session told it"
+        assert_eq!(
+            report.rows[1].used_pct(),
+            Some(58),
+            "both windows, from a session otag is not running"
         );
         assert_eq!(daemon.session.view().usage, report, "the clients are told");
     }

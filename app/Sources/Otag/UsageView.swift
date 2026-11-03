@@ -4,9 +4,11 @@ import SwiftUI
 
 /// How much of each agent's limits is gone, at the bottom of the sidebar.
 ///
-/// Calm, like the rest: a thin bar, a number, and the one useful line under
-/// it — when the window would be full at the rate of the last twenty
-/// minutes, or when it resets if nothing is climbing.
+/// One line per window, saying what the agent last reported and when that
+/// window resets. Nothing is added around it: no projection, no age, no
+/// explanation of why a number might be out of date. A reading the user can
+/// check against the agent itself is worth more than a reading with otag's
+/// own arithmetic beside it.
 struct UsageWidget: View {
     let store: SessionStore
 
@@ -20,16 +22,8 @@ struct UsageWidget: View {
                 UsageRefresh(store: store)
             }
 
-            if store.usage.hasNumbers {
-                // Each window says what it knows: a current number, a number
-                // with its age on it, or that it is waiting for the first
-                // reading of a window that has reset. One window being over
-                // is no reason to hide another that is not.
-                ForEach(store.usage.rows) { row in
-                    UsageRowView(row: row)
-                }
-            } else {
-                UsageHint(report: store.usage)
+            ForEach(store.usage.rows) { row in
+                UsageRowView(row: row)
             }
 
             ForEach(store.usage.counted) { counted in
@@ -48,9 +42,7 @@ struct UsageWidget: View {
 /// Ask the daemon for the numbers again.
 ///
 /// Always there, beside the numbers it refreshes, because the one moment a
-/// person wants it is the moment the numbers look wrong. Its tooltip carries
-/// the provenance: when the last reading arrived and which session otag
-/// heard it from.
+/// person wants it is the moment the numbers look wrong.
 struct UsageRefresh: View {
     let store: SessionStore
 
@@ -88,7 +80,7 @@ struct UsageRefresh: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .help(store.usage.provenance(panes: store.panes))
+            .help("Re-read the limits")
             .accessibilityLabel("Refresh usage")
         }
         .onChange(of: store.refreshingUsage) { _, refreshing in
@@ -129,30 +121,7 @@ struct UsageRefresh: View {
     }
 }
 
-/// What the widget says when no window has a number to show.
-struct UsageHint: View {
-    let report: UsageReport
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(headline)
-                .font(.caption)
-            Text(UsageReport.whereNumbersComeFrom)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// Why there is nothing to show, which is not always the same reason: a
-    /// window that has reset is waiting for the first reading of the new
-    /// one, and an account otag has never heard about has none at all.
-    private var headline: String {
-        report.rows.isEmpty ? "No limits yet" : "Windows have reset"
-    }
-}
-
-/// One window.
+/// One window: what the agent last reported, and when it resets.
 struct UsageRowView: View {
     let row: UsageRow
 
@@ -164,55 +133,32 @@ struct UsageRowView: View {
                 Text(row.window.label)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                if let percent = row.usedPercent {
-                    Text("\(percent)%")
-                        .monospacedDigit()
-                        .foregroundStyle(colour)
-                } else {
-                    // The last percentage otag was told belongs to a window
-                    // that is over; showing it as this window's would be the
-                    // one wrong thing to say.
-                    Text("reset")
-                        .foregroundStyle(.secondary)
-                }
+                Text(used)
+                    .monospacedDigit()
+                    .foregroundStyle(colour)
             }
             .font(.caption)
 
             Meter(fraction: row.fraction, colour: colour)
-                .opacity(row.reset || row.isStale ? 0.4 : 1)
 
-            if let detail {
-                Text(detail)
+            if let resets = Readable.resetClock(row.resetsAt) {
+                Text("resets \(resets)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
     }
 
-    /// A window waiting for its first reading says so, and an old reading
-    /// says how old it is: both change what the number above means. After
-    /// that the projection, because it is the useful number, and the reset
-    /// when nothing is climbing.
-    private var detail: String? {
-        if row.reset {
-            return "waiting for fresh data"
-        }
-        if row.isStale {
-            return Readable.ago(row.age)
-        }
-        if let full = row.fullIn {
-            return "full in \(Readable.duration(full))"
-        }
-        if let resets = row.resetsIn, resets > 0 {
-            return "resets \(Readable.duration(resets))"
-        }
-        return nil
+    /// The percentage, or a dash when otag has never had a reading of this
+    /// window. A dash says what no percentage can say.
+    private var used: String {
+        guard let percent = row.usedPercent else { return Readable.noReading }
+        return "\(percent)%"
     }
 
-    /// A number otag cannot vouch for is never coloured: an old reading must
-    /// not shout, and a window waiting for data has nothing to shout about.
+    /// A reading is coloured by what it says and by nothing else.
     private var colour: Color {
-        if row.reset || row.isStale { return .secondary }
+        guard row.usedTenths != nil else { return .secondary }
         switch row.level {
         case .calm: return .secondary
         case .amber: return .orange
@@ -241,7 +187,7 @@ struct Meter: View {
     }
 }
 
-/// The inspector: the forecast, the timeline, and what each session is
+/// The inspector: the limits, the timeline, and what each session is
 /// spending.
 struct UsageInspector: View {
     let store: SessionStore
@@ -252,25 +198,13 @@ struct UsageInspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 section("Limits", accessory: { UsageRefresh(store: store) }) {
-                    if store.usage.hasNumbers {
-                        ForEach(store.usage.rows) { row in
-                            UsageRowView(row: row)
-                        }
-                        Text(store.usage.provenance(panes: store.panes))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        // Nothing to draw, so this is the place to say where
-                        // numbers come from at all. For Claude Code that is
-                        // a reply in any session, which needs otag's hooks.
-                        Text(store.usage.rows.isEmpty ? "No numbers yet" : "Windows have reset")
-                            .font(.headline)
-                        Text(UsageReport.whereNumbersComeFrom
-                            + " If none ever do, otag's hooks are not installed: "
-                            + "run `otag install-hooks`.")
+                    ForEach(store.usage.rows) { row in
+                        UsageRowView(row: row)
+                    }
+                    ForEach(store.usage.counted) { counted in
+                        Text("\(counted.agent.label) ~\(Readable.tokens(counted.tokens))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 if !store.usage.isEmpty {

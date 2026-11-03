@@ -154,35 +154,24 @@ pub async fn usage(socket: &Path, as_json: bool) -> Result<()> {
 
     if report.is_empty() {
         println!(
-            "no usage yet. Claude Code reports its limits through otag's status line              (`otag install-hooks`), and Codex reports them in its session files."
+            "no reading yet. Claude Code reports its limits with every reply, through otag's status line (`otag install-hooks`), and Codex reports them in its session files."
         );
     }
+    let now = otag_features::usage::now();
     for row in &report.rows {
-        let mut line = match row.used_pct() {
-            Some(used_pct) => format!("{} {} {used_pct:>3}%", row.agent, row.window.label()),
-            // The window reset, so the last percentage otag was told is not
-            // this window's. It says so instead of showing a stale number.
-            None => format!(
-                "{} {} reset, waiting for fresh data",
-                row.agent,
-                row.window.label()
-            ),
+        // The same line every client shows: who, which window, what the
+        // agent last said, and when that window resets. Nothing else: a
+        // reading the user can check against the agent itself is worth more
+        // than a reading with otag's own arithmetic beside it.
+        let used = match row.used_pct() {
+            Some(used_pct) => format!("{used_pct}%"),
+            None => ui_usage::NO_READING.to_owned(),
         };
-        if let Some(full_in) = row.full_in {
-            line.push_str(&format!(" · full in {}", ui_usage::duration(full_in)));
-        }
-        if let Some(resets_in) = row.resets_in.filter(|resets_in| *resets_in > 0) {
-            line.push_str(&format!(" · resets {}", ui_usage::duration(resets_in)));
-        }
-        if row.is_stale() {
-            line.push_str(&format!(" · {}", ui_usage::ago(row.age)));
-        }
-        if let Some(session) = &row.session {
-            // Usage is account-wide, so which session otag heard it from is
-            // the only way to tell a fresh reading from a forgotten one.
+        let mut line = format!("{} {:<4} {used:>4}", row.agent.label(), row.window.label());
+        if let Some(resets_at) = row.resets_at {
             line.push_str(&format!(
-                " · from session {}",
-                ui_usage::session_label(session)
+                "   resets {}",
+                ui_usage::reset_clock(resets_at, now)
             ));
         }
         println!("{line}");
@@ -190,7 +179,7 @@ pub async fn usage(socket: &Path, as_json: bool) -> Result<()> {
     for counted in &report.counted {
         println!(
             "{} ~{} tokens (it reports no limits of its own)",
-            counted.agent,
+            counted.agent.label(),
             ui_usage::tokens(counted.tokens)
         );
     }
@@ -202,8 +191,7 @@ pub async fn usage(socket: &Path, as_json: bool) -> Result<()> {
         println!(
             "  pane {}: {} {} tokens",
             pane.pane,
-            pane.agent
-                .map_or_else(String::new, |agent| agent.to_string()),
+            pane.agent.map_or("", otag_agents::AgentKind::label),
             ui_usage::tokens(pane.tokens.total())
         );
     }

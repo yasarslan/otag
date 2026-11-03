@@ -92,6 +92,7 @@ pub fn draw(
         crate::usage::Usage {
             report: &view.usage,
             theme,
+            now: otag_features::usage::now(),
         },
         usage_area(rect(view.sidebar), &view.usage),
     );

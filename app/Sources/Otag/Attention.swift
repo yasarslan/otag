@@ -154,13 +154,8 @@ struct MenuBarView: View {
             Divider()
         }
 
-        if store.usage.hasNumbers {
-            ForEach(store.usage.rows) { row in
-                Text(line(row))
-            }
-            Text(store.usage.provenance(panes: store.panes))
-        } else {
-            Text(UsageReport.whereNumbersComeFrom)
+        ForEach(store.usage.rows) { row in
+            Text(line(row))
         }
         Button(
             store.refreshingUsage ? "Refreshing Usage…" : "Refresh Usage",
@@ -182,19 +177,15 @@ struct MenuBarView: View {
         Button("Quit Otag") { NSApp.terminate(nil) }
     }
 
-    /// One window, as a line of the menu.
-    ///
-    /// A window that has reset says so instead of repeating the percentage
-    /// of the window before it, and an old reading says how old it is.
+    /// One window, as a line of the menu: the same line every other client
+    /// shows, with nothing added around it.
     private func line(_ row: UsageRow) -> String {
         let what = "\(row.agent.label) \(row.window.label)"
-        guard let percent = row.usedPercent else {
-            return "\(what) · reset, waiting for fresh data"
+        let used = row.usedPercent.map { "\($0)%" } ?? Readable.noReading
+        guard let resets = Readable.resetClock(row.resetsAt) else {
+            return "\(what)   \(used)"
         }
-        if row.isStale {
-            return "\(what) · \(percent)% · \(Readable.ago(row.age))"
-        }
-        return "\(what) · \(percent)%"
+        return "\(what)   \(used)   resets \(resets)"
     }
 
     /// A question, short enough for a menu.
@@ -212,13 +203,11 @@ struct MenuBarLabel: View {
     var body: some View {
         if store.waiting > 0 {
             Label("\(store.waiting)", systemImage: "questionmark.circle.fill")
-        } else if let worst = store.usage.rows
-            .filter(\.isCurrent)
-            .compactMap(\.usedPercent)
-            .max() {
-            // Only windows with a reading that describes them as they are
-            // now: a stale number in the menu bar is read as the truth all
-            // day, which is the one thing it must not be.
+        } else if let worst = store.usage.rows.compactMap(\.usedPercent).max() {
+            // The worst of what the agents last reported. No cutoff for age:
+            // a reading is the reading until another one arrives, and a
+            // number that disappears from the menu bar on a timer is read as
+            // otag losing track.
             Text("\(worst)%")
         } else {
             Image(systemName: "square.split.2x1")

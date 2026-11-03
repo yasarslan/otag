@@ -201,15 +201,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Every window says what it knows, one window at a time: a current number, a
-  number with its age on it and dimmed, or that it is waiting for the first
-  reading of a window that has reset. Where no window has a number at all,
-  the app says where numbers come from — "Limits appear after a Claude Code
-  reply in any session" — instead of saying only that otag is waiting. The
-  menu bar item still shows its icon rather than a number nobody has
-  confirmed. There is no supported way to ask Claude Code for the account's
+- The limits are shown as one line per window, everywhere — sidebar widget,
+  inspector, menu bar, terminal client and `otag usage`: who, which window,
+  what the agent last reported, and when that window resets as a time of day
+  (`Claude 5h 69% resets 02:40`, `Claude week 34% resets 10 Nov 06:00`).
+  Gone with it: the "full in" forecast, "updated X ago", the dimming of a
+  reading nobody had confirmed recently, and every line of hint text. A
+  reading the user can check against the agent itself is worth more than a
+  reading with otag's own arithmetic beside it. The burn rate is still
+  measured — the handoff and the night shift decide on it — and no longer
+  shown. There is no supported way to ask Claude Code for the account's
   limits without spending tokens, so otag never does: the numbers come from
   what the sessions report.
+- A window whose reset has passed reads 0% until a reading of the new one
+  arrives, because the allowance is back and that is what zero means. A
+  window otag has never had a reading of reads `–`. The menu bar shows the
+  worst percentage any window last reported, with no cutoff for age: a
+  number that vanishes on a timer reads as otag losing track.
+- The app asks the daemon for the numbers again every 30 seconds rather than
+  every minute, matching the interval the agents' status lines run on.
 - `otag install-hooks` asks Claude Code to re-run the status line every 30
   seconds, so a session that is sitting idle keeps reporting the account's
   limits instead of going quiet until someone types. An interval already in
@@ -217,6 +227,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line over and handing it back.
 
 ### Fixed
+
+- A reading is no longer undone by a session that knows less. Readings arrive
+  from every session on the machine, and an idle or resumed session re-runs
+  its status line on a timer and reports the snapshot it was handed when it
+  last answered — which can name a window that ended days ago. otag took
+  whichever reading arrived last whenever the two named different resets, so
+  one such session turned a current "5h 69%, resets 02:40" into "windows have
+  reset" with no percentage at all. Readings are now ranked by the window
+  they describe rather than by when they arrived: a later reset is a later
+  window, and a reading of a window that is over can never replace one of the
+  window running. A status line payload that carries no limits — from another
+  session, from a resumed one before its first reply, from an account on an
+  API key, or with its windows null — still changes nothing at all.
 
 - The weekly forecast is measured over a day of readings rather than the
   last twenty minutes, so a busy afternoon no longer says the week will be

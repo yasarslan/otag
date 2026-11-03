@@ -258,8 +258,12 @@ fn usage_says_there_is_nothing_yet_and_how_to_get_it() {
 
     let reported = succeeds(sandbox.otag().arg("usage"));
     assert!(
-        reported.contains("no usage yet") && reported.contains("install-hooks"),
+        reported.contains("no reading yet") && reported.contains("install-hooks"),
         "a user with no numbers is told how to get them: {reported}"
+    );
+    assert!(
+        reported.contains("Claude 5h      –"),
+        "and the windows that will carry numbers are already there: {reported}"
     );
 }
 

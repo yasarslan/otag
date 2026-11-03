@@ -19,8 +19,20 @@ use serde::{Deserialize, Serialize};
 /// How long samples are kept.
 pub const HISTORY: i64 = 7 * 24 * 60 * 60;
 
-/// How far back the burn rate is measured.
+/// How far back the burn rate of the five-hour window is measured.
+///
+/// Short on purpose: five hours is a sitting, and what matters is the pace
+/// of the work going on now.
 pub const BURN_WINDOW: i64 = 20 * 60;
+
+/// How far back the burn rate of the weekly window is measured.
+///
+/// A week is not a sitting. Twenty minutes of a busy afternoon, stretched
+/// across seven days, says the week will be gone by the evening — which is
+/// how a weekly window at a third full came to read "full in 4h38m". A day
+/// of readings is long enough to average a working day's pace and short
+/// enough to notice a change of pace.
+pub const WEEKLY_BURN_WINDOW: i64 = 24 * 60 * 60;
 
 /// How many samples a projection needs.
 ///
@@ -55,6 +67,28 @@ pub enum Window {
 impl Window {
     /// Both windows, shorter first.
     pub const ALL: [Self; 2] = [Self::FiveHour, Self::Weekly];
+
+    /// How long the window runs for, in seconds.
+    #[must_use]
+    pub const fn length(self) -> i64 {
+        match self {
+            Self::FiveHour => 5 * 60 * 60,
+            Self::Weekly => 7 * 24 * 60 * 60,
+        }
+    }
+
+    /// How far back this window's burn rate is measured, in seconds.
+    ///
+    /// Proportional to the window itself: a rate measured over a twentieth
+    /// of the window is a rate, and a rate measured over a thousandth of it
+    /// is a burst.
+    #[must_use]
+    pub const fn burn_window(self) -> i64 {
+        match self {
+            Self::FiveHour => BURN_WINDOW,
+            Self::Weekly => WEEKLY_BURN_WINDOW,
+        }
+    }
 
     /// What the widget calls it, in as few columns as possible.
     #[must_use]
@@ -263,13 +297,24 @@ impl Usage {
 
     /// How fast a window is filling, in percentage points per hour.
     ///
-    /// A least-squares slope over the samples of the last twenty minutes, so
-    /// that one turn that cost a lot does not become a prediction. Nothing is
-    /// reported until there are three samples spread over real time, or when
-    /// the number is not climbing.
+    /// A least-squares slope over the samples of this window's own burn
+    /// window — twenty minutes for the five-hour one, a day for the weekly
+    /// one — so that one turn that cost a lot does not become a prediction
+    /// about a week. Nothing is reported until there are three samples
+    /// spread over real time, or when the number is not climbing.
+    ///
+    /// The measurement never reaches back past the start of the window being
+    /// measured: percentages from the window before it describe a different
+    /// allowance, and the drop between them is not a rate.
     #[must_use]
     pub fn burn_rate(&self, agent: AgentKind, window: Window, now: i64) -> Option<f32> {
-        let cutoff = now.saturating_sub(BURN_WINDOW);
+        let mut cutoff = now.saturating_sub(window.burn_window());
+        if let Some(resets_at) = self
+            .latest(agent, window)
+            .and_then(|latest| latest.resets_at)
+        {
+            cutoff = cutoff.max(resets_at.saturating_sub(window.length()));
+        }
         let recent: Vec<&Sample> = self
             .samples
             .iter()
@@ -310,6 +355,11 @@ impl Usage {
     /// not a limit the user will hit. Nothing is reported either when the
     /// newest reading is from a window that has already reset, because then
     /// otag does not know what the current percentage is to project from.
+    ///
+    /// The weekly window is projected only when otag knows when it resets.
+    /// Running out of a week is a thing worth saying, but a projection days
+    /// ahead with nothing to measure it against is a guess, and a guess with
+    /// a number on it reads like knowledge.
     #[must_use]
     pub fn full_in(&self, agent: AgentKind, window: Window, now: i64) -> Option<i64> {
         let latest = self.latest(agent, window)?;
@@ -330,6 +380,7 @@ impl Usage {
 
         match latest.resets_at {
             Some(resets_at) if resets_at.saturating_sub(now) <= seconds => None,
+            None if window == Window::Weekly => None,
             _ => Some(seconds),
         }
     }
@@ -1055,6 +1106,171 @@ mod tests {
         assert_eq!(
             usage.report(1_000).rows[0].session.as_deref(),
             Some("a9f87cc5-726a")
+        );
+    }
+
+    /// One reading of the weekly window.
+    fn weekly(used_pct: f32, resets_at: Option<i64>, at: i64) -> Sample {
+        Sample {
+            agent: AgentKind::Claude,
+            window: Window::Weekly,
+            used_pct,
+            resets_at,
+            at,
+            session: None,
+        }
+    }
+
+    #[test]
+    fn a_burn_window_is_proportional_to_the_window_it_measures() {
+        assert_eq!(Window::FiveHour.burn_window(), BURN_WINDOW);
+        assert_eq!(Window::Weekly.burn_window(), WEEKLY_BURN_WINDOW);
+        for window in Window::ALL {
+            let share = window.length() / window.burn_window();
+            assert!(
+                (4..=30).contains(&share),
+                "a rate is measured over a fraction of its own window, not a \
+                 thousandth of it and not the whole of it: {window:?} is 1/{share}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_busy_twenty_minutes_does_not_decide_how_the_week_is_going() {
+        let mut usage = Usage::new();
+        let resets_at = 6 * 24 * 60 * 60;
+        let now = 2 * 24 * 60 * 60;
+
+        // Two days of steady work, a bit over a point an hour, and then a
+        // busy twenty minutes: nearly four points in it. Measured over those
+        // twenty minutes alone the week reads as eleven points an hour and
+        // gone by this evening, which is the number this guards against.
+        for hour in 0..48 {
+            usage.record(weekly(hour as f32 * 1.25, Some(resets_at), hour * 3_600));
+        }
+        usage.record(weekly(56.25, Some(resets_at), now - 1_200));
+        usage.record(weekly(58.10, Some(resets_at), now - 600));
+        usage.record(weekly(60.00, Some(resets_at), now));
+
+        let per_hour = usage
+            .burn_rate(AgentKind::Claude, Window::Weekly, now)
+            .expect("a rate");
+        assert!(
+            per_hour < 3.0,
+            "a day of readings is a pace, not a burst: {per_hour} points an hour"
+        );
+
+        let full_in = usage
+            .full_in(AgentKind::Claude, Window::Weekly, now)
+            .expect("a projection, because it lands before the reset");
+        assert!(
+            full_in > 24 * 60 * 60,
+            "forty points at that pace is more than a day away, not 4h38m: {full_in}s"
+        );
+        assert!(
+            full_in < resets_at - now,
+            "and it is only shown because it lands before the reset: {full_in}s"
+        );
+    }
+
+    #[test]
+    fn the_five_hour_window_still_follows_the_last_twenty_minutes() {
+        let mut usage = Usage::new();
+        let resets_at = 4 * 60 * 60;
+        // An hour ago it was crawling; in the last twenty minutes it is not.
+        for minute in 0..60 {
+            usage.record(Sample {
+                agent: AgentKind::Claude,
+                window: Window::FiveHour,
+                used_pct: minute as f32 * 0.01,
+                resets_at: Some(resets_at),
+                at: minute * 60,
+                session: None,
+            });
+        }
+        let now = 2 * 60 * 60;
+        for (used_pct, at) in [(20.0, now - 1_200), (30.0, now - 600), (40.0, now)] {
+            usage.record(Sample {
+                agent: AgentKind::Claude,
+                window: Window::FiveHour,
+                used_pct,
+                resets_at: Some(resets_at),
+                at,
+                session: None,
+            });
+        }
+
+        let per_hour = usage
+            .burn_rate(AgentKind::Claude, Window::FiveHour, now)
+            .expect("a rate");
+        assert!(
+            per_hour > 50.0,
+            "the five-hour window follows the sitting it is in: {per_hour}"
+        );
+    }
+
+    #[test]
+    fn a_rate_never_reaches_back_into_the_window_before_it() {
+        let mut usage = Usage::new();
+        // The weekly window reset two hours ago, so a day of readings would
+        // otherwise include the last window's 90% and read as falling.
+        let resets_at = 7 * 24 * 60 * 60 + 2 * 60 * 60;
+        let started = resets_at - Window::Weekly.length();
+        for hour in 0..10 {
+            usage.record(weekly(
+                80.0 + hour as f32,
+                None,
+                started - (10 - hour) * 3_600,
+            ));
+        }
+        let now = started + 2 * 60 * 60;
+        for (used_pct, at) in [(1.0, started + 600), (2.0, started + 3_600), (3.0, now)] {
+            usage.record(weekly(used_pct, Some(resets_at), at));
+        }
+
+        let per_hour = usage
+            .burn_rate(AgentKind::Claude, Window::Weekly, now)
+            .expect("a rate for the window that is running");
+        assert!(
+            (0.5..3.0).contains(&per_hour),
+            "only this window's own readings count: {per_hour} points an hour"
+        );
+    }
+
+    #[test]
+    fn a_weekly_window_with_no_reset_time_is_not_projected() {
+        let mut usage = Usage::new();
+        for (used_pct, at) in [(10.0, 0), (20.0, 12 * 3_600), (30.0, 24 * 3_600)] {
+            usage.record(weekly(used_pct, None, at));
+        }
+        let now = 24 * 3_600;
+
+        assert!(
+            usage
+                .burn_rate(AgentKind::Claude, Window::Weekly, now)
+                .is_some(),
+            "the number is climbing"
+        );
+        assert_eq!(
+            usage.full_in(AgentKind::Claude, Window::Weekly, now),
+            None,
+            "days ahead with no reset to land before is a guess, not a forecast"
+        );
+    }
+
+    #[test]
+    fn a_weekly_projection_past_the_reset_is_not_shown() {
+        let mut usage = Usage::new();
+        // Climbing slowly, with the week nearly over: it will reset first.
+        let resets_at = 3 * 60 * 60;
+        for (used_pct, at) in [(40.0, 0), (41.0, 3_600), (42.0, 2 * 3_600)] {
+            usage.record(weekly(used_pct, Some(resets_at), at));
+        }
+
+        assert_eq!(
+            usage.full_in(AgentKind::Claude, Window::Weekly, 2 * 3_600),
+            None,
+            "the user will never reach the limit this week"
         );
     }
 

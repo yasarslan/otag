@@ -218,6 +218,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The weekly forecast is measured over a day of readings rather than the
+  last twenty minutes, so a busy afternoon no longer says the week will be
+  gone by the evening — a weekly window a third full read "full in 4h38m".
+  The five-hour window still follows the last twenty minutes, which is the
+  sitting it is in. Neither measurement reaches back past the start of the
+  window it is measuring, and the weekly window is projected only when otag
+  knows when it resets and the projection lands before then.
 - The refresh button is always there, not only when the numbers have gone
   stale, and it has a hit area rather than a ten-point glyph to aim at. It
   turns while otag is re-reading and says "Updated" when the answer lands.

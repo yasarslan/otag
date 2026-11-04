@@ -74,3 +74,59 @@ struct HandoffTests {
         Issue.record("never saw \(what)")
     }
 }
+
+/// The line across the bottom of the window after a handoff.
+///
+/// "claude is taking over from codex, reading …" used to stay there for the
+/// rest of the day. It describes the session now sitting in the window, so
+/// it has nothing left to say once that session is on screen.
+@Suite("The line a handoff leaves")
+@MainActor
+struct HandoffNoticeTests {
+    @Test("the line goes once the session it opened is on screen")
+    func theNoticeGoesWhenTheSessionArrives() async throws {
+        let store = SessionStore(
+            socket: URL(fileURLWithPath: NSTemporaryDirectory() + "/otag-nowhere.sock")
+        )
+        store.noticeTimeout = .seconds(30)
+
+        store.apply(.handoffDone(pane: 7, package: nil, summary: "claude is taking over"))
+        #expect(store.notice == "claude is taking over", "the user is told once")
+
+        // The daemon sends the new pane a moment later, which is the session
+        // the line was about.
+        let opened = try JSONDecoder().decode(PaneInfo.self, from: Data(#"{"id":7}"#.utf8))
+        store.apply(.panes([opened]))
+        try await until("the line to go by itself") { store.notice == nil }
+    }
+
+    @Test("a line whose session never arrives still goes")
+    func theNoticeTimesOut() async throws {
+        let store = SessionStore(
+            socket: URL(fileURLWithPath: NSTemporaryDirectory() + "/otag-nowhere.sock")
+        )
+        store.noticeTimeout = .milliseconds(300)
+
+        store.apply(.handoffDone(pane: 7, package: nil, summary: "claude is taking over"))
+        #expect(store.notice != nil)
+        try await until("the line to time out") { store.notice == nil }
+    }
+
+    @Test("the close button still works, and stops the wait")
+    func closingItByHandStillWorks() {
+        let store = SessionStore(
+            socket: URL(fileURLWithPath: NSTemporaryDirectory() + "/otag-nowhere.sock")
+        )
+        store.apply(.handoffDone(pane: 7, package: nil, summary: "claude is taking over"))
+        store.clearNotice()
+        #expect(store.notice == nil)
+    }
+
+    private func until(_ what: String, _ ready: () -> Bool) async throws {
+        for _ in 0 ..< 100 {
+            if ready() { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        Issue.record("never saw \(what)")
+    }
+}

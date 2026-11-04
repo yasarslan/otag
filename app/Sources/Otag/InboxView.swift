@@ -100,8 +100,9 @@ struct AnswerProblemView: View {
 
 /// One line across the bottom of the window: what otag just did.
 ///
-/// A handoff, or something the night shift sent. It stays until it is
-/// dismissed, because the thing it is reporting already happened.
+/// A handoff, or something the night shift sent. A handoff's line goes by
+/// itself once the session it opened is on screen, because by then the
+/// session says it better; anything else stays until it is dismissed.
 struct NoticeBar: View {
     let notice: String
     let dismiss: () -> Void

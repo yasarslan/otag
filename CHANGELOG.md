@@ -238,6 +238,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen is heard even moments after it reported for itself, so nothing
   about this can hide one.
 
+- The line a handoff leaves across the bottom of the window goes by itself.
+  "claude is taking over from codex, reading …" describes the session that
+  is now in the window, so it has nothing left to say once that session is
+  on screen — and it used to stay there for the rest of the day. It now goes
+  as soon as the session it opened appears, and after eight seconds either
+  way. The close button still works; it is just no longer the only way.
+
 - A handoff asked for twice no longer opens two sessions on one task. A
   handoff takes a moment — a transcript to read, `git` to ask, a package to
   write — and the button that starts one sat there the whole time, so a

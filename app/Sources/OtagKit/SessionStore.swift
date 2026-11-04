@@ -128,6 +128,46 @@ public final class SessionStore {
     /// Forget the last notice.
     public func clearNotice() {
         notice = nil
+        noticeWaiting?.cancel()
+        noticeWaiting = nil
+    }
+
+    /// How long a handoff's line stays up when the session it opened never
+    /// appears. Shortened in tests.
+    static let defaultNoticeTimeout = Duration.seconds(8)
+    var noticeTimeout = SessionStore.defaultNoticeTimeout
+
+    private var noticeWaiting: Task<Void, Never>?
+
+    /// Say that a handoff happened, until the session it opened is there.
+    ///
+    /// "claude is taking over from codex, reading …" is worth reading once
+    /// and then worth nothing: what it describes is the session now sitting
+    /// in the window. So it goes as soon as that session appears, and after
+    /// `noticeTimeout` either way, rather than staying across the rest of
+    /// the day. The close button still works — this only means the user does
+    /// not have to use it.
+    private func note(handoff text: String, opened pane: PaneID) {
+        clearNotice()
+        guard !text.isEmpty else { return }
+        notice = text
+
+        noticeWaiting = Task { [weak self] in
+            let waiting = self?.noticeTimeout ?? Self.defaultNoticeTimeout
+            let step = Duration.milliseconds(100)
+            var waited = Duration.zero
+            while waited < waiting {
+                try? await Task.sleep(for: step)
+                guard let self, !Task.isCancelled else { return }
+                waited += step
+                // The session it was telling the user about is on screen;
+                // the line has nothing left to say.
+                if panes.contains(where: { $0.id == pane }) { break }
+            }
+            guard let self, !Task.isCancelled else { return }
+            notice = nil
+            noticeWaiting = nil
+        }
     }
 
     /// The sessions a handoff has been asked for and not yet answered.
@@ -267,6 +307,8 @@ public final class SessionStore {
     /// Stop listening and close the connection. The daemon keeps running.
     public func disconnect() {
         handoffSettled()
+        noticeWaiting?.cancel()
+        noticeWaiting = nil
         listening?.cancel()
         listening = nil
         refreshing?.cancel()
@@ -326,7 +368,10 @@ public final class SessionStore {
     }
 
     /// Take in one message from the daemon.
-    private func apply(_ response: Response) {
+    ///
+    /// Not private so that a test can hand the store the exact sequence of
+    /// messages a real daemon sends; nothing outside the module calls it.
+    func apply(_ response: Response) {
         switch response {
         case let .event(event):
             apply(event)
@@ -340,9 +385,9 @@ public final class SessionStore {
             history = samples
         case let .morningReport(sessions):
             morningReport = sessions
-        case let .handoffDone(_, _, summary):
+        case let .handoffDone(pane, _, summary):
             handoffSettled()
-            notice = summary.isEmpty ? nil : summary
+            note(handoff: summary, opened: pane)
         case let .version(version):
             daemonVersion = version
         case let .answered(ask, delivered, summary):
@@ -402,8 +447,8 @@ public final class SessionStore {
             asks.append(ask)
         case let .resolved(ask, _):
             asks.removeAll { $0.id == ask }
-        case let .handoff(_, _, summary):
-            notice = summary.isEmpty ? nil : summary
+        case let .handoff(pane, _, summary):
+            note(handoff: summary, opened: pane)
         case let .notice(_, text):
             notice = text.isEmpty ? nil : text
         case .unknown:

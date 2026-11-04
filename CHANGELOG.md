@@ -13,27 +13,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon if none is running and lists every session, grouped by project, with
   what each one is doing. Build it with `scripts/bundle-app.sh`. The terminal
   client is unchanged and stays the way to use otag on Linux and over SSH.
-- The app shows the sessions themselves, in tabs that can be split: a real
-  terminal per pane with colours, scrollback, mouse reporting, copy and
-  paste, resized by the window rather than by otag's own layout. Dividers
-  drag, `Cmd-D` and `Cmd-Shift-D` split, `Cmd-W` closes a tab and
-  `Cmd-Shift-[`/`]` step between them.
+- The app has one thing to learn: **sessions**. The sidebar lists them and
+  the main area shows the one you picked, or up to three side by side. There
+  is no tab bar and no second navigator.
+- The app shows the sessions themselves: a real terminal per session with
+  colours, scrollback, mouse reporting, copy and paste, resized by the
+  window rather than by otag's own layout. Drag a session from the sidebar
+  onto the left, the right or the bottom of the main area, or use
+  `⋯ > Split with…`, `Cmd-D` or `Cmd-Shift-D`. Dividers drag, `Cmd-[` and
+  `Cmd-]` move the keyboard, `Cmd-W` closes a session, and `Cmd-1`–`Cmd-9`
+  jump to the first nine. A fourth session closes the one you had not looked
+  at for longest and says so.
+- Every session is called something you recognise: a name taken from its
+  first prompt, editable from `⋯ > Rename…` or a right click. A session
+  started outside otag is named after the folder it works in.
+- One bar above a session, with exactly two controls: a primary button that
+  hands the work to the other agent — **Switch to Codex** / **Switch to
+  Claude**, emphasised once the current agent is nearly out of room — and one
+  `⋯` menu for split, a lighter model, the night shift, rename, the morning
+  report and close. A right click in the sidebar offers the same list.
 - A new-session sheet (`Cmd-N`): a project folder, Claude Code / Codex /
   shell, an optional model, an optional first prompt, and an optional git
   worktree of the session's own so that two agents cannot collide in one
   checkout. A worktree that cannot be made stops the session rather than
   quietly sharing the checkout.
-- `Cmd-K` is every command by name and `Cmd-P` jumps to a session: one
-  field, no modes, and the shortcut shown beside each so the palette teaches
-  the menus rather than replacing them.
-- A welcome screen on the first launch: it finds your agents, shows exactly
-  what installing Claude Code's hooks would change and installs them only
-  when you press the button, and lists the keys worth knowing.
-- A settings window (`Cmd-,`) with the three things worth setting: the
-  terminal's font size, whether idle sessions dim, and whether the app
-  notifies.
-- A session doing nothing, in a tab with others, is drawn slightly dimmer, so
-  the eye goes to what is working. Nothing blinks and nothing moves.
+- `Cmd-K` is every session and every command by name: one field, one list,
+  no modes, and the shortcut shown beside each so the palette teaches the
+  menus rather than replacing them. Nothing is only there.
+- A welcome screen on the first launch, in three steps: what otag does and
+  which agents it can find, exactly what installing Claude Code's hooks
+  would change — installed only when you press the button — and your first
+  session.
+- An empty state that explains the window rather than apologising for being
+  empty: one button and three lines naming the sidebar, the switch button
+  and dragging to split.
+- A settings window (`Cmd-,`) with the few things worth setting: the
+  terminal theme, its font size, whether idle sessions dim, and whether the
+  app notifies.
+- **Three terminal themes**, the same in every pane: **Glass Light**, **Glass
+  Dark** and **Midnight** (deep navy, high contrast), chosen in Settings →
+  Appearance with a live preview, and following the system appearance unless
+  you choose one. Changing the theme reaches every open session at once.
+  Each theme sets the font, line height, paper, cursor, selection and all
+  sixteen ANSI colours, so a Claude pane and a Codex pane are the same
+  terminal. Every colour that carries meaning is checked against its own
+  background — the agents' diff blocks and highlighted prompts stay readable
+  in all three.
+- Every pane answers an agent's `OSC 10` and `OSC 11` queries with the active
+  theme's colours, so an agent on its own auto theme follows otag's theme
+  with nothing configured and nothing written anywhere.
+- Settings can also offer, once and only when you press the button, to match
+  the agents' own theme settings: Claude Code's `theme` and Codex's
+  `[tui] theme`. It shows the exact lines it would write, names both files,
+  keeps a timestamped backup of each, changes one key per file, keeps a
+  `-daltonized` or `-ansi` variant rather than replacing it with the plain
+  one, and never touches a custom theme.
+- Liquid Glass chrome on macOS 26 — the sidebar, the header bar, the cards and
+  the popovers — falling back to materials on macOS 14 and 15. Terminals stay
+  opaque: text an agent drew never has the desktop showing through it.
+- A session doing nothing, beside others, is drawn slightly dimmer, so the
+  eye goes to what is working. Nothing blinks and nothing moves.
 - An app icon, drawn by `scripts/make-icon.swift` at build time rather than
   shipped as a binary asset.
 - **Night shift**: give a session a queue of prompts and otag works through
@@ -51,21 +90,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the window, and every client is told, not only the one that asked.
 - `night_shift`, `morning_report` and `handoff` on the socket, and every
   pane now says what the night shift is doing for it.
-- The app shows how much of the limits is gone: a thin meter per window at
-  the bottom of the sidebar with the percentage, when the window resets and
-  — once there are three readings — when it would be full at the rate of the
-  last twenty minutes. `Cmd-Opt-I` opens an inspector with the same numbers,
-  a timeline chart of every reading otag has kept, this session's context
-  meter and what each session has spent.
-- A context meter per session, in the sidebar and the inspector, drawn only
-  when otag knows how large that model's context is: a share of an unknown
-  total would be a guess.
+- The app shows how much of the limits is gone in one card at the foot of
+  the sidebar: a thin meter per window with the percentage, when the window
+  resets, and whether otag is talking to the daemon. Clicking it opens a
+  popover with the same numbers, a timeline chart of every reading otag has
+  kept, this session's context and what each session has spent — there is no
+  separate inspector panel.
+- A context meter for the session with the keyboard, drawn only when otag
+  knows how large that model's context is: a share of an unknown total would
+  be a guess.
 - `usage_history` on the socket: the readings behind the numbers, which the
   daemon already keeps across restarts, so a chart can be drawn the moment a
   client connects.
-- The app finds you when its window does not: the questions the agents are
-  waiting on sit at the top of the sidebar with **Allow** and **Deny** beside
-  them (`Cmd-Shift-Y` / `Cmd-Shift-N` answer the oldest), the Dock icon
+- The app finds you when its window does not: a session waiting for
+  permission opens up in the sidebar under its own name, with the question
+  and **Allow** and **Deny** under it
+  (`Cmd-Shift-Y` / `Cmd-Shift-N` answer the oldest), the Dock icon
   carries the number of sessions waiting, a notification with the same two
   buttons goes out the moment one starts waiting, and a menu bar item shows
   the limits and who is waiting even with the window closed.
@@ -193,8 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A refresh button beside the usage numbers — in the sidebar, in the
-  inspector and in the menu bar item — that asks the daemon for them again.
+- A refresh button beside the usage numbers — in the limits card's popover
+  and in the menu bar item — that asks the daemon for them again.
   Its tooltip says when the last reading arrived and which session otag
   heard it from, naming the project when it is a session otag is running.
   The app also re-reads them every minute while it is open.
@@ -231,8 +271,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, and a pane answers an agent asking what its colours are with
   exactly those. otag does not write to any agent's configuration.
 
-- The limits are shown as one line per window, everywhere — sidebar widget,
-  inspector, menu bar, terminal client and `otag usage`: who, which window,
+- The limits are shown as one line per window, everywhere — the limits card
+  and its popover, the menu bar, the terminal client and `otag usage`: who,
+  which window,
   what the agent last reported, and when that window resets as a time of day
   (`Claude 5h 69% resets 02:40`, `Claude week 34% resets 10 Nov 06:00`).
   Gone with it: the "full in" forecast, "updated X ago", the dimming of a
@@ -359,7 +400,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session the number came from.
 - A window that has already reset no longer shows the percentage it ended on
   as if it were current. Everywhere the numbers appear — the sidebar, the
-  app, its inspector and its menu bar item, and `otag usage` — such a window
+  app, its limits popover and its menu bar item, and `otag usage` — such a
+  window
   says it has reset and is waiting for fresh data, with no percentage and no
   forecast, until the agent reports the new window.
 - Every reading now carries how old it is, so a number nobody has refreshed

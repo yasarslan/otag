@@ -28,6 +28,14 @@ struct SidebarView: View {
                     ForEach(workspace.panes) { pane in
                         SessionRow(pane: pane)
                             .tag(pane.id)
+                            .draggable(DraggedSession(pane: pane.id)) {
+                                // What the user sees under the cursor: the
+                                // session's own name, so it is obvious what
+                                // is being moved.
+                                SessionRow(pane: pane)
+                                    .padding(6)
+                                    .frame(width: 200, alignment: .leading)
+                            }
                             .contextMenu {
                                 SessionActionItems(commands: commands(pane))
                             }

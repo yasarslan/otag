@@ -29,6 +29,9 @@ struct TabsView: View {
                     askingForModel: $askingForModel
                 )
                 .id(tab.id)
+                // Drag a session out of the sidebar and onto an edge to put
+                // it there. Nothing is drawn until something is over them.
+                .overlay { DropEdges(workbench: workbench, store: store) }
             }
         }
     }

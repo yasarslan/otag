@@ -199,6 +199,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heard it from, naming the project when it is a session otag is running.
   The app also re-reads them every minute while it is open.
 
+### Added
+
+- Sessions side by side, and findable without knowing a shortcut. Drag a
+  session out of the sidebar and onto the left, right, top or bottom edge of
+  the terminal area to put it there — the edges appear only while something
+  is over them — or use the split buttons in a session's header, or `Cmd-D`
+  and `Cmd-Shift-D`. `Cmd-[` and `Cmd-]` move the keyboard between the
+  sessions sharing a tab, `Cmd-Shift-[` and `Cmd-Shift-]` still step between
+  tabs. Dividers drag, the session with the keyboard keeps its thin ring,
+  and a session already on screen is moved rather than shown twice.
+- The arrangement survives a restart: quitting with three sessions side by
+  side and reopening gives three sessions side by side, with the dividers
+  where they were left and the same one holding the keyboard. The daemon
+  remembers the sessions; how they were arranged is the one piece of state
+  the app owns, so it is the one piece it writes down itself. A saved
+  arrangement is checked against the sessions the daemon is actually running
+  before anything is drawn, so one naming a session that is over comes back
+  without it rather than as an empty terminal.
+
 ### Changed
 
 - One terminal look for every session. A pane is a pane: the same font at the

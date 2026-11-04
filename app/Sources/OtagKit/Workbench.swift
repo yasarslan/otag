@@ -139,6 +139,18 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
         }
     }
 
+    /// This node and `pane` side by side, with `pane` on `edge`.
+    ///
+    /// What a session dropped on the edge of the terminal area means: it
+    /// divides the whole tab rather than one pane of it, which is why this
+    /// works on the root and the dragging never has to say which pane it
+    /// landed over.
+    public func splitting(off edge: DropEdge, with pane: PaneID) -> PaneNode {
+        let leaf = PaneNode.leaf(pane)
+        let children = edge.putsItFirst ? [leaf, self] : [self, leaf]
+        return .split(axis: edge.axis, children: children, fractions: [0.5, 0.5])
+    }
+
     /// Fractions that add up to one, however they were cut up.
     private static func normalise(_ fractions: [Double]) -> [Double] {
         let total = fractions.reduce(0, +)
@@ -150,6 +162,30 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
 
     private func normalised(_ fractions: [Double]) -> [Double] {
         Self.normalise(fractions)
+    }
+}
+
+/// Which edge of the terminal area a session was dropped on.
+///
+/// Four edges rather than two axes, because "left" and "right" are what the
+/// user is aiming at; the axis and the order follow from it.
+public enum DropEdge: Sendable, Hashable, CaseIterable {
+    case leading
+    case trailing
+    case top
+    case bottom
+
+    /// Which way the split divides the space.
+    public var axis: SplitAxis {
+        switch self {
+        case .leading, .trailing: return .horizontal
+        case .top, .bottom: return .vertical
+        }
+    }
+
+    /// Whether the dropped session goes before what is already there.
+    public var putsItFirst: Bool {
+        self == .leading || self == .top
     }
 }
 
@@ -168,6 +204,15 @@ public struct TerminalTab: Sendable, Identifiable, Hashable {
         self.title = title
         root = .leaf(pane)
         focus = pane
+    }
+
+    /// A tab with a whole arrangement, for one read back from a saved
+    /// layout.
+    public init(id: UUID, title: String, root: PaneNode, focus: PaneID) {
+        self.id = id
+        self.title = title
+        self.root = root
+        self.focus = focus
     }
 
     /// Every pane in the tab.
@@ -271,6 +316,16 @@ public final class Workbench {
         return panes
     }
 
+    /// Take in a tab that was built elsewhere, which is how a saved layout
+    /// is put back. Nothing else should need it.
+    public func adopt(_ tab: TerminalTab) {
+        guard !tab.panes.isEmpty, !tabs.contains(where: { $0.id == tab.id }) else { return }
+        tabs.append(tab)
+        if selected == nil {
+            selected = tab.id
+        }
+    }
+
     /// Rename a tab, which is what a pane's title changing means.
     public func rename(tab id: UUID, to title: String) {
         guard let index = tabs.firstIndex(where: { $0.id == id }), tabs[index].title != title
@@ -284,6 +339,49 @@ public final class Workbench {
         var tab = tabs[position]
         tab.root.move(divider: index, of: node, by: delta)
         tabs[position] = tab
+    }
+
+    /// Put an already running session into the current tab, on `edge`.
+    ///
+    /// What dragging a session from the sidebar onto the edge of the
+    /// terminal area means. The edge divides the whole tab, so the drag does
+    /// not have to say which pane it landed over — and a session already in
+    /// this tab is *moved* rather than shown twice.
+    public func place(pane: PaneID, on edge: DropEdge, title: String) {
+        let target = selected
+
+        // Out of whatever tab holds it first, so that dragging within one
+        // tab rearranges rather than duplicating. A tab left with nothing
+        // goes, which can be the tab being dropped on — so the tab is found
+        // again afterwards, by identifier, rather than by position.
+        if isOpen(pane) {
+            close(pane: pane)
+        }
+        guard let index = tabs.firstIndex(where: { $0.id == target }) else {
+            // Nothing left to put it beside, so it becomes the first thing.
+            open(pane: pane, title: title)
+            return
+        }
+
+        var tab = tabs[index]
+        tab.root = tab.root.splitting(off: edge, with: pane)
+        tab.focus = pane
+        tabs[index] = tab
+        selected = tab.id
+    }
+
+    /// Give the keyboard to the pane `offset` places along the current tab,
+    /// wrapping around.
+    ///
+    /// The panes are in the order they are drawn, so this walks left to
+    /// right and top to bottom, which is what the keys look like they do.
+    public func stepFocus(by offset: Int) {
+        guard let index = tabs.firstIndex(where: { $0.id == selected }) else { return }
+        let panes = tabs[index].panes
+        guard panes.count > 1 else { return }
+        let at = panes.firstIndex(of: tabs[index].focus) ?? 0
+        let count = panes.count
+        tabs[index].focus = panes[((at + offset) % count + count) % count]
     }
 
     /// Show the tab `offset` places from the current one, wrapping around.

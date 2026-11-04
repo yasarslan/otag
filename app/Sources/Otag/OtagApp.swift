@@ -96,6 +96,13 @@ struct OtagApp: App {
                 Button("Previous Tab") { workbench.step(by: -1) }
                     .keyboardShortcut("[", modifiers: [.command, .shift])
                 Divider()
+                Button("Focus Next Session") { workbench.stepFocus(by: 1) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled((workbench.current?.panes.count ?? 0) < 2)
+                Button("Focus Previous Session") { workbench.stepFocus(by: -1) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled((workbench.current?.panes.count ?? 0) < 2)
+                Divider()
                 Button("Hand Over to the Other Agent") { handOver() }
                     .disabled(focusedPane?.agent == nil)
                 Button("Continue on a Lighter Model…") { continueOnAnotherModel() }
@@ -176,6 +183,14 @@ struct MainView: View {
                 EmptyDetailView(state: store.state) {
                     pending = PendingSession(axis: nil)
                 }
+                // With nothing open, a session dragged anywhere here opens
+                // it: there are no edges to aim at yet.
+                .dropDestination(for: DraggedSession.self) { items, _ in
+                    guard let dropped = items.first,
+                          let info = store.pane(dropped.pane) else { return false }
+                    workbench.open(pane: info.id, title: Self.title(of: info))
+                    return true
+                }
             } else {
                 TabsView(
                     store: store,
@@ -237,6 +252,11 @@ struct MainView: View {
             }
         }
         .onChange(of: store.panes) { _, panes in
+            // The first word from the daemon is the first chance to put back
+            // the arrangement the window was left in: until the sessions are
+            // known, a saved layout cannot be checked against them.
+            workbench.restore(alive: panes.map(\.id))
+
             // A pane the daemon has let go of cannot stay on screen.
             let alive = Set(panes.map(\.id))
             for tab in workbench.tabs {
@@ -245,7 +265,10 @@ struct MainView: View {
                 }
             }
             retitleTabs(panes)
+            workbench.save()
         }
+        .onChange(of: workbench.tabs) { _, _ in workbench.save() }
+        .onChange(of: workbench.selected) { _, _ in workbench.save() }
     }
 
     /// The welcome screen is shown until it has been gone through once.
@@ -425,7 +448,7 @@ struct EmptyDetailView: View {
                     .foregroundStyle(.tertiary)
                 Text("No session open")
                     .font(.title3)
-                Text("Pick one on the left, or start one.")
+                Text("Pick one on the left, drag one over, or start one.")
                     .foregroundStyle(.secondary)
                 Button("New Session…", action: newSession)
                     .padding(.top, 4)

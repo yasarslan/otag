@@ -15,6 +15,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use otag_agents::{AgentKind, SessionRef, Transcript};
 use otag_core::layout::Direction;
@@ -63,6 +64,59 @@ pub struct Done {
     pub package: Option<PathBuf>,
     /// One line saying what happened, for the user.
     pub summary: String,
+}
+
+/// How long after a handoff another from the same pane is refused.
+///
+/// A handoff takes a moment — a transcript to read, `git` to ask, a package
+/// to write — and the button that starts one is sitting there the whole time.
+/// Long enough to cover that, short enough that a user who really does want a
+/// third agent on the task only has to wait.
+const COOLING: Duration = Duration::from_secs(20);
+
+/// The panes a handoff has just been made from.
+///
+/// A handoff opens a session and writes a file, so asking for one twice is
+/// not harmless: the first real report of this was two agents opened on one
+/// task from a double click. The second request is refused with a sentence
+/// saying so rather than ignored, because a user who meant it deserves to
+/// know why nothing happened.
+#[derive(Debug, Default)]
+pub struct Recent {
+    from: std::collections::HashMap<PaneId, Instant>,
+}
+
+impl Recent {
+    /// Nothing handed over yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Take the right to hand `pane` over, or say why it cannot be taken.
+    ///
+    /// Held from the moment the handoff starts, so a second request arriving
+    /// while the first is still assembling its package is refused too.
+    pub fn claim(&mut self, pane: PaneId) -> Result<(), String> {
+        self.from.retain(|_, at| at.elapsed() < COOLING);
+        if self.from.contains_key(&pane) {
+            return Err(format!(
+                "otag handed pane {pane} over a moment ago. \
+                 Look at the session it opened; if you really want another, \
+                 ask again in a few seconds."
+            ));
+        }
+        self.from.insert(pane, Instant::now());
+        Ok(())
+    }
+
+    /// Give the right back, for a handoff that did not happen.
+    ///
+    /// A refused handoff leaves nothing behind, so the user can correct what
+    /// was wrong with it and ask again straight away.
+    pub fn release(&mut self, pane: PaneId) {
+        self.from.remove(&pane);
+    }
 }
 
 /// Hand the task in `pane` over, and report what happened.
@@ -442,5 +496,30 @@ mod tests {
             .await
             .expect_err("otag has no model to offer");
         assert!(error.contains("--model"), "{error}");
+    }
+
+    #[test]
+    fn a_handoff_asked_for_twice_is_only_made_once() {
+        let mut recent = Recent::new();
+        let pane = PaneId::FIRST;
+
+        assert!(recent.claim(pane).is_ok(), "the first one goes ahead");
+        let refused = recent.claim(pane).expect_err("the second one does not");
+        assert!(refused.contains("a moment ago"), "{refused}");
+
+        // Another session is another task, and is not held up by this one.
+        assert!(recent.claim(pane.next()).is_ok());
+    }
+
+    #[test]
+    fn a_handoff_that_did_not_happen_can_be_asked_for_again_at_once() {
+        let mut recent = Recent::new();
+        let pane = PaneId::FIRST;
+
+        assert!(recent.claim(pane).is_ok());
+        // Nothing was opened and nothing written, so the user can correct
+        // what was wrong with it and try again.
+        recent.release(pane);
+        assert!(recent.claim(pane).is_ok());
     }
 }

@@ -121,7 +121,7 @@ struct OtagApp: App {
     /// Hand the showing session over to the other agent.
     private func handOver() {
         guard let pane = focusedPane, pane.agent != nil else { return }
-        store.send(.handoff(pane: pane.id, handoff: .agent(to: nil)))
+        store.handOver(pane: pane.id, handoff: .agent(to: nil))
     }
 
     /// Answer the oldest question, which is the one the sidebar shows first.
@@ -293,7 +293,7 @@ struct MainView: View {
                     title: "Hand Over to the Other Agent",
                     detail: Self.title(of: pane),
                     symbol: "arrow.left.arrow.right"
-                ) { store.send(.handoff(pane: pane.id, handoff: .agent(to: nil))) })
+                ) { store.handOver(pane: pane.id, handoff: .agent(to: nil)) })
                 if pane.nightShift != nil {
                     items.append(PaletteItem(
                         title: "Stop the Night Shift",

@@ -18,7 +18,7 @@ struct HandoffButtons: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button {
-                    store.send(.handoff(pane: pane.id, handoff: .agent(to: nil)))
+                    store.handOver(pane: pane.id, handoff: .agent(to: nil))
                 } label: {
                     Label(handOverTitle, systemImage: "arrow.left.arrow.right")
                 }
@@ -35,10 +35,16 @@ struct HandoffButtons: View {
 
                 Spacer(minLength: 0)
             }
-            .disabled(pane.agent == nil)
+            .disabled(pane.agent == nil || handingOver)
 
             if pane.agent == nil {
                 Text("Only a session running an agent can be handed over.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if handingOver {
+                // A package to write and an agent to start takes a moment,
+                // and two clicks used to mean two agents on one task.
+                Label("Handing this session over…", systemImage: "hourglass")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -58,10 +64,10 @@ struct HandoffButtons: View {
                     Spacer()
                     Button("Cancel") { askingForModel = false }
                     Button("Continue") {
-                        store.send(.handoff(
+                        store.handOver(
                             pane: pane.id,
                             handoff: .model(model.trimmingCharacters(in: .whitespaces))
-                        ))
+                        )
                         askingForModel = false
                     }
                     .keyboardShortcut(.defaultAction)
@@ -70,6 +76,11 @@ struct HandoffButtons: View {
             .padding(14)
             .frame(width: 320)
         }
+    }
+
+    /// Whether this session is already being handed over.
+    private var handingOver: Bool {
+        store.handingOver.contains(pane.id)
     }
 
     /// Named after where the work would go, which is what the user is

@@ -113,6 +113,7 @@ async fn serve(socket: &Path) -> Result<()> {
         events: bus,
         attachments: raw::Attachments::new(),
         inbox,
+        handoffs: Arc::new(std::sync::Mutex::new(handoff::Recent::new())),
     };
     let result = server.run_until(daemon, terminate_signal()).await;
     watching.abort();
@@ -169,6 +170,9 @@ struct Daemon {
     inbox: Arc<std::sync::Mutex<Inbox>>,
     /// What otag is working through for the sessions that asked.
     shifts: Arc<nightshift::Shifts>,
+    /// The panes a handoff has just been made from, so one asked for twice
+    /// does not open two sessions.
+    handoffs: Arc<std::sync::Mutex<handoff::Recent>>,
 }
 
 impl Handler for Daemon {
@@ -468,6 +472,17 @@ impl Daemon {
             }
         };
 
+        // A handoff opens a session and writes a file, so the second click
+        // on the button has to be refused rather than obeyed. A guard that
+        // cannot be read does not block the user: the worst that can then
+        // happen is the thing this prevents.
+        if let Ok(mut recent) = self.handoffs.lock()
+            && let Err(message) = recent.claim(pane)
+        {
+            tracing::info!(%pane, message, "a repeated handoff was refused");
+            return Response::error(message);
+        }
+
         match handoff::run(&self.session, pane, mode).await {
             Ok(done) => {
                 // Every client learns about it, not only the one that asked:
@@ -484,6 +499,11 @@ impl Daemon {
                 }
             }
             Err(message) => {
+                // Nothing was opened and nothing was written, so the user
+                // can fix what was wrong and ask again at once.
+                if let Ok(mut recent) = self.handoffs.lock() {
+                    recent.release(pane);
+                }
                 tracing::info!(%pane, message, "a handoff was refused");
                 Response::error(message)
             }
@@ -721,6 +741,7 @@ mod tests {
                 attachments: raw::Attachments::new(),
                 inbox: Arc::new(std::sync::Mutex::new(Inbox::new())),
                 shifts: nightshift::Shifts::new(),
+                handoffs: Arc::new(std::sync::Mutex::new(handoff::Recent::new())),
             },
             pane,
         )

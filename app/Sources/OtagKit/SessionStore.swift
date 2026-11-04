@@ -130,6 +130,56 @@ public final class SessionStore {
         notice = nil
     }
 
+    /// The sessions a handoff has been asked for and not yet answered.
+    ///
+    /// A handoff writes a package and opens an agent, which takes a moment,
+    /// and the button that starts one sits there the whole time. Asking
+    /// twice opened two sessions on one task, so the button goes quiet until
+    /// the daemon has answered. The daemon refuses a repeat as well — this is
+    /// the half the user can see.
+    public private(set) var handingOver: Set<PaneID> = []
+
+    /// How long the app waits for a handoff before letting it be asked for
+    /// again. Shortened in tests.
+    static let defaultHandoffTimeout = Duration.seconds(30)
+    var handoffTimeout = SessionStore.defaultHandoffTimeout
+
+    private var handoffWaiting: Task<Void, Never>?
+
+    /// Hand a session's work over, once.
+    public func handOver(pane: PaneID, handoff: Handoff) {
+        guard !handingOver.contains(pane) else { return }
+        handingOver.insert(pane)
+        send(.handoff(pane: pane, handoff: handoff))
+
+        guard case .connected = state else {
+            // Nothing was written, so no answer is coming.
+            handingOver.remove(pane)
+            return
+        }
+
+        // Nothing may wait forever: a daemon that never answers must not
+        // leave the button dead for the rest of the session.
+        handoffWaiting?.cancel()
+        handoffWaiting = Task { [weak self] in
+            let waiting = self?.handoffTimeout ?? Self.defaultHandoffTimeout
+            try? await Task.sleep(for: waiting)
+            guard let self, !Task.isCancelled else { return }
+            handingOver.removeAll()
+        }
+    }
+
+    /// A handoff has been answered, either way.
+    ///
+    /// The answer names the session that was *opened*, not the one handed
+    /// over, so there is nothing to match on — and there is nothing to match
+    /// either way, because a user hands one session over at a time.
+    private func handoffSettled() {
+        handingOver.removeAll()
+        handoffWaiting?.cancel()
+        handoffWaiting = nil
+    }
+
     /// Ask otag what it did overnight.
     public func askForMorningReport() {
         send(.morningReport)
@@ -216,6 +266,7 @@ public final class SessionStore {
 
     /// Stop listening and close the connection. The daemon keeps running.
     public func disconnect() {
+        handoffSettled()
         listening?.cancel()
         listening = nil
         refreshing?.cancel()
@@ -290,6 +341,7 @@ public final class SessionStore {
         case let .morningReport(sessions):
             morningReport = sessions
         case let .handoffDone(_, _, summary):
+            handoffSettled()
             notice = summary.isEmpty ? nil : summary
         case let .version(version):
             daemonVersion = version
@@ -301,6 +353,7 @@ public final class SessionStore {
                     : summary
             }
         case let .error(message):
+            handoffSettled()
             state = .failed(message)
         case .pong, .ok, .paneScreen, .output, .paneEnded, .sessionEnded,
              .sessionStarted, .unknown:

@@ -238,6 +238,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen is heard even moments after it reported for itself, so nothing
   about this can hide one.
 
+- A handoff asked for twice no longer opens two sessions on one task. A
+  handoff takes a moment — a transcript to read, `git` to ask, a package to
+  write — and the button that starts one sat there the whole time, so a
+  second click opened a second agent. The daemon now refuses a second
+  handoff from the same session while one is in flight, and for a short
+  while after, saying why; the app's button goes quiet until the daemon has
+  answered. A handoff that was refused leaves nothing behind and can be
+  asked for again at once.
+
 - A new session in a project that is already open joins it instead of making
   a second entry called "<project> 2". Sessions are matched by the project
   the directory belongs to rather than by its name: a trailing separator, a

@@ -6,6 +6,12 @@ import SwiftUI
 struct TabsView: View {
     let store: SessionStore
     let workbench: Workbench
+    /// A session the user has asked for and the daemon has not started yet,
+    /// which is what a split is: the daemon owns the panes, so the only
+    /// honest way to get one is to say what should run in it.
+    @Binding var pending: PendingSession?
+    /// The session whose model the user is choosing, if any.
+    @Binding var askingForModel: ChoosingModel?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,7 +24,9 @@ struct TabsView: View {
                     node: tab.root,
                     tab: tab,
                     store: store,
-                    workbench: workbench
+                    workbench: workbench,
+                    pending: $pending,
+                    askingForModel: $askingForModel
                 )
                 .id(tab.id)
             }
@@ -110,11 +118,20 @@ private struct PaneTreeView: View {
     let tab: TerminalTab
     let store: SessionStore
     let workbench: Workbench
+    @Binding var pending: PendingSession?
+    @Binding var askingForModel: ChoosingModel?
 
     var body: some View {
         switch node {
         case let .leaf(pane):
-            PaneCell(pane: pane, tab: tab, store: store, workbench: workbench)
+            PaneCell(
+                pane: pane,
+                tab: tab,
+                store: store,
+                workbench: workbench,
+                pending: $pending,
+                askingForModel: $askingForModel
+            )
 
         case let .split(axis, children, fractions):
             GeometryReader { geometry in
@@ -123,7 +140,14 @@ private struct PaneTreeView: View {
                 let usable = max(along - dividers, 1)
 
                 let content = ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
-                    PaneTreeView(node: child, tab: tab, store: store, workbench: workbench)
+                    PaneTreeView(
+                        node: child,
+                        tab: tab,
+                        store: store,
+                        workbench: workbench,
+                        pending: $pending,
+                        askingForModel: $askingForModel
+                    )
                         .frame(
                             width: axis == .horizontal
                                 ? usable * share(fractions, index) : nil,
@@ -200,12 +224,48 @@ private struct PaneCell: View {
     let tab: TerminalTab
     let store: SessionStore
     let workbench: Workbench
+    @Binding var pending: PendingSession?
+    @Binding var askingForModel: ChoosingModel?
 
     @AppStorage(Preference.dimIdle) private var dimIdle = true
     /// Why this pane cannot be followed any more, once that has happened.
     @State private var gone: String?
 
     var body: some View {
+        VStack(spacing: 0) {
+            // The frequent actions, where the session is, rather than only
+            // behind a palette the user has to know about.
+            if let info = store.pane(pane) {
+                SessionHeader(
+                    commands: commands(for: info),
+                    focused: tab.focus == pane
+                )
+            }
+            terminal
+        }
+        .onTapGesture { workbench.focus(pane: pane) }
+        // A session doing nothing, with the keyboard somewhere else, fades
+        // slightly into the background. Nothing moves and nothing blinks;
+        // the eye simply goes to what is working.
+        .opacity(dimmed ? 0.72 : 1)
+    }
+
+    /// Everything there is to do with this session.
+    private func commands(for info: PaneInfo) -> SessionCommands {
+        SessionCommands(
+            store: store,
+            workbench: workbench,
+            pane: info,
+            split: { axis in
+                // Split from *this* session, whichever one has the keyboard.
+                workbench.focus(pane: pane)
+                pending = PendingSession(axis: axis)
+            },
+            continueOnAnotherModel: { askingForModel = ChoosingModel(id: pane) }
+        )
+    }
+
+    private var terminal: some View {
         TerminalPaneView(
             pane: pane,
             socket: store.socket,
@@ -223,23 +283,12 @@ private struct PaneCell: View {
                 PaneGoneOverlay(reason: gone) { workbench.close(pane: pane) }
             }
         }
-        .overlay(alignment: .topLeading) {
-            if tab.panes.count > 1 {
-                PaneLabel(pane: store.pane(pane), focused: tab.focus == pane)
-                    .padding(6)
-            }
-        }
         .overlay {
             if tab.panes.count > 1, tab.focus == pane {
                 RoundedRectangle(cornerRadius: 3)
                     .strokeBorder(.tint.opacity(0.5), lineWidth: 1)
             }
         }
-        .onTapGesture { workbench.focus(pane: pane) }
-        // A session doing nothing, with the keyboard somewhere else, fades
-        // slightly into the background. Nothing moves and nothing blinks;
-        // the eye simply goes to what is working.
-        .opacity(dimmed ? 0.72 : 1)
     }
 
     /// Whether this pane should be drawn dimmer.
@@ -275,26 +324,5 @@ private struct PaneGoneOverlay: View {
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
             .padding(12)
         }
-    }
-}
-
-/// What a pane is, for a tab that is showing more than one.
-private struct PaneLabel: View {
-    let pane: PaneInfo?
-    let focused: Bool
-
-    var body: some View {
-        Text(title)
-            .font(.caption2)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(.thinMaterial, in: Capsule())
-            .foregroundStyle(focused ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-    }
-
-    private var title: String {
-        guard let pane else { return "pane" }
-        let name = pane.title.isEmpty ? (pane.agent?.label ?? "shell") : pane.title
-        return pane.status == .idle ? name : "\(name) · \(pane.status.label)"
     }
 }

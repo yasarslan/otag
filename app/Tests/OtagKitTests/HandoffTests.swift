@@ -130,3 +130,52 @@ struct HandoffNoticeTests {
         Issue.record("never saw \(what)")
     }
 }
+
+/// When otag draws attention to the handoff.
+///
+/// The button is always there; it only stands out when the agent in that
+/// session is nearly out of room, which is when a handoff is the thing the
+/// user probably wants next.
+@Suite("An agent running out of room")
+@MainActor
+struct RunningOutTests {
+    private func store(_ rows: [UsageRow]) -> SessionStore {
+        let store = SessionStore(
+            socket: URL(fileURLWithPath: NSTemporaryDirectory() + "/otag-nowhere.sock")
+        )
+        var report = UsageReport()
+        report.rows = rows
+        store.apply(.usage(report))
+        return store
+    }
+
+    @Test("a window the daemon calls red is an agent running out")
+    func redIsRunningOut() {
+        let store = store([
+            UsageRow(agent: .claude, window: .fiveHour, usedTenths: 950, level: .red),
+            UsageRow(agent: .codex, window: .fiveHour, usedTenths: 120, level: .calm),
+        ])
+        #expect(store.isRunningOut(.claude))
+        #expect(!store.isRunningOut(.codex))
+        #expect(!store.isRunningOut(nil), "a shell has no limits to run out of")
+    }
+
+    @Test("a window otag has never read says nothing either way")
+    func noReadingIsNotAWarning() {
+        let store = store([
+            UsageRow(agent: .claude, window: .fiveHour, usedTenths: nil),
+        ])
+        #expect(!store.isRunningOut(.claude))
+    }
+
+    @Test("amber is not yet running out")
+    func amberIsNotRunningOut() {
+        let store = store([
+            UsageRow(agent: .claude, window: .weekly, usedTenths: 750, level: .amber),
+        ])
+        #expect(
+            !store.isRunningOut(.claude),
+            "seventy percent is worth a colour on the meter, not a highlighted button"
+        )
+    }
+}

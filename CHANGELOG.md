@@ -226,6 +226,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the settings file is left as it is, and it survives otag taking the status
   line over and handing it back.
 
+### Changed
+
+- The frequent actions are where the sessions are, not only behind
+  `Cmd-K`. Every session now has a thin header above its terminal with the
+  handoff (named after where the work would go — "Hand Off to Codex"),
+  continuing on a lighter model, splitting right and down, and closing; the
+  same five are on a right click in the sidebar and in the palette, written
+  once so they cannot drift apart. When a session's agent is at the 90% the
+  night shift stops at, its handoff button says what it does and takes the
+  accent colour instead of sitting there as a symbol.
+
 ### Fixed
 
 - The new-session sheet starts where the user is: the project is filled in

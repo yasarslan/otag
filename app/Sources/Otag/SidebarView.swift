@@ -9,6 +9,9 @@ import SwiftUI
 struct SidebarView: View {
     let store: SessionStore
     @Binding var selection: PaneID?
+    /// Everything there is to do with one session, for the right-click menu.
+    /// The same actions the session's own header offers, in the same words.
+    let commands: (PaneInfo) -> SessionCommands
 
     var body: some View {
         List(selection: $selection) {
@@ -25,6 +28,9 @@ struct SidebarView: View {
                     ForEach(workspace.panes) { pane in
                         SessionRow(pane: pane)
                             .tag(pane.id)
+                            .contextMenu {
+                                SessionActionItems(commands: commands(pane))
+                            }
                     }
                 } header: {
                     WorkspaceHeader(workspace: workspace)

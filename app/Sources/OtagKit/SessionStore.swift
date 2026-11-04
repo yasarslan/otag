@@ -120,6 +120,17 @@ public final class SessionStore {
         return panes.reversed().compactMap(\.cwd).first { !$0.isEmpty }
     }
 
+    /// Whether an agent is close enough to its limit that handing a session
+    /// over is probably the next thing the user wants.
+    ///
+    /// The daemon works out the level, so this is the same 90% the night
+    /// shift stops at and the same red the meter turns. It only makes the
+    /// handoff button stand out; nothing is done automatically.
+    public func isRunningOut(_ agent: AgentKind?) -> Bool {
+        guard let agent else { return false }
+        return usage.rows.contains { $0.agent == agent && $0.level == .red }
+    }
+
     /// Answer what an agent is waiting for.
     ///
     /// The question leaves the list at once — it has been dealt with either

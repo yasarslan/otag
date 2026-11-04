@@ -23,6 +23,8 @@ struct OtagApp: App {
     @State private var pending: PendingSession?
     @State private var attention = Attention()
     @State private var palette: PaletteKind?
+    /// The session whose model the user is choosing, from the menu bar.
+    @State private var askingForModel: ChoosingModel?
     @AppStorage("hasOnboarded") private var onboarded = false
 
     var body: some Scene {
@@ -32,6 +34,7 @@ struct OtagApp: App {
                 workbench: workbench,
                 pending: $pending,
                 palette: $palette,
+                askingForModel: $askingForModel,
                 onboarded: $onboarded
             )
                 .task {
@@ -95,6 +98,8 @@ struct OtagApp: App {
                 Divider()
                 Button("Hand Over to the Other Agent") { handOver() }
                     .disabled(focusedPane?.agent == nil)
+                Button("Continue on a Lighter Model…") { continueOnAnotherModel() }
+                    .disabled(focusedPane?.agent == nil)
                 Button("Morning Report…") { store.askForMorningReport() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -124,6 +129,12 @@ struct OtagApp: App {
         store.handOver(pane: pane.id, handoff: .agent(to: nil))
     }
 
+    /// Continue the showing session on another model.
+    private func continueOnAnotherModel() {
+        guard let pane = focusedPane, pane.agent != nil else { return }
+        askingForModel = ChoosingModel(id: pane.id)
+    }
+
     /// Answer the oldest question, which is the one the sidebar shows first.
     private func answerFirst(_ answer: Answer) {
         guard let ask = store.asks.first else { return }
@@ -144,12 +155,21 @@ struct MainView: View {
     let workbench: Workbench
     @Binding var pending: PendingSession?
     @Binding var palette: PaletteKind?
+    /// The session whose model the user is choosing, if any. Reached from a
+    /// session's header, from a right click in the sidebar, from the menu
+    /// bar and from the palette, so it belongs to the window rather than to
+    /// any one of them.
+    @Binding var askingForModel: ChoosingModel?
     @Binding var onboarded: Bool
     @State private var inspector = false
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(store: store, selection: selection)
+            SidebarView(
+                store: store,
+                selection: selection,
+                commands: commands(for:)
+            )
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
         } detail: {
             if workbench.tabs.isEmpty {
@@ -157,7 +177,12 @@ struct MainView: View {
                     pending = PendingSession(axis: nil)
                 }
             } else {
-                TabsView(store: store, workbench: workbench)
+                TabsView(
+                    store: store,
+                    workbench: workbench,
+                    pending: $pending,
+                    askingForModel: $askingForModel
+                )
             }
         }
         .inspector(isPresented: $inspector) {
@@ -190,6 +215,9 @@ struct MainView: View {
             ) { pane, title in
                 place(pane: pane, title: title, axis: request.axis)
             }
+        }
+        .sheet(item: $askingForModel) { choosing in
+            LighterModelSheet(store: store, pane: choosing.id)
         }
         .sheet(item: $palette) { kind in
             PaletteView(title: kind.title, items: items(for: kind)) { palette = nil }
@@ -225,6 +253,23 @@ struct MainView: View {
         Binding(
             get: { !onboarded },
             set: { shown in if !shown { onboarded = true } }
+        )
+    }
+
+    /// Everything there is to do with one session, for whichever surface is
+    /// offering it: a header, a right click, or the palette.
+    private func commands(for pane: PaneInfo) -> SessionCommands {
+        SessionCommands(
+            store: store,
+            workbench: workbench,
+            pane: pane,
+            split: { axis in
+                // The split is from this session, so it has to be the one
+                // with the keyboard before the new pane is placed beside it.
+                workbench.open(pane: pane.id, title: Self.title(of: pane))
+                pending = PendingSession(axis: axis)
+            },
+            continueOnAnotherModel: { askingForModel = ChoosingModel(id: pane.id) }
         )
     }
 
@@ -297,6 +342,11 @@ struct MainView: View {
                     detail: Self.title(of: pane),
                     symbol: "arrow.left.arrow.right"
                 ) { store.handOver(pane: pane.id, handoff: .agent(to: nil)) })
+                items.append(PaletteItem(
+                    title: "Continue on a Lighter Model",
+                    detail: Self.title(of: pane),
+                    symbol: "arrow.down.right.circle"
+                ) { askingForModel = ChoosingModel(id: pane.id) })
                 if pane.nightShift != nil {
                     items.append(PaletteItem(
                         title: "Stop the Night Shift",

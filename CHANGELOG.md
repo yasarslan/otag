@@ -228,6 +228,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The new-session sheet starts where the user is: the project is filled in
+  from the session on screen — or, with nothing on screen, from the newest
+  one — and the agent is whichever was used last. Both can still be changed;
+  this only means a second session in the project in front of you is one
+  return key away rather than a trip through a file dialog. Sessions now
+  report the directory they are working in (`cwd` on a pane), which is what
+  made this possible: a workspace's name is a folder name, not a path.
+
 - A Codex session no longer reads as "working" for the rest of its life. Its
   status came only from the words on its screen while it was busy, and a
   screen matching none of them left the status as it was — so a session that

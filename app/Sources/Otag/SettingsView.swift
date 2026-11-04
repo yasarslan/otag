@@ -14,6 +14,8 @@ enum Preference {
     static let dimIdle = "dimIdleSessions"
     /// Whether the app posts notifications itself.
     static let notify = "postNotifications"
+    /// The agent the new-session sheet offers, which is the last one used.
+    static let lastAgent = "lastSessionAgent"
 
     /// The size a terminal uses when nothing has been chosen.
     static let defaultFontSize: Double = 13

@@ -79,6 +79,7 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
             id: pane.id,
             size: pane.size,
             workspace: pane.workspace,
+            cwd: pane.cwd,
             title: pane.title,
             agent: pane.agent,
             status: pane.status,

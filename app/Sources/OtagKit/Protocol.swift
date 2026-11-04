@@ -117,6 +117,9 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     public var id: PaneID
     public var size: PaneSize
     public var workspace: String = ""
+    /// The directory it is working in, when otag knows. What the new-session
+    /// sheet fills its project field with.
+    public var cwd: String?
     public var title: String = ""
     public var agent: AgentKind?
     public var status: PaneStatus = .idle
@@ -130,7 +133,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     public var exit: PaneExit?
 
     enum CodingKeys: String, CodingKey {
-        case id, size, workspace, title, agent, status, session, tokens, exit
+        case id, size, workspace, cwd, title, agent, status, session, tokens, exit
         case contextWindow = "context_window"
         case nightShift = "night_shift"
     }
@@ -141,6 +144,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         size = try container.decodeIfPresent(PaneSize.self, forKey: .size)
             ?? PaneSize(rows: 24, cols: 80)
         workspace = try container.decodeIfPresent(String.self, forKey: .workspace) ?? ""
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
         // An agent this build does not know about is no agent, not an error.
         agent = try? container.decodeIfPresent(AgentKind.self, forKey: .agent)

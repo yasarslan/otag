@@ -10,13 +10,23 @@ import SwiftUI
 struct NewSessionSheet: View {
     /// Where the daemon is, so the sheet can ask it to start the session.
     let socket: URL
+    /// The project to offer: the one the user is looking at, or the newest
+    /// session's. Nothing when otag is running nothing at all.
+    let suggestedProject: String?
     /// Called with the pane the daemon started, and what to call its tab.
     let started: (PaneID, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
+    /// The agent the sheet offers: whichever was used last. Someone running
+    /// Codex all afternoon should not have to pick it every time. The empty
+    /// string means the shell, which `AgentKind(rawValue:)` reads as "no
+    /// agent" — the same thing the picker calls it.
+    @AppStorage(Preference.lastAgent) private var lastAgent = AgentKind.claude.rawValue
+
     @State private var folder: URL?
     @State private var agent: AgentKind?
+    @State private var chosen = false
     @State private var worktree = false
     @State private var model = ""
     @State private var prompt = ""
@@ -100,6 +110,20 @@ struct NewSessionSheet: View {
             .padding(16)
         }
         .frame(width: 520)
+        .onAppear(perform: prefill)
+    }
+
+    /// Fill the sheet in with what the user almost certainly means.
+    ///
+    /// Only once: re-running this would undo a folder the user has just
+    /// chosen if the view were rebuilt.
+    private func prefill() {
+        guard !chosen else { return }
+        chosen = true
+        if let suggestedProject, !suggestedProject.isEmpty {
+            folder = URL(fileURLWithPath: suggestedProject, isDirectory: true)
+        }
+        agent = AgentKind(rawValue: lastAgent)
     }
 
     /// Ask for the project folder.
@@ -121,6 +145,10 @@ struct NewSessionSheet: View {
         guard let folder else { return }
         starting = true
         problem = nil
+        // Remembered on starting rather than on choosing, so a sheet that
+        // was cancelled changes nothing. The empty string is the shell,
+        // which is as much a choice as either agent.
+        lastAgent = agent?.rawValue ?? ""
 
         let asked = StartSession(
             cwd: folder.path,

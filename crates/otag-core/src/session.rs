@@ -225,6 +225,8 @@ pub struct PaneSummary {
     pub size: PaneSize,
     /// Name of the workspace it belongs to.
     pub workspace: String,
+    /// The directory it is working in, when otag knows.
+    pub cwd: Option<PathBuf>,
     /// What it is running.
     pub title: String,
     /// The agent otag has noticed in it.
@@ -940,6 +942,7 @@ impl Session {
                         .iter()
                         .find(|workspace| workspace.id() == pane.workspace)
                         .map_or_else(String::new, |workspace| workspace.name().to_owned()),
+                    cwd: pane.cwd.clone(),
                     title: pane.title.clone(),
                     exit: snapshot.exit.clone(),
                 }

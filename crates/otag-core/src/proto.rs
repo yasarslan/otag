@@ -695,6 +695,12 @@ pub struct PaneInfo {
     /// Name of the workspace it belongs to.
     #[serde(default)]
     pub workspace: String,
+    /// The directory it is working in, when otag knows.
+    ///
+    /// What a client needs to offer "another session in this project": the
+    /// workspace's name is a folder name, which is not a path.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
     /// What it is running.
     #[serde(default)]
     pub title: String,
@@ -1162,6 +1168,7 @@ mod tests {
                     id: PaneId::FIRST,
                     size: PaneSize::DEFAULT,
                     workspace: "app".to_owned(),
+                    cwd: Some(PathBuf::from("/projects/app")),
                     title: "shell".to_owned(),
                     agent: None,
                     status: PaneStatus::Idle,
@@ -1177,6 +1184,7 @@ mod tests {
                     id: PaneId::FIRST,
                     size: PaneSize::DEFAULT,
                     workspace: "app".to_owned(),
+                    cwd: Some(PathBuf::from("/projects/app")),
                     title: "shell".to_owned(),
                     agent: Some(AgentKind::Claude),
                     status: PaneStatus::Working,

@@ -184,7 +184,10 @@ struct MainView: View {
             }
         }
         .sheet(item: $pending) { request in
-            NewSessionSheet(socket: store.socket) { pane, title in
+            NewSessionSheet(
+                socket: store.socket,
+                suggestedProject: store.suggestedProject(near: workbench.focus)
+            ) { pane, title in
                 place(pane: pane, title: title, axis: request.axis)
             }
         }

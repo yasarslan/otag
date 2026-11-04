@@ -515,3 +515,25 @@ async fn two_different_projects_sharing_a_name_stay_apart() {
         "and the number is what tells two checkouts of one name apart"
     );
 }
+
+#[tokio::test]
+async fn a_pane_reports_the_directory_it_is_working_in() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let project = directory.path().join("app");
+    std::fs::create_dir(&project).expect("the project directory");
+    let session = Session::new(PaneSpec::shell());
+
+    let pane = session
+        .start_session(Some(&project), &[], "claude")
+        .await
+        .expect("the session starts");
+
+    // What a client needs to offer "another session in this project": the
+    // workspace's name is a folder name, which is not a path.
+    let summary = session
+        .summaries()
+        .into_iter()
+        .find(|summary| summary.id == pane)
+        .expect("the pane is listed");
+    assert_eq!(summary.cwd.as_deref(), Some(project.as_path()));
+}

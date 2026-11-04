@@ -105,6 +105,21 @@ public final class SessionStore {
         panes.first { $0.id == id }
     }
 
+    /// The project a new session should start in, before the user says.
+    ///
+    /// Almost always the one they are looking at: a new session is nearly
+    /// always another session in the project already in front of them, and
+    /// making them find that folder in a file dialog again is work otag can
+    /// do for them. The newest session's project is the fallback, and
+    /// `nil` only when otag is running nothing at all.
+    public func suggestedProject(near pane: PaneID?) -> String? {
+        if let pane, let cwd = self.pane(pane)?.cwd, !cwd.isEmpty {
+            return cwd
+        }
+        // The daemon lists panes oldest first, so the last one is the newest.
+        return panes.reversed().compactMap(\.cwd).first { !$0.isEmpty }
+    }
+
     /// Answer what an agent is waiting for.
     ///
     /// The question leaves the list at once — it has been dealt with either

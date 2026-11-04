@@ -93,6 +93,7 @@ impl Handler for TestDaemon {
                         id: pane.id,
                         size: pane.size,
                         workspace: pane.workspace,
+                        cwd: pane.cwd,
                         title: pane.title,
                         agent: pane.agent,
                         status: pane.status,

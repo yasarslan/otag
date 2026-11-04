@@ -138,6 +138,40 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         case nightShift = "night_shift"
     }
 
+    /// One pane, built rather than decoded.
+    ///
+    /// The daemon's reports arrive as JSON, so this is for the app's own
+    /// use: a test that needs a session with a known status, and a view's
+    /// preview. Declaring `init(from:)` is what takes the memberwise one
+    /// away, so it is written out here.
+    public init(
+        id: PaneID,
+        size: PaneSize = PaneSize(rows: 24, cols: 80),
+        workspace: String = "",
+        cwd: String? = nil,
+        title: String = "",
+        agent: AgentKind? = nil,
+        status: PaneStatus = .idle,
+        session: String? = nil,
+        tokens: Tokens = Tokens(),
+        contextWindow: UInt64? = nil,
+        nightShift: NightShiftView? = nil,
+        exit: PaneExit? = nil
+    ) {
+        self.id = id
+        self.size = size
+        self.workspace = workspace
+        self.cwd = cwd
+        self.title = title
+        self.agent = agent
+        self.status = status
+        self.session = session
+        self.tokens = tokens
+        self.contextWindow = contextWindow
+        self.nightShift = nightShift
+        self.exit = exit
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(PaneID.self, forKey: .id)

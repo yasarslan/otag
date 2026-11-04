@@ -16,13 +16,14 @@ struct PaletteItem: Identifiable {
     let run: () -> Void
 }
 
-/// Everything by name: `Cmd-K` for actions, `Cmd-P` for sessions.
+/// Everything by name, behind `⌘K`.
 ///
-/// One list, one field, no modes: what is typed filters, return runs the
-/// first match. A palette that needs to be learned is a menu with extra
-/// steps, so this one is only a faster way to what the menus already have.
+/// One list, one field, no modes: sessions and actions together, what is
+/// typed filters, return runs the first match. Deliberately unadvertised —
+/// it is not on the toolbar and not in the welcome, because a palette that
+/// has to be learned is a menu with extra steps. Nothing is only here: every
+/// item is also a menu item or a button somewhere a person can see.
 struct PaletteView: View {
-    let title: String
     let items: [PaletteItem]
     let dismiss: () -> Void
 
@@ -32,7 +33,7 @@ struct PaletteView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField(title, text: $query)
+            TextField("Go to a session, or run a command…", text: $query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .padding(14)
@@ -124,28 +125,6 @@ struct PaletteView: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: run)
             .onHover { hovering = $0 }
-        }
-    }
-}
-
-/// Which palette is open.
-enum PaletteKind: Identifiable {
-    /// Every action by name.
-    case commands
-    /// Every session by name.
-    case sessions
-
-    var id: Int {
-        switch self {
-        case .commands: return 0
-        case .sessions: return 1
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .commands: return "Run a command…"
-        case .sessions: return "Go to a session…"
         }
     }
 }

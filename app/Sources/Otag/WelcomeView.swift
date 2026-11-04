@@ -2,15 +2,22 @@ import AppKit
 import OtagKit
 import SwiftUI
 
-/// The first launch: find the agents, offer the hooks, done.
+/// The first launch, in three steps: what otag does, the hooks, and a
+/// session.
 ///
-/// Three steps at most, and the only one that changes anything outside otag
-/// is the hooks — which is why it shows exactly what it would do and does
-/// nothing until the button is pressed. otag keeps a copy of the file it
-/// changes and leaves the user's own status line working.
-struct OnboardingView: View {
-    /// Where the daemon is, for the command-line tool hint.
+/// The only step that changes anything outside otag is the hooks — which is
+/// why it shows exactly what it would do and does nothing until the button is
+/// pressed. otag keeps a copy of the file it changes and leaves the user's
+/// own status line working.
+///
+/// The old last step was eight keyboard shortcuts, which is a list nobody
+/// reads. The last step is now the thing they came here to do.
+struct WelcomeView: View {
+    /// Where the daemon is, for finding the agents.
     let socket: URL
+    /// Done, and start a session.
+    let start: () -> Void
+    /// Done, and do not.
     let dismiss: () -> Void
 
     @State private var step = 0
@@ -18,15 +25,19 @@ struct OnboardingView: View {
     @State private var installed: String?
     @State private var problem: String?
 
+    /// How many steps there are.
+    private static let steps = 3
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: "square.split.2x1")
                     .font(.title2)
                     .foregroundStyle(.tint)
                 Text("Welcome to otag")
                     .font(.title2.weight(.semibold))
                 Spacer()
+                Dots(of: Self.steps, at: step)
             }
             .padding(20)
 
@@ -34,13 +45,13 @@ struct OnboardingView: View {
 
             Group {
                 switch step {
-                case 0: agents
+                case 0: what
                 case 1: hooks
-                default: done
+                default: first
                 }
             }
             .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
 
             Divider()
             HStack {
@@ -48,35 +59,46 @@ struct OnboardingView: View {
                     Button("Back") { step -= 1 }
                 }
                 Spacer()
-                if step < 2 {
-                    Button(step == 1 ? "Skip" : "Continue") { step += 1 }
-                        .keyboardShortcut(step == 1 ? .cancelAction : .defaultAction)
-                }
-                if step == 1 {
+                switch step {
+                case 0:
+                    Button("Continue") { step = 1 }
+                        .keyboardShortcut(.defaultAction)
+                case 1:
+                    Button("Skip") { step = 2 }
+                        .keyboardShortcut(.cancelAction)
                     Button(installing ? "Installing…" : "Install hooks") { install() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(installing || installed != nil)
-                }
-                if step == 2 {
-                    Button("Start") { dismiss() }
+                default:
+                    Button("Not now", action: dismiss)
+                    Button("New session…", action: start)
                         .keyboardShortcut(.defaultAction)
                 }
             }
-            .padding(16)
+            .padding(Chrome.gutter)
         }
         .frame(width: 540)
     }
 
-    /// Step one: what otag can see.
-    private var agents: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("otag runs your agents in panes it owns, and shows you what they are doing.")
-            VStack(alignment: .leading, spacing: 8) {
-                found("Claude Code", path: Self.which("claude"))
-                found("Codex", path: Self.which("codex"))
+    /// Step one: what otag is.
+    private var what: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("otag runs your agents in sessions it owns, and shows you what each one is "
+                + "doing — side by side, with the limits in front of you.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("The agents keep running when you quit otag: a daemon owns them, and this "
+                + "window is looking in.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: Chrome.gap) {
+                found("Claude Code", path: Self.which("claude"), agent: .claude)
+                found("Codex", path: Self.which("codex"), agent: .codex)
             }
-            Text("An agent otag cannot find is not a problem — you can still run anything in "
-                + "a session, and otag notices an agent as soon as one starts.")
+            .padding(.top, 4)
+
+            Text("An agent otag cannot find is not a problem — you can run anything in a "
+                + "session, and otag notices an agent as soon as one starts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -104,7 +126,7 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(10)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: Chrome.controlRadius))
 
             if let installed {
                 Label(installed, systemImage: "checkmark.circle")
@@ -120,41 +142,58 @@ struct OnboardingView: View {
         }
     }
 
-    /// Step three: how to get around.
-    private var done: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("That is everything.")
+    /// Step three: the thing they came here to do.
+    private var first: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Start your first session.")
                 .font(.headline)
-            keys("⌘N", "start a session")
-            keys("⌘K", "every command by name")
-            keys("⌘P", "jump to a session")
-            keys("⌘D / ⇧⌘D", "split the tab")
-            keys("⌥⌘I", "usage, the forecast and the night shift")
-            keys("⇧⌘Y / ⇧⌘N", "answer what an agent is asking")
-            Text("Agents keep running when you quit otag: the daemon owns them, and this "
-                + "window is only looking in.")
+            Text("Choose a project folder and an agent, and otag runs it. Your sessions "
+                + "appear in the list on the left; clicking one shows it.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Drag a session from that list onto the side of the window to put two side "
+                + "by side, and use the button above a session to hand its work to the other "
+                + "agent.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("You can see this screen again from the Help menu.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func keys(_ shortcut: String, _ what: String) -> some View {
-        HStack(spacing: 8) {
-            Text(shortcut)
-                .font(.system(.caption, design: .monospaced))
-                .frame(width: 80, alignment: .leading)
-            Text(what)
-                .font(.caption)
-            Spacer(minLength: 0)
+    /// Which step of how many, as dots.
+    private struct Dots: View {
+        let count: Int
+        let at: Int
+
+        init(of count: Int, at: Int) {
+            self.count = count
+            self.at = at
+        }
+
+        var body: some View {
+            HStack(spacing: 5) {
+                ForEach(0 ..< count, id: \.self) { index in
+                    Circle()
+                        .fill(index == at ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .accessibilityLabel("Step \(at + 1) of \(count)")
         }
     }
 
-    private func found(_ name: String, path: String?) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: path == nil ? "circle.dashed" : "checkmark.circle.fill")
-                .foregroundStyle(path == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.tint))
+    private func found(_ name: String, path: String?, agent: AgentKind) -> some View {
+        HStack(spacing: Chrome.gap) {
+            if path == nil {
+                Image(systemName: "circle.dashed")
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 14)
+            } else {
+                AgentMark(agent: agent, size: 10)
+                    .frame(width: 14)
+            }
             VStack(alignment: .leading, spacing: 1) {
                 Text(name)
                 Text(path ?? "not on your PATH")
@@ -167,8 +206,9 @@ struct OnboardingView: View {
         }
     }
 
-    /// Run `otag install-hooks --yes`, which is the one place otag changes a
-    /// file of the user's — and only because this button was pressed.
+    /// Run `otag install-hooks --yes`, which is the one place this screen
+    /// changes a file of the user's — and only because this button was
+    /// pressed.
     private func install() {
         guard let binary = Paths.daemonBinary() else {
             problem = DaemonError.noDaemonBinary.localizedDescription

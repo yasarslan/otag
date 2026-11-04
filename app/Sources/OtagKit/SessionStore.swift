@@ -95,6 +95,15 @@ public final class SessionStore {
         return groups
     }
 
+    /// The sessions in the order the sidebar lists them, with the projects
+    /// flattened.
+    ///
+    /// What `⌘1`…`⌘9` count along, so the numbers in the rows and the
+    /// shortcuts cannot disagree.
+    public var ordered: [PaneID] {
+        workspaces.flatMap { $0.panes.map(\.id) }
+    }
+
     /// How many sessions are waiting for the user, for the Dock badge.
     public var waiting: Int {
         panes.filter { $0.status.wantsAttention }.count
@@ -203,7 +212,7 @@ public final class SessionStore {
     /// twice opened two sessions on one task, so the button goes quiet until
     /// the daemon has answered. The daemon refuses a repeat as well — this is
     /// the half the user can see.
-    public private(set) var handingOver: Set<PaneID> = []
+    public private(set) var handingOff: Set<PaneID> = []
 
     /// How long the app waits for a handoff before letting it be asked for
     /// again. Shortened in tests.
@@ -213,14 +222,14 @@ public final class SessionStore {
     private var handoffWaiting: Task<Void, Never>?
 
     /// Hand a session's work over, once.
-    public func handOver(pane: PaneID, handoff: Handoff) {
-        guard !handingOver.contains(pane) else { return }
-        handingOver.insert(pane)
+    public func handOff(pane: PaneID, handoff: Handoff) {
+        guard !handingOff.contains(pane) else { return }
+        handingOff.insert(pane)
         send(.handoff(pane: pane, handoff: handoff))
 
         guard case .connected = state else {
             // Nothing was written, so no answer is coming.
-            handingOver.remove(pane)
+            handingOff.remove(pane)
             return
         }
 
@@ -231,7 +240,7 @@ public final class SessionStore {
             let waiting = self?.handoffTimeout ?? Self.defaultHandoffTimeout
             try? await Task.sleep(for: waiting)
             guard let self, !Task.isCancelled else { return }
-            handingOver.removeAll()
+            handingOff.removeAll()
         }
     }
 
@@ -241,7 +250,7 @@ public final class SessionStore {
     /// over, so there is nothing to match on — and there is nothing to match
     /// either way, because a user hands one session over at a time.
     private func handoffSettled() {
-        handingOver.removeAll()
+        handingOff.removeAll()
         handoffWaiting?.cancel()
         handoffWaiting = nil
     }

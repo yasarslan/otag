@@ -2,42 +2,9 @@ import Charts
 import OtagKit
 import SwiftUI
 
-/// How much of each agent's limits is gone, at the bottom of the sidebar.
-///
-/// One line per window, saying what the agent last reported and when that
-/// window resets. Nothing is added around it: no projection, no age, no
-/// explanation of why a number might be out of date. A reading the user can
-/// check against the agent itself is worth more than a reading with otag's
-/// own arithmetic beside it.
-struct UsageWidget: View {
-    let store: SessionStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                Text("Limits")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                UsageRefresh(store: store)
-            }
-
-            ForEach(store.usage.rows) { row in
-                UsageRowView(row: row)
-            }
-
-            ForEach(store.usage.counted) { counted in
-                // A count, not a percentage: nobody knows what such an
-                // account's allowance is.
-                Text("\(counted.agent.label) ~\(Readable.tokens(counted.tokens))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
-}
+// The pieces the limits card and its popover are both built from. The card
+// itself and the popover live in `LimitsCard.swift`; these are the parts
+// that say one number, and are used by both.
 
 /// Ask the daemon for the numbers again.
 ///
@@ -184,103 +151,6 @@ struct Meter: View {
             }
         }
         .frame(height: 3)
-    }
-}
-
-/// The inspector: the limits, the timeline, and what each session is
-/// spending.
-struct UsageInspector: View {
-    let store: SessionStore
-    /// The session the window is showing, whose context is worth a bar.
-    let pane: PaneInfo?
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                section("Limits", accessory: { UsageRefresh(store: store) }) {
-                    ForEach(store.usage.rows) { row in
-                        UsageRowView(row: row)
-                    }
-                    ForEach(store.usage.counted) { counted in
-                        Text("\(counted.agent.label) ~\(Readable.tokens(counted.tokens))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if !store.usage.isEmpty {
-                    section("Timeline") {
-                        UsageChart(samples: store.history)
-                    }
-                }
-
-                if let pane {
-                    section("This session") {
-                        ContextBar(pane: pane)
-                        HandoffButtons(store: store, pane: pane)
-                    }
-                    section("Night shift") {
-                        NightShiftPanel(store: store, pane: pane)
-                    }
-                }
-
-                section("What each session is spending") {
-                    ForEach(spenders) { pane in
-                        HStack(spacing: 6) {
-                            Text(pane.title.isEmpty
-                                ? (pane.agent?.label ?? "shell") : pane.title)
-                                .lineLimit(1)
-                            Spacer(minLength: 6)
-                            Text(Readable.tokens(pane.tokens.input + pane.tokens.output
-                                + pane.tokens.cacheRead + pane.tokens.cacheWritten))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.caption)
-                    }
-                    if spenders.isEmpty {
-                        Text("Nothing counted yet.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// The sessions that have spent something, most first.
-    private var spenders: [PaneInfo] {
-        store.panes
-            .filter { $0.tokens.input + $0.tokens.output + $0.tokens.cacheRead > 0 }
-            .sorted {
-                $0.tokens.input + $0.tokens.output + $0.tokens.cacheRead
-                    > $1.tokens.input + $1.tokens.output + $1.tokens.cacheRead
-            }
-    }
-
-    private func section<Content: View>(
-        _ title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        section(title, accessory: { EmptyView() }, content: content)
-    }
-
-    /// A section with something small on the right of its title.
-    private func section<Accessory: View, Content: View>(
-        _ title: String,
-        @ViewBuilder accessory: () -> Accessory,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Spacer(minLength: 4)
-                accessory()
-            }
-            content()
-        }
     }
 }
 

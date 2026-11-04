@@ -5,39 +5,24 @@ import Foundation
 /// The daemon remembers the sessions; it does not know how the app arranged
 /// them on screen, and it should not — that is the one piece of state the app
 /// owns. Without this, quitting with three sessions side by side and
-/// reopening gave three separate tabs, which is not what was left behind.
+/// reopening showed one.
 ///
 /// Every pane in a saved layout is checked against the sessions the daemon
 /// is actually running before anything is drawn: a layout naming a session
 /// that is over is a layout of what used to be.
 public struct SavedLayout: Codable, Sendable, Equatable {
-    /// The open tabs, left to right.
-    public var tabs: [SavedTab]
-    /// Which of them was showing.
-    public var selected: UUID?
+    /// How the showing sessions divided the space.
+    public var root: SavedNode?
+    /// Which of them had the keyboard.
+    public var focus: PaneID?
 
-    public init(tabs: [SavedTab], selected: UUID?) {
-        self.tabs = tabs
-        self.selected = selected
-    }
-}
-
-/// One saved tab.
-public struct SavedTab: Codable, Sendable, Equatable {
-    public var id: UUID
-    public var title: String
-    public var root: SavedNode
-    public var focus: PaneID
-
-    public init(id: UUID, title: String, root: SavedNode, focus: PaneID) {
-        self.id = id
-        self.title = title
+    public init(root: SavedNode?, focus: PaneID?) {
         self.root = root
         self.focus = focus
     }
 }
 
-/// How a saved tab's panes divided its space.
+/// How a saved layout's panes divided the space.
 ///
 /// A flat shape rather than the enum itself: `PaneNode` is an indirect enum,
 /// and writing its JSON by hand is more code than a struct that says the
@@ -83,9 +68,9 @@ public extension PaneNode {
     /// A node read back from a saved layout, keeping only the sessions in
     /// `alive`.
     ///
-    /// `nil` when nothing in it is still running, which is how a tab learns
-    /// it has nothing left to show. A split that loses all but one child
-    /// becomes that child, exactly as closing a pane does.
+    /// `nil` when nothing in it is still running, which is how the window
+    /// learns it has nothing left to show. A split that loses all but one
+    /// child becomes that child, exactly as closing a pane does.
     static func restored(from saved: SavedNode, alive: Set<PaneID>) -> PaneNode? {
         if let pane = saved.pane {
             return alive.contains(pane) ? .leaf(pane) : nil
@@ -123,16 +108,15 @@ public extension PaneNode {
 @MainActor
 public extension Workbench {
     /// Where the layout is kept between runs.
-    static let layoutKey = "windowLayout"
+    ///
+    /// A different key from the one the tabbed window used: a layout saved
+    /// by that build describes tabs this one has no idea what to do with, so
+    /// it is ignored rather than half-read.
+    static let layoutKey = "windowLayout2"
 
     /// The layout as it stands, for writing down.
     var saved: SavedLayout {
-        SavedLayout(
-            tabs: tabs.map { tab in
-                SavedTab(id: tab.id, title: tab.title, root: tab.root.saved, focus: tab.focus)
-            },
-            selected: selected
-        )
+        SavedLayout(root: root?.saved, focus: focus)
     }
 
     /// Write the layout to `defaults`.
@@ -144,11 +128,11 @@ public extension Workbench {
     /// Put back the layout that was saved, keeping only the sessions in
     /// `alive`.
     ///
-    /// Does nothing once anything is open: this is for the moment the app
+    /// Does nothing once anything is showing: this is for the moment the app
     /// first hears from the daemon, and a layout must never replace what the
     /// user is already looking at.
     func restore(from defaults: UserDefaults = .standard, alive: [PaneID]) {
-        guard tabs.isEmpty, let data = defaults.data(forKey: Self.layoutKey) else { return }
+        guard root == nil, let data = defaults.data(forKey: Self.layoutKey) else { return }
         // A layout this build cannot read is not an error; the window simply
         // starts empty, which is where it started before any of this.
         guard let layout = try? JSONDecoder().decode(SavedLayout.self, from: data) else { return }
@@ -157,26 +141,8 @@ public extension Workbench {
 
     /// Put back one layout, keeping only the sessions in `alive`.
     func restore(_ layout: SavedLayout, alive: [PaneID]) {
-        guard tabs.isEmpty else { return }
-        let running = Set(alive)
-
-        for saved in layout.tabs {
-            guard let root = PaneNode.restored(from: saved.root, alive: running) else { continue }
-            adopt(
-                TerminalTab(
-                    id: saved.id,
-                    title: saved.title,
-                    root: root,
-                    // The session that had the keyboard may be the one that
-                    // is gone, so the focus is corrected to one that is here.
-                    focus: root.panes.contains(saved.focus) ? saved.focus : root.panes[0]
-                )
-            )
-        }
-        if let wanted = layout.selected, tabs.contains(where: { $0.id == wanted }) {
-            selected = wanted
-        } else {
-            selected = tabs.first?.id
-        }
+        guard root == nil, let saved = layout.root else { return }
+        guard let tree = PaneNode.restored(from: saved, alive: Set(alive)) else { return }
+        adopt(root: tree, focus: layout.focus ?? tree.panes[0])
     }
 }

@@ -5,164 +5,164 @@ import Testing
 
 /// The layout is the one piece of state the app owns rather than reads from
 /// the daemon, so it is the one worth testing on its own.
-@Suite("Tabs and splits")
+///
+/// There are no tabs: the sidebar selects, and the window shows one session
+/// or up to three side by side.
+@Suite("The showing sessions")
 @MainActor
 struct WorkbenchTests {
-    @Test("a pane opens in a tab of its own, and opening it again just shows it")
-    func openingAPane() {
+    @Test("selecting a session shows it on its own")
+    func selecting() {
         let workbench = Workbench()
-        workbench.open(pane: 1, title: "claude")
-        workbench.open(pane: 2, title: "codex")
-
-        #expect(workbench.tabs.count == 2)
-        #expect(workbench.selected == workbench.tabs[1].id)
-
-        workbench.open(pane: 1, title: "claude")
-        #expect(workbench.tabs.count == 2, "no second tab for the same pane")
-        #expect(workbench.selected == workbench.tabs[0].id)
+        workbench.select(pane: 1)
+        #expect(workbench.panes == [1])
         #expect(workbench.focus == 1)
+
+        workbench.select(pane: 2)
+        #expect(workbench.panes == [2], "the second replaces the first")
+        #expect(workbench.focus == 2)
     }
 
-    @Test("splitting divides the focused pane's space, not the whole tab")
+    @Test("selecting a session already side by side only moves the keyboard")
+    func selectingOneAlreadyShowing() {
+        let workbench = Workbench()
+        workbench.select(pane: 1)
+        workbench.place(pane: 2, on: .trailing)
+
+        workbench.select(pane: 1)
+        #expect(workbench.panes == [1, 2], "the arrangement is left alone")
+        #expect(workbench.focus == 1, "and the keyboard moves")
+    }
+
+    @Test("splitting divides the focused pane's space")
     func splitting() {
         let workbench = Workbench()
-        workbench.open(pane: 1, title: "claude")
+        workbench.select(pane: 1)
         workbench.split(with: 2, axis: .horizontal)
 
-        guard case let .split(axis, children, fractions) = workbench.current?.root else {
-            Issue.record("expected a split, got \(String(describing: workbench.current?.root))")
+        guard case let .split(axis, children, fractions) = workbench.root else {
+            Issue.record("expected a split, got \(String(describing: workbench.root))")
             return
         }
         #expect(axis == .horizontal)
         #expect(children == [.leaf(1), .leaf(2)])
         #expect(fractions == [0.5, 0.5])
         #expect(workbench.focus == 2, "the new pane takes the keyboard")
-
-        // A third pane split the same way joins the row rather than nesting.
-        workbench.split(with: 3, axis: .horizontal)
-        guard case let .split(_, row, shares) = workbench.current?.root else {
-            Issue.record("expected a row")
-            return
-        }
-        #expect(row == [.leaf(1), .leaf(2), .leaf(3)])
-        #expect(shares == [0.5, 0.25, 0.25])
     }
 
-    @Test("a split across the other axis nests inside the pane it divides")
-    func nestedSplit() {
+    @Test("splitting with nothing showing simply shows it")
+    func splittingFromEmpty() {
         let workbench = Workbench()
-        workbench.open(pane: 1, title: "shell")
+        workbench.split(with: 7, axis: .horizontal)
+        #expect(workbench.panes == [7])
+        #expect(workbench.focus == 7)
+    }
+
+    @Test("a session cannot be split with itself")
+    func splittingWithItself() {
+        let workbench = Workbench()
+        workbench.select(pane: 1)
+        workbench.split(with: 1, axis: .horizontal)
+        #expect(workbench.panes == [1])
+    }
+
+    @Test("three sessions fit, and a fourth replaces the one left longest")
+    func threeAtMost() {
+        let workbench = Workbench()
+        workbench.select(pane: 1)
+        workbench.place(pane: 2, on: .trailing)
+        workbench.place(pane: 3, on: .trailing)
+        #expect(workbench.panes == [1, 2, 3])
+        #expect(workbench.refusal == nil, "three is allowed and says nothing")
+
+        workbench.place(pane: 4, on: .trailing)
+        #expect(workbench.panes.count == Workbench.maximumPanes)
+        #expect(!workbench.panes.contains(1), "the one nobody had looked at went")
+        #expect(workbench.panes.contains(4))
+        #expect(workbench.refusal != nil, "and the window is told why")
+    }
+
+    @Test("looking at a pane keeps it from being the one replaced")
+    func focusingSparesAPane() {
+        let workbench = Workbench()
+        workbench.select(pane: 1)
+        workbench.place(pane: 2, on: .trailing)
+        workbench.place(pane: 3, on: .trailing)
+
+        // Back to the first one, which makes the second the stalest.
+        workbench.focus(pane: 1)
+        workbench.place(pane: 4, on: .bottom)
+
+        #expect(workbench.panes.contains(1), "the one just looked at stayed")
+        #expect(!workbench.panes.contains(2))
+    }
+
+    @Test("closing a pane gives its space to its neighbours")
+    func closing() {
+        let workbench = Workbench()
+        workbench.select(pane: 1)
         workbench.split(with: 2, axis: .horizontal)
-        workbench.split(with: 3, axis: .vertical)
+        workbench.close(pane: 2)
 
-        guard case let .split(.horizontal, children, _) = workbench.current?.root else {
-            Issue.record("expected a horizontal split")
-            return
-        }
-        #expect(children.first == .leaf(1))
-        guard case let .split(.vertical, inner, _) = children.last else {
-            Issue.record("expected the second half to be split vertically")
-            return
-        }
-        #expect(inner == [.leaf(2), .leaf(3)])
-        #expect(workbench.current?.panes == [1, 2, 3])
+        #expect(workbench.root == .leaf(1), "a split with one child left is not a split")
+        #expect(workbench.focus == 1, "the keyboard went somewhere real")
     }
 
-    @Test("a pane that ends gives its space back and keeps the tab open")
-    func closingOnePane() {
+    @Test("closing the last pane leaves the window empty")
+    func closingTheLast() {
         let workbench = Workbench()
-        workbench.open(pane: 1, title: "claude")
-        workbench.split(with: 2, axis: .vertical)
-
-        workbench.close(pane: 2)
-        #expect(workbench.tabs.count == 1)
-        #expect(workbench.current?.root == .leaf(1), "the split is gone with its second half")
-        #expect(workbench.focus == 1, "the keyboard goes to what is left")
-    }
-
-    @Test("the last pane of a tab takes the tab with it")
-    func closingTheLastPane() {
-        let workbench = Workbench()
-        workbench.open(pane: 1, title: "claude")
-        workbench.open(pane: 2, title: "codex")
-
-        workbench.close(pane: 2)
-        #expect(workbench.tabs.count == 1)
-        #expect(workbench.selected == workbench.tabs[0].id, "something is still shown")
-
+        workbench.select(pane: 1)
         workbench.close(pane: 1)
-        #expect(workbench.tabs.isEmpty)
-        #expect(workbench.selected == nil)
+
+        #expect(workbench.root == nil)
+        #expect(workbench.focus == nil)
+        #expect(workbench.panes.isEmpty)
     }
 
-    @Test("closing a tab says which panes nobody is watching any more")
-    func closingATab() {
+    @Test("the keyboard steps through the panes in the order they are drawn")
+    func steppingFocus() {
         let workbench = Workbench()
-        workbench.open(pane: 1, title: "claude")
-        workbench.split(with: 2, axis: .horizontal)
-        let id = workbench.selected!
+        workbench.select(pane: 1)
+        workbench.place(pane: 2, on: .trailing)
+        workbench.place(pane: 3, on: .trailing)
+        workbench.focus(pane: 1)
 
-        let released = workbench.closeTab(id)
-        #expect(released.sorted() == [1, 2])
-        #expect(workbench.tabs.isEmpty)
+        workbench.stepFocus(by: 1)
+        #expect(workbench.focus == 2)
+        workbench.stepFocus(by: -1)
+        #expect(workbench.focus == 1)
+        workbench.stepFocus(by: -1)
+        #expect(workbench.focus == 3, "and wraps around")
     }
 
-    @Test("a divider moves only the two panes it is between")
+    @Test("one pane has nothing to step to")
+    func steppingWithOnePane() {
+        let workbench = Workbench()
+        workbench.select(pane: 1)
+        workbench.stepFocus(by: 1)
+        #expect(workbench.focus == 1)
+    }
+
+    @Test("a divider moves without moving the others")
     func movingADivider() {
         let workbench = Workbench()
-        workbench.open(pane: 1, title: "a")
-        workbench.split(with: 2, axis: .horizontal)
-        workbench.split(with: 3, axis: .horizontal)
-        let node = workbench.current!.root.id
+        workbench.select(pane: 1)
+        workbench.place(pane: 2, on: .trailing)
+        workbench.place(pane: 3, on: .trailing)
 
-        workbench.move(divider: 1, of: node, by: 0.1)
-        guard case let .split(_, _, fractions) = workbench.current?.root else {
-            Issue.record("expected a row")
+        guard let id = workbench.root?.id else {
+            Issue.record("no root")
             return
         }
-        #expect(fractions[0] == 0.5, "the pane beyond the divider does not move")
-        #expect(abs(fractions[1] - 0.35) < 0.000_1)
-        #expect(abs(fractions[2] - 0.15) < 0.000_1)
-    }
+        workbench.move(divider: 0, of: id, by: 0.1)
 
-    @Test("a divider cannot be dragged past the end of a pane")
-    func dividerLimits() {
-        let workbench = Workbench()
-        workbench.open(pane: 1, title: "a")
-        workbench.split(with: 2, axis: .vertical)
-        let node = workbench.current!.root.id
-
-        workbench.move(divider: 0, of: node, by: 10)
-        guard case let .split(_, _, fractions) = workbench.current?.root else {
+        guard case let .split(_, children, fractions) = workbench.root else {
             Issue.record("expected a split")
             return
         }
-        #expect(fractions[1] >= 0.04, "the far pane keeps a sliver: \(fractions)")
-        #expect(abs(fractions.reduce(0, +) - 1) < 0.000_1)
-    }
-
-    @Test("tabs step round, in both directions")
-    func steppingTabs() {
-        let workbench = Workbench()
-        workbench.open(pane: 1, title: "one")
-        workbench.open(pane: 2, title: "two")
-        workbench.open(pane: 3, title: "three")
-
-        workbench.step(by: 1)
-        #expect(workbench.selected == workbench.tabs[0].id, "it wraps around")
-        workbench.step(by: -1)
-        #expect(workbench.selected == workbench.tabs[2].id)
-    }
-
-    @Test("a tab is renamed only when the name is new")
-    func renaming() {
-        let workbench = Workbench()
-        workbench.open(pane: 1, title: "shell")
-        let id = workbench.selected!
-
-        workbench.rename(tab: id, to: "claude")
-        #expect(workbench.current?.title == "claude")
-        workbench.rename(tab: UUID(), to: "nobody")
-        #expect(workbench.current?.title == "claude")
+        #expect(children.count == 3, "three across is one row, not a nest")
+        #expect(abs(fractions.reduce(0, +) - 1) < 0.0001, "the shares still add up")
+        #expect(fractions[0] > fractions[1], "the first divider moved")
+        #expect(abs(fractions[2] - 1.0 / 3) < 0.0001, "and the third pane did not")
     }
 }

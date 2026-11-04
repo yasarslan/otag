@@ -9,12 +9,12 @@ public enum SplitAxis: Sendable, Hashable {
     case vertical
 }
 
-/// How the panes of one tab divide its space.
+/// How the showing sessions divide the main area.
 ///
-/// A tree, because that is what splitting a pane produces: splitting one half
-/// again divides that half, not the whole tab. Children of a split share its
-/// space in the fractions it carries, so dragging one divider never moves the
-/// others.
+/// A tree, because that is what splitting produces: splitting one half again
+/// divides that half, not the whole area. Children of a split share its
+/// space in the fractions it carries, so dragging one divider never moves
+/// the others.
 public enum PaneNode: Sendable, Hashable, Identifiable {
     /// One pane, filling its space.
     case leaf(PaneID)
@@ -44,7 +44,7 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
     /// Put `pane` beside `beside`, dividing only the space `beside` has.
     ///
     /// Returns whether `beside` was found: a split asked for a pane that is
-    /// not in this tab changes nothing.
+    /// not showing changes nothing.
     public mutating func split(beside: PaneID, with pane: PaneID, axis: SplitAxis) -> Bool {
         switch self {
         case let .leaf(existing):
@@ -80,7 +80,8 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
 
     /// Take `pane` out, giving its space to its neighbours.
     ///
-    /// `nil` once nothing is left, which is how a tab learns it should close.
+    /// `nil` once nothing is left, which is how the window learns it has
+    /// nothing to show.
     public func removing(_ pane: PaneID) -> PaneNode? {
         switch self {
         case let .leaf(existing):
@@ -111,7 +112,7 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
     /// Move the divider after `index` of the split identified by `id`.
     ///
     /// `delta` is a fraction of that split's own space, so dragging feels the
-    /// same whether the split is the whole tab or a corner of it.
+    /// same whether the split is the whole area or a corner of it.
     public mutating func move(divider index: Int, of id: String, by delta: Double) {
         switch self {
         case .leaf:
@@ -141,12 +142,30 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
 
     /// This node and `pane` side by side, with `pane` on `edge`.
     ///
-    /// What a session dropped on the edge of the terminal area means: it
-    /// divides the whole tab rather than one pane of it, which is why this
-    /// works on the root and the dragging never has to say which pane it
-    /// landed over.
+    /// What a session dropped on the edge of the main area means: it divides
+    /// the whole area rather than one pane of it, which is why this works on
+    /// the root and the dragging never has to say which pane it landed over.
     public func splitting(off edge: DropEdge, with pane: PaneID) -> PaneNode {
         let leaf = PaneNode.leaf(pane)
+
+        // A row already divided this way takes the newcomer in rather than
+        // nesting a split inside itself, which is what keeps three sessions
+        // dropped on the same edge three even columns instead of 25/25/50.
+        if case let .split(axis, children, fractions) = self, axis == edge.axis {
+            var kept = children
+            var shares = fractions
+            kept.insert(leaf, at: edge.putsItFirst ? 0 : kept.count)
+            shares.insert(0, at: edge.putsItFirst ? 0 : shares.count)
+
+            let even = 1 / Double(kept.count)
+            let total = shares.reduce(0, +)
+            // The newcomer takes an even share; the rest keep their ratios
+            // to each other in what is left.
+            var out = shares.map { total > 0 ? $0 / total * (1 - even) : even }
+            out[edge.putsItFirst ? 0 : out.count - 1] = even
+            return .split(axis: axis, children: kept, fractions: out)
+        }
+
         let children = edge.putsItFirst ? [leaf, self] : [self, leaf]
         return .split(axis: edge.axis, children: children, fractions: [0.5, 0.5])
     }
@@ -165,231 +184,206 @@ public enum PaneNode: Sendable, Hashable, Identifiable {
     }
 }
 
-/// Which edge of the terminal area a session was dropped on.
+/// Which edge of the main area a session was dropped on.
 ///
-/// Four edges rather than two axes, because "left" and "right" are what the
-/// user is aiming at; the axis and the order follow from it.
+/// Three edges, not four: "above" is the one nobody wants, and the top of
+/// the area is where the header bar already is.
 public enum DropEdge: Sendable, Hashable, CaseIterable {
     case leading
     case trailing
-    case top
     case bottom
 
     /// Which way the split divides the space.
     public var axis: SplitAxis {
         switch self {
         case .leading, .trailing: return .horizontal
-        case .top, .bottom: return .vertical
+        case .bottom: return .vertical
         }
     }
 
     /// Whether the dropped session goes before what is already there.
     public var putsItFirst: Bool {
-        self == .leading || self == .top
+        self == .leading
+    }
+
+    /// What to call it, for a tooltip or a test's failure message.
+    public var label: String {
+        switch self {
+        case .leading: return "left"
+        case .trailing: return "right"
+        case .bottom: return "bottom"
+        }
     }
 }
 
-/// One tab: a set of panes and which of them has the keyboard.
-public struct TerminalTab: Sendable, Identifiable, Hashable {
-    public let id: UUID
-    /// What the tab strip calls it.
-    public var title: String
-    /// How its panes divide the space.
-    public var root: PaneNode
-    /// The pane the keyboard goes to.
-    public var focus: PaneID
-
-    public init(id: UUID = UUID(), title: String, pane: PaneID) {
-        self.id = id
-        self.title = title
-        root = .leaf(pane)
-        focus = pane
-    }
-
-    /// A tab with a whole arrangement, for one read back from a saved
-    /// layout.
-    public init(id: UUID, title: String, root: PaneNode, focus: PaneID) {
-        self.id = id
-        self.title = title
-        self.root = root
-        self.focus = focus
-    }
-
-    /// Every pane in the tab.
-    public var panes: [PaneID] { root.panes }
-}
-
-/// The tabs a window is showing, and which pane has the keyboard.
+/// The sessions the window is showing, and which of them has the keyboard.
 ///
-/// This is the app's own layout, not the daemon's: the daemon owns the panes
-/// and their sizes, and the app decides where on screen they go. That is the
-/// one piece of state the app keeps for itself, so it is also the one worth
-/// testing on its own.
+/// This is the app's own state, not the daemon's: the daemon owns the panes
+/// and their sizes, and the app decides where on screen they go. One layout
+/// of up to three panes — there are no tabs, because the sidebar is the only
+/// navigator and a second navigator is how the window became hard to read.
 @MainActor
 @Observable
 public final class Workbench {
-    /// The open tabs, left to right.
-    public private(set) var tabs: [TerminalTab] = []
-    /// Which tab is shown.
-    public var selected: UUID?
+    /// How the showing sessions divide the space, or nothing when none is
+    /// showing.
+    public private(set) var root: PaneNode?
+    /// The pane the keyboard goes to.
+    public private(set) var focus: PaneID?
+
+    /// How many sessions may share the window.
+    ///
+    /// Three is where a terminal stops being readable on one screen, and a
+    /// limit the user can feel beats a layout that keeps dividing.
+    public static let maximumPanes = 3
+
+    /// The panes in the order they were last given the keyboard, oldest
+    /// first. The one at the front is the one a fourth session replaces.
+    private var leastRecentlyFocused: [PaneID] = []
+
+    /// The last thing that could not be done, for the window to say once.
+    public var refusal: String?
 
     public init() {}
 
-    /// The tab that is shown.
-    public var current: TerminalTab? {
-        tabs.first { $0.id == selected }
+    /// The showing sessions, left to right and top to bottom.
+    public var panes: [PaneID] {
+        root?.panes ?? []
     }
 
-    /// The pane the keyboard goes to.
-    public var focus: PaneID? {
-        current?.focus
-    }
-
-    /// Whether any tab is showing this pane.
+    /// Whether this session is showing.
     public func isOpen(_ pane: PaneID) -> Bool {
-        tabs.contains { $0.panes.contains(pane) }
+        panes.contains(pane)
     }
 
-    /// Show `pane`: its tab if it already has one, a new tab otherwise.
-    public func open(pane: PaneID, title: String) {
-        if let tab = tabs.first(where: { $0.panes.contains(pane) }) {
-            selected = tab.id
+    /// Show `pane` on its own, replacing whatever was showing.
+    ///
+    /// What selecting a session in the sidebar means. A session already
+    /// showing beside others is not torn out of the arrangement — it is
+    /// simply given the keyboard, because the user asked to look at it, not
+    /// to rearrange the window.
+    public func select(pane: PaneID) {
+        if isOpen(pane) {
             focus(pane: pane)
             return
         }
-        let tab = TerminalTab(title: title, pane: pane)
-        tabs.append(tab)
-        selected = tab.id
+        root = .leaf(pane)
+        leastRecentlyFocused = []
+        focus(pane: pane)
     }
 
-    /// Give the keyboard to `pane`, in whichever tab holds it.
+    /// Give the keyboard to `pane`.
     public func focus(pane: PaneID) {
-        guard let index = tabs.firstIndex(where: { $0.panes.contains(pane) }) else { return }
-        tabs[index].focus = pane
-        selected = tabs[index].id
+        guard isOpen(pane) else { return }
+        focus = pane
+        leastRecentlyFocused.removeAll { $0 == pane }
+        leastRecentlyFocused.append(pane)
     }
 
-    /// Put `pane` beside the focused one in the current tab.
+    /// Put `pane` beside the focused one, on this axis.
+    ///
+    /// What `Split with…`, `⌘D` and `⇧⌘D` mean.
     public func split(with pane: PaneID, axis: SplitAxis) {
-        guard let index = tabs.firstIndex(where: { $0.id == selected }) else { return }
-        var tab = tabs[index]
-        guard tab.root.split(beside: tab.focus, with: pane, axis: axis) else { return }
-        tab.focus = pane
-        tabs[index] = tab
+        guard let beside = focus, let existing = root else {
+            select(pane: pane)
+            return
+        }
+        guard pane != beside else { return }
+        guard makeRoom(for: pane) else { return }
+
+        var node = existing
+        guard node.split(beside: beside, with: pane, axis: axis) else { return }
+        root = node
+        focus(pane: pane)
     }
 
-    /// Take a pane out of whatever tab holds it, closing a tab that is left
-    /// with nothing.
+    /// Put an already running session into the window, on `edge`.
     ///
-    /// This is what a pane whose program ended looks like from here: the
-    /// daemon has already let it go.
-    public func close(pane: PaneID) {
-        for index in tabs.indices.reversed() {
-            guard tabs[index].panes.contains(pane) else { continue }
-            guard let root = tabs[index].root.removing(pane) else {
-                let closing = tabs[index].id
-                tabs.remove(at: index)
-                if selected == closing {
-                    selected = tabs.first?.id
-                }
-                continue
-            }
-            var tab = tabs[index]
-            tab.root = root
-            if tab.focus == pane {
-                tab.focus = root.panes.first ?? pane
-            }
-            tabs[index] = tab
-        }
-    }
-
-    /// Close a whole tab, and say which panes it held so the caller can let
-    /// the daemon know nobody is watching them any more.
-    @discardableResult
-    public func closeTab(_ id: UUID) -> [PaneID] {
-        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return [] }
-        let panes = tabs[index].panes
-        tabs.remove(at: index)
-        if selected == id {
-            selected = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
-        }
-        return panes
-    }
-
-    /// Take in a tab that was built elsewhere, which is how a saved layout
-    /// is put back. Nothing else should need it.
-    public func adopt(_ tab: TerminalTab) {
-        guard !tab.panes.isEmpty, !tabs.contains(where: { $0.id == tab.id }) else { return }
-        tabs.append(tab)
-        if selected == nil {
-            selected = tab.id
-        }
-    }
-
-    /// Rename a tab, which is what a pane's title changing means.
-    public func rename(tab id: UUID, to title: String) {
-        guard let index = tabs.firstIndex(where: { $0.id == id }), tabs[index].title != title
-        else { return }
-        tabs[index].title = title
-    }
-
-    /// Move a divider of the current tab.
-    public func move(divider index: Int, of node: String, by delta: Double) {
-        guard let position = tabs.firstIndex(where: { $0.id == selected }) else { return }
-        var tab = tabs[position]
-        tab.root.move(divider: index, of: node, by: delta)
-        tabs[position] = tab
-    }
-
-    /// Put an already running session into the current tab, on `edge`.
-    ///
-    /// What dragging a session from the sidebar onto the edge of the
-    /// terminal area means. The edge divides the whole tab, so the drag does
-    /// not have to say which pane it landed over — and a session already in
-    /// this tab is *moved* rather than shown twice.
-    public func place(pane: PaneID, on edge: DropEdge, title: String) {
-        let target = selected
-
-        // Out of whatever tab holds it first, so that dragging within one
-        // tab rearranges rather than duplicating. A tab left with nothing
-        // goes, which can be the tab being dropped on — so the tab is found
-        // again afterwards, by identifier, rather than by position.
+    /// What dragging a session from the sidebar onto the side or the bottom
+    /// of the main area means. The edge divides the whole area, so the drag
+    /// does not have to say which pane it landed over — and a session
+    /// already showing is *moved* rather than shown twice.
+    public func place(pane: PaneID, on edge: DropEdge) {
+        // Out first, so that dragging within the window rearranges rather
+        // than duplicating.
         if isOpen(pane) {
             close(pane: pane)
         }
-        guard let index = tabs.firstIndex(where: { $0.id == target }) else {
+        guard root != nil, makeRoom(for: pane), let kept = root else {
             // Nothing left to put it beside, so it becomes the first thing.
-            open(pane: pane, title: title)
+            select(pane: pane)
             return
         }
-
-        var tab = tabs[index]
-        tab.root = tab.root.splitting(off: edge, with: pane)
-        tab.focus = pane
-        tabs[index] = tab
-        selected = tab.id
+        root = kept.splitting(off: edge, with: pane)
+        focus(pane: pane)
     }
 
-    /// Give the keyboard to the pane `offset` places along the current tab,
-    /// wrapping around.
+    /// Stop showing `pane`, giving its space to its neighbours.
+    ///
+    /// This is also what a pane whose program ended looks like from here:
+    /// the daemon has already let it go.
+    public func close(pane: PaneID) {
+        guard isOpen(pane) else { return }
+        leastRecentlyFocused.removeAll { $0 == pane }
+        root = root?.removing(pane)
+        if focus == pane {
+            focus = leastRecentlyFocused.last ?? root?.panes.first
+        }
+        if root == nil {
+            focus = nil
+            leastRecentlyFocused = []
+        }
+    }
+
+    /// Move a divider.
+    public func move(divider index: Int, of node: String, by delta: Double) {
+        guard var tree = root else { return }
+        tree.move(divider: index, of: node, by: delta)
+        root = tree
+    }
+
+    /// Give the keyboard to the pane `offset` places along, wrapping around.
     ///
     /// The panes are in the order they are drawn, so this walks left to
     /// right and top to bottom, which is what the keys look like they do.
     public func stepFocus(by offset: Int) {
-        guard let index = tabs.firstIndex(where: { $0.id == selected }) else { return }
-        let panes = tabs[index].panes
-        guard panes.count > 1 else { return }
-        let at = panes.firstIndex(of: tabs[index].focus) ?? 0
-        let count = panes.count
-        tabs[index].focus = panes[((at + offset) % count + count) % count]
+        let showing = panes
+        guard showing.count > 1, let current = focus,
+              let at = showing.firstIndex(of: current) else { return }
+        let count = showing.count
+        focus(pane: showing[((at + offset) % count + count) % count])
     }
 
-    /// Show the tab `offset` places from the current one, wrapping around.
-    public func step(by offset: Int) {
-        guard !tabs.isEmpty else { return }
-        let current = tabs.firstIndex { $0.id == selected } ?? 0
-        let count = tabs.count
-        let next = ((current + offset) % count + count) % count
-        selected = tabs[next].id
+    /// Forget the last refusal, once the window has said it.
+    public func clearRefusal() {
+        refusal = nil
+    }
+
+    /// Make sure a fourth session has somewhere to go.
+    ///
+    /// The least recently used pane leaves rather than the drop failing
+    /// silently — and the window says so, because a session disappearing
+    /// without a word is worse than a refusal.
+    private func makeRoom(for pane: PaneID) -> Bool {
+        guard panes.count >= Self.maximumPanes else { return true }
+        guard let evicted = leastRecentlyFocused.first ?? panes.first else { return false }
+        guard evicted != pane else { return false }
+        close(pane: evicted)
+        refusal = "otag shows up to \(Self.maximumPanes) sessions at once, "
+            + "so the one you had not looked at for longest was closed. It is still running."
+        return true
+    }
+
+    /// Take in a layout built elsewhere, which is how a saved one is put
+    /// back. Nothing else should need it.
+    func adopt(root: PaneNode, focus: PaneID) {
+        guard self.root == nil else { return }
+        self.root = root
+        self.focus = root.panes.contains(focus) ? focus : root.panes.first
+        leastRecentlyFocused = root.panes
+        if let wanted = self.focus {
+            leastRecentlyFocused.removeAll { $0 == wanted }
+            leastRecentlyFocused.append(wanted)
+        }
     }
 }

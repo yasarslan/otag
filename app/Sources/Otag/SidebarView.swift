@@ -1,51 +1,36 @@
 import OtagKit
 import SwiftUI
 
-/// The sessions, grouped by project.
+/// The sessions, grouped by project. The only navigator in the window.
 ///
-/// Calm by design, like the rest of otag: a session that wants the user is
-/// marked with a small symbol in the accent colour, and nothing moves,
-/// blinks or fills up.
+/// There is no tab bar and no quick switcher: a session is here, you click
+/// it, and the main area shows it. A row that is waiting for the user opens
+/// up under its own name with the question and two buttons, because a
+/// question belongs to the session that asked it rather than to an inbox
+/// somewhere else.
 struct SidebarView: View {
     let store: SessionStore
+    let names: SessionNames
+    let workbench: Workbench
     @Binding var selection: PaneID?
-    /// Everything there is to do with one session, for the right-click menu.
-    /// The same actions the session's own header offers, in the same words.
-    let commands: (PaneInfo) -> SessionCommands
+    /// Ask the window something about one session.
+    let ask: (PaneID, SessionPrompt.Kind) -> Void
 
     var body: some View {
         List(selection: $selection) {
-            // Above the sessions, because a question is the one thing in
-            // this window that is actually waiting for the user.
-            if !store.asks.isEmpty {
-                Section("Waiting for you") {
-                    InboxView(store: store) { pane in selection = pane }
-                }
-            }
-
             ForEach(store.workspaces) { workspace in
                 Section {
                     ForEach(workspace.panes) { pane in
-                        SessionRow(pane: pane)
-                            .tag(pane.id)
-                            .draggable(DraggedSession(pane: pane.id)) {
-                                // What the user sees under the cursor: the
-                                // session's own name, so it is obvious what
-                                // is being moved.
-                                SessionRow(pane: pane)
-                                    .padding(6)
-                                    .frame(width: 200, alignment: .leading)
-                            }
-                            .contextMenu {
-                                SessionActionItems(commands: commands(pane))
-                            }
+                        row(for: pane)
                     }
                 } header: {
-                    WorkspaceHeader(workspace: workspace)
+                    ProjectHeader(name: workspace.name)
                 }
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .chromeBackground()
         .overlay {
             if store.workspaces.isEmpty {
                 EmptySidebar(state: store.state)
@@ -56,83 +41,133 @@ struct SidebarView: View {
                 if let problem = store.answerProblem {
                     AnswerProblemView(problem: problem) { store.clearAnswerProblem() }
                 }
-                Divider()
-                UsageWidget(store: store)
-                ConnectionFooter(store: store)
+                LimitsCard(store: store, focused: workbench.focus.flatMap(store.pane))
             }
-            .background(.bar)
         }
+    }
+
+    /// One row, with everything hung off it: the drag that puts a session
+    /// side by side, and the right click that does everything else.
+    private func row(for pane: PaneInfo) -> some View {
+        SessionRow(
+            pane: pane,
+            name: names.name(of: pane),
+            number: number(of: pane.id),
+            ask: store.asks.first { $0.pane == pane.id },
+            answer: { chosen in deliver(chosen, for: pane.id) }
+        )
+        .tag(pane.id)
+        .draggable(DraggedSession(pane: pane.id)) { dragPreview(of: pane) }
+        .contextMenu {
+            SessionContextMenu(
+                actions: actions(for: pane),
+                ask: { kind in ask(pane.id, kind) }
+            )
+        }
+    }
+
+    /// What the user sees under the cursor: the session's own name, so it is
+    /// obvious what is being moved.
+    private func dragPreview(of pane: PaneInfo) -> some View {
+        HStack(spacing: Chrome.gap) {
+            AgentMark(agent: pane.agent)
+            Text(names.name(of: pane)).lineLimit(1)
+        }
+        .padding(8)
+        .frame(width: 200, alignment: .leading)
+    }
+
+    private func deliver(_ answer: Answer, for pane: PaneID) {
+        guard let waiting = store.asks.first(where: { $0.pane == pane }) else { return }
+        store.answer(waiting, with: answer)
+    }
+
+    /// Everything there is to do with one session.
+    private func actions(for pane: PaneInfo) -> SessionActions {
+        SessionActions(store: store, workbench: workbench, names: names, pane: pane)
+    }
+
+    /// Which `⌘` number selects this session, when it is one of the first
+    /// nine. Shown in the row so the shortcut teaches itself.
+    private func number(of pane: PaneID) -> Int? {
+        guard let index = store.ordered.firstIndex(of: pane), index < 9 else { return nil }
+        return index + 1
     }
 }
 
-/// One project's name, and whether anything in it wants the user.
-private struct WorkspaceHeader: View {
-    let workspace: WorkspaceGroup
+/// One project's name: a label, not a control.
+///
+/// No disclosure triangle, no count, no icon. Projects are how the list is
+/// grouped; they are not things you do anything to.
+private struct ProjectHeader: View {
+    let name: String
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(workspace.name)
-            if workspace.waiting > 0 {
-                Image(systemName: "questionmark.circle.fill")
-                    .foregroundStyle(.tint)
-                    .help("\(workspace.waiting) waiting for you")
-            }
-        }
+        Text(name)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 }
 
-/// One session: what it is running, and what it is doing.
+/// One session: a colour for the agent, a name, and what it is doing.
+///
+/// Three things, and a fourth only when the session is waiting: the question,
+/// with Allow and Deny under it.
 private struct SessionRow: View {
     let pane: PaneInfo
+    let name: String
+    /// Its `⌘` number, when it has one.
+    let number: Int?
+    /// What it is waiting for, when it is waiting for anything.
+    let ask: AskView?
+    let answer: (Answer) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(pane.status.wantsAttention ? AnyShapeStyle(.tint)
-                    : AnyShapeStyle(.secondary))
-                .frame(width: 16)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: Chrome.gap) {
+                AgentMark(agent: pane.agent)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(name)
                     .lineLimit(1)
-                Text(pane.status.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                // A context meter is only honest when otag knows how large
-                // the model's context is.
-                if let window = pane.contextWindow, window > 0, pane.tokens.context > 0 {
-                    Meter(
-                        fraction: Double(pane.tokens.context) / Double(window),
-                        colour: .secondary
-                    )
-                    .frame(width: 90)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 4)
+
+                StatusPill(status: pane.status)
+            }
+
+            // The one thing in this window that is actually waiting for the
+            // user, under the name of whoever is asking.
+            if let ask {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(ask.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        Button("Allow") { answer(.allow) }
+                            .controlSize(.small)
+                            .keyboardShortcut(.defaultAction)
+                        Button("Deny") { answer(.deny) }
+                            .controlSize(.small)
+                        Spacer(minLength: 0)
+                    }
                 }
+                .padding(.leading, 16)
+                .transition(.opacity)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+        .animation(.easeOut(duration: 0.15), value: ask?.id)
         .help(help)
     }
 
-    /// The agent's own symbol where there is one, and the pane's otherwise.
-    private var icon: String {
-        if pane.status == .error { return "exclamationmark.triangle" }
-        if pane.status == .looping { return "arrow.triangle.2.circlepath" }
-        if pane.status == .needsApproval { return "questionmark.circle" }
-        switch pane.agent {
-        case .claude, .codex: return "sparkles"
-        case nil: return "terminal"
-        }
-    }
-
-    private var title: String {
-        if !pane.title.isEmpty { return pane.title }
-        return pane.agent?.label ?? "shell"
-    }
-
     private var help: String {
-        var parts = [title, pane.status.label]
-        if let agent = pane.agent { parts.insert(agent.label, at: 1) }
+        var parts = [name, pane.agent.name, pane.status.precise]
+        if let number { parts.append("⌘\(number)") }
         return parts.joined(separator: " · ")
     }
 }
@@ -142,7 +177,7 @@ private struct EmptySidebar: View {
     let state: ConnectionState
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Chrome.gap) {
             if case .connecting = state {
                 ProgressView().controlSize(.small)
                 Text("Looking for the daemon…")
@@ -156,55 +191,5 @@ private struct EmptySidebar: View {
         }
         .foregroundStyle(.secondary)
         .padding(20)
-    }
-}
-
-/// The bottom of the sidebar: whether the app is talking to the daemon.
-///
-/// The usage widget belongs here too and arrives with the rest of the usage
-/// work; until then this is where the connection is reported, which is the
-/// one thing a user cannot otherwise see.
-///
-/// The menu bar item carries the same numbers for when the window is closed.
-private struct ConnectionFooter: View {
-    let store: SessionStore
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(colour)
-                .frame(width: 7, height: 7)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .help(store.socket.path)
-    }
-
-    private var colour: Color {
-        switch store.state {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .failed: return .red
-        }
-    }
-
-    private var label: String {
-        switch store.state {
-        case .connected:
-            if let version = store.daemonVersion {
-                return "daemon \(version)"
-            }
-            return "connected"
-        case .connecting:
-            return "connecting…"
-        case let .failed(message):
-            return message
-        }
     }
 }

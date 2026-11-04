@@ -1,17 +1,20 @@
 import OtagKit
 import SwiftUI
 
-/// The four edges of the terminal area, as places to drop a session.
+/// The sides and the bottom of the main area, as places to drop a session.
 ///
 /// Only drawn while something is being dragged over them: an app that always
 /// shows its drop targets is an app shouting about its own implementation.
 /// They are what makes side-by-side sessions findable without knowing that
-/// `Cmd-D` exists.
+/// `⋯ > Split with…` exists.
+///
+/// Three bands, not four. "Above" is the one nobody wants, and the top of the
+/// area is where the header bar already is.
 struct DropEdges: View {
     let workbench: Workbench
     let store: SessionStore
 
-    /// How much of the area each edge claims.
+    /// How much of the area each band claims.
     private static let band: Double = 0.22
 
     @State private var targeted: DropEdge?
@@ -26,7 +29,8 @@ struct DropEdges: View {
                             : AnyShapeStyle(.clear))
                         .overlay {
                             if targeted == edge {
-                                Rectangle().strokeBorder(.tint, lineWidth: 2)
+                                RoundedRectangle(cornerRadius: Chrome.controlRadius)
+                                    .strokeBorder(.tint, lineWidth: 2)
                             }
                         }
                         .frame(width: size.width, height: size.height)
@@ -38,11 +42,11 @@ struct DropEdges: View {
                         }
                 }
             }
-            .animation(.easeOut(duration: 0.12), value: targeted)
+            .animation(.easeOut(duration: 0.15), value: targeted)
         }
     }
 
-    /// Where one edge's band sits in an area of this size.
+    /// Where one band sits in an area of this size.
     private func rect(_ edge: DropEdge, in size: CGSize) -> CGRect {
         let across = size.width * Self.band
         let down = size.height * Self.band
@@ -51,8 +55,6 @@ struct DropEdges: View {
             return CGRect(x: 0, y: 0, width: across, height: size.height)
         case .trailing:
             return CGRect(x: size.width - across, y: 0, width: across, height: size.height)
-        case .top:
-            return CGRect(x: across, y: 0, width: size.width - 2 * across, height: down)
         case .bottom:
             return CGRect(
                 x: across,
@@ -67,12 +69,8 @@ struct DropEdges: View {
         targeted = nil
         // Only a session the daemon is actually running: a stale identifier
         // would put an empty terminal on screen.
-        guard let session = items.first, let info = store.pane(session.pane) else { return false }
-        workbench.place(
-            pane: info.id,
-            on: edge,
-            title: info.title.isEmpty ? (info.agent?.label ?? "shell") : info.title
-        )
+        guard let session = items.first, store.pane(session.pane) != nil else { return false }
+        workbench.place(pane: session.pane, on: edge)
         return true
     }
 }

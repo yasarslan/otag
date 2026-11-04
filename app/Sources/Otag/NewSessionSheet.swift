@@ -13,7 +13,8 @@ struct NewSessionSheet: View {
     /// The project to offer: the one the user is looking at, or the newest
     /// session's. Nothing when otag is running nothing at all.
     let suggestedProject: String?
-    /// Called with the pane the daemon started, and what to call its tab.
+    /// Called with the pane the daemon started and the first prompt it was
+    /// given, which is what otag names the session after.
     let started: (PaneID, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -157,7 +158,7 @@ struct NewSessionSheet: View {
             prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
             worktree: worktree
         )
-        let title = agent?.label ?? folder.lastPathComponent
+        let firstPrompt = asked.prompt ?? ""
 
         Task {
             do {
@@ -169,8 +170,8 @@ struct NewSessionSheet: View {
 
                 for await response in connection.responses {
                     switch response {
-                    case let .sessionStarted(pane, workspace, _):
-                        started(pane, workspace.isEmpty ? title : workspace)
+                    case let .sessionStarted(pane, _, _):
+                        started(pane, firstPrompt)
                         dismiss()
                         return
                     case let .error(message):

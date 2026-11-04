@@ -25,18 +25,18 @@ struct HandoffTests {
         try await until("the store connects") { store.state == .connected }
 
         let pane: PaneID = 1
-        store.handOver(pane: pane, handoff: .agent(to: nil))
-        #expect(store.handingOver.contains(pane), "the button has something to show at once")
+        store.handOff(pane: pane, handoff: .agent(to: nil))
+        #expect(store.handingOff.contains(pane), "the button has something to show at once")
 
-        store.handOver(pane: pane, handoff: .agent(to: nil))
+        store.handOff(pane: pane, handoff: .agent(to: nil))
         #expect(
-            store.handingOver == [pane],
+            store.handingOff == [pane],
             "the second ask changes nothing, so no second session is opened"
         )
 
         // Another session is another task, and is not held up by this one.
-        store.handOver(pane: 2, handoff: .agent(to: nil))
-        #expect(store.handingOver == [pane, 2])
+        store.handOff(pane: 2, handoff: .agent(to: nil))
+        #expect(store.handingOff == [pane, 2])
     }
 
     @Test("a daemon that never answers does not leave the button dead")
@@ -50,19 +50,19 @@ struct HandoffTests {
         defer { store.disconnect() }
         try await until("the store connects") { store.state == .connected }
 
-        store.handOver(pane: 1, handoff: .agent(to: nil))
-        #expect(store.handingOver.contains(1), "the request went out")
+        store.handOff(pane: 1, handoff: .agent(to: nil))
+        #expect(store.handingOff.contains(1), "the request went out")
 
-        try await until("the app to stop waiting") { store.handingOver.isEmpty }
+        try await until("the app to stop waiting") { store.handingOff.isEmpty }
     }
 
     @Test("a handoff with nothing connected is not left pending")
-    func handingOverWithoutADaemon() {
+    func handingOffWithoutADaemon() {
         let store = SessionStore(
             socket: URL(fileURLWithPath: NSTemporaryDirectory() + "/otag-nowhere.sock")
         )
-        store.handOver(pane: 1, handoff: .agent(to: nil))
-        #expect(store.handingOver.isEmpty, "there is nobody to answer, so nothing is pending")
+        store.handOff(pane: 1, handoff: .agent(to: nil))
+        #expect(store.handingOff.isEmpty, "there is nobody to answer, so nothing is pending")
     }
 
     /// Wait for something to become true, or fail saying what did not.

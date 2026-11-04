@@ -25,6 +25,13 @@ struct TerminalPaneView: NSViewRepresentable {
     let onFocus: () -> Void
 
     @AppStorage(Preference.fontSize) private var fontSize = Preference.defaultFontSize
+    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.system.rawValue
+
+    /// The theme the user chose, which is a choice rather than a theme: it
+    /// can mean "whichever the system is".
+    private var choice: TerminalThemeChoice {
+        TerminalThemeChoice.stored(theme)
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -41,7 +48,9 @@ struct TerminalPaneView: NSViewRepresentable {
         view.terminalDelegate = context.coordinator
         // One profile for every pane, whatever is running in it: see
         // `TerminalProfile`. The agents differ enough already.
-        TerminalProfile.apply(to: view, size: fontSize)
+        let theme = TerminalProfile.theme(for: choice, in: view)
+        context.coordinator.drawn = theme
+        TerminalProfile.apply(to: view, theme: theme, size: fontSize)
         view.allowMouseReporting = true
 
         context.coordinator.attach(to: view)
@@ -53,13 +62,15 @@ struct TerminalPaneView: NSViewRepresentable {
         context.coordinator.onGone = onGone
         context.coordinator.onFocus = onFocus
         // Changing the font changes how many cells fit, and the view reports
-        // the new size, which the daemon then tells the program. The palette
-        // follows the appearance, so a switch to dark mode has to reach the
-        // panes that are already open.
-        let dark = TerminalProfile.isDark(view)
-        if view.font.pointSize != fontSize || context.coordinator.drawnDark != dark {
-            context.coordinator.drawnDark = dark
-            TerminalProfile.apply(to: view, size: fontSize)
+        // the new size, which the daemon then tells the program. The theme
+        // is watched the same way, which is what makes choosing one in
+        // Settings reach every pane that is already open — and what makes a
+        // switch between light and dark follow, for anyone who left the
+        // choice on the system.
+        let theme = TerminalProfile.theme(for: choice, in: view)
+        if view.font.pointSize != fontSize || context.coordinator.drawn != theme {
+            context.coordinator.drawn = theme
+            TerminalProfile.apply(to: view, theme: theme, size: fontSize)
         }
         if focused, view.window?.firstResponder !== view {
             view.window?.makeFirstResponder(view)
@@ -75,9 +86,9 @@ struct TerminalPaneView: NSViewRepresentable {
     final class Coordinator: NSObject, TerminalViewDelegate {
         private let stream: PaneStream
         private weak var view: TerminalView?
-        /// The appearance the view's palette was installed for, so that a
-        /// switch between light and dark reinstalls it and nothing else does.
-        var drawnDark: Bool?
+        /// The theme the view was last drawn in, so that a change reinstalls
+        /// the palette and nothing else does.
+        var drawn: TerminalTheme?
         var onEnded: (PaneExit?) -> Void
         var onGone: (String) -> Void
         var onFocus: () -> Void

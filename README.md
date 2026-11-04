@@ -104,9 +104,18 @@ showing exactly what it would change, and doing nothing until you press the
 button — and lists the keys.
 
 - **Sessions in the sidebar**, grouped by project, each with what it is doing
-  and how much of its context is in use.
-- **Tabs that split.** `⌘D` and `⇧⌘D` put another session beside this one;
-  dividers drag; a pane closes with its program.
+  and how much of its context is in use. Right-click one for everything
+  there is to do with it.
+- **Sessions side by side.** Drag one out of the sidebar onto the left,
+  right, top or bottom edge of the terminal area, use the split buttons in a
+  session's header, or press `⌘D` / `⇧⌘D`. Dividers drag, `⌘[` and `⌘]` move
+  the keyboard between the sessions sharing a tab, and the arrangement is
+  still there after a restart.
+- **What a session is, above its terminal**, with the handoff, continuing on
+  a lighter model, the two splits and closing — and the handoff says where
+  the work would go, in the accent colour once that agent is nearly out of
+  room. Every pane uses one terminal profile, so the agents look like the
+  same program.
 - **The inbox.** Everything an agent is waiting for sits at the top of the
   sidebar with **Allow** and **Deny** beside it (`⇧⌘Y` / `⇧⌘N`), and the same
   two buttons are on the notification and in the menu bar. otag types only
@@ -120,8 +129,9 @@ button — and lists the keys.
   question. `⇧⌘R` shows what it did, with the commits that came of it.
 - **Handoff** to the other agent, or the same conversation on a lighter
   model, in one button.
-- `⌘K` is every command by name, `⌘P` jumps to a session, and the menu bar
-  item shows the limits and who is waiting even with the window closed.
+- `⌘K` is every command by name, `⌘P` jumps to a session, `⇧⌘[` and `⇧⌘]`
+  step between tabs, and the menu bar item shows the limits and who is
+  waiting even with the window closed.
 
 The app is not signed with a developer identity yet, so macOS may need
 "Open Anyway" in System Settings → Privacy & Security the first time, and

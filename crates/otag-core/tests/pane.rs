@@ -449,3 +449,69 @@ async fn a_session_without_a_command_runs_the_shell() {
     let state = wait_for(&handle, |state| state.screen.text().contains("shell")).await;
     assert!(state.screen.text().contains("shell"));
 }
+
+#[tokio::test]
+async fn a_second_session_in_a_project_joins_the_one_already_open() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let project = directory.path().join("app");
+    std::fs::create_dir(&project).expect("the project directory");
+    let session = Session::new(PaneSpec::shell());
+
+    let first = session
+        .start_session(Some(&project), &[], "claude")
+        .await
+        .expect("the first session starts");
+
+    // The same project by another name: a path through a symbolic link.
+    // Before this, the second session made an entry called "app 2".
+    let link = directory.path().join("app-link");
+    std::os::unix::fs::symlink(&project, &link).expect("the link");
+    let second = session
+        .start_session(Some(&link), &[], "codex")
+        .await
+        .expect("the second session starts");
+
+    let view = session.view();
+    assert_eq!(
+        view.workspaces.len(),
+        1,
+        "two sessions in one project are one entry in the sidebar"
+    );
+    let workspace = view.workspaces.first().expect("the project");
+    assert_eq!(workspace.name, "app", "and it keeps the project's own name");
+    assert_eq!(workspace.tabs, 2, "one tab each");
+    assert_eq!(view.focus, Some(second), "the new session is the one shown");
+    assert_ne!(first, second);
+}
+
+#[tokio::test]
+async fn two_different_projects_sharing_a_name_stay_apart() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let one = directory.path().join("one").join("app");
+    let other = directory.path().join("other").join("app");
+    std::fs::create_dir_all(&one).expect("the first project");
+    std::fs::create_dir_all(&other).expect("the second project");
+    let session = Session::new(PaneSpec::shell());
+
+    session
+        .start_session(Some(&one), &[], "claude")
+        .await
+        .expect("the first session starts");
+    session
+        .start_session(Some(&other), &[], "claude")
+        .await
+        .expect("the second session starts");
+
+    let view = session.view();
+    assert_eq!(view.workspaces.len(), 2, "they are different projects");
+    let names: Vec<&str> = view
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["app", "app 2"],
+        "and the number is what tells two checkouts of one name apart"
+    );
+}

@@ -360,6 +360,73 @@ pub fn name_for(cwd: Option<&Path>) -> String {
         .unwrap_or_else(|| UNNAMED.to_owned())
 }
 
+/// The project a directory belongs to, for deciding which sessions are in
+/// the same one.
+///
+/// Two paths naming one project have to come out equal here, because
+/// otherwise the user gets two entries for it: `/project` and `/project/`,
+/// a path through a symbolic link and the real one, and a git worktree and
+/// the repository it was cut from. The last of those is the interesting one —
+/// a worktree is a directory of its own, but it is the same project, and a
+/// session working in one belongs beside its siblings.
+///
+/// A directory that cannot be looked at is its own project rather than an
+/// error: otag groups what it can see and never refuses to start a session
+/// over this.
+#[must_use]
+pub fn project_root(cwd: &Path) -> PathBuf {
+    // Resolves the symbolic links and the trailing separator in one go.
+    let real = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    main_repository_of(&real).unwrap_or(real)
+}
+
+/// Whether two directories are the same project.
+#[must_use]
+pub fn same_project(one: &Path, other: &Path) -> bool {
+    one == other || project_root(one) == project_root(other)
+}
+
+/// How a worktree's `.git` file points at the repository it belongs to.
+const GITDIR: &str = "gitdir:";
+
+/// The directory git keeps its worktrees' administrative files in.
+const WORKTREES: &str = "worktrees";
+
+/// The main repository of a git worktree, when `cwd` is inside one.
+///
+/// A worktree has a `.git` *file* rather than a directory, holding the path
+/// of its administrative directory below the main repository's — which is
+/// `<main>/.git/worktrees/<name>`. Reading that one line is all this needs:
+/// no `git` process, nothing that can block, and nothing written.
+fn main_repository_of(cwd: &Path) -> Option<PathBuf> {
+    for directory in cwd.ancestors() {
+        let marker = directory.join(".git");
+        // An ordinary checkout keeps a directory here, and is its own
+        // project. Finding one means there is no worktree to resolve.
+        if marker.is_dir() {
+            return None;
+        }
+        if !marker.is_file() {
+            continue;
+        }
+
+        let text = std::fs::read_to_string(&marker).ok()?;
+        let pointed = text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(GITDIR))?
+            .trim();
+        let administrative = Path::new(pointed);
+        // `<main>/.git/worktrees/<name>`: the repository is three levels up.
+        if administrative.parent()?.file_name()? != WORKTREES {
+            return None;
+        }
+        let git_dir = administrative.parent()?.parent()?;
+        let root = git_dir.parent()?;
+        return Some(std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()));
+    }
+    None
+}
+
 /// A name not already taken by one of `existing`, by adding a number.
 ///
 /// Two checkouts of the same project would otherwise be two entries called
@@ -518,5 +585,89 @@ mod tests {
         let taken = vec!["app".to_owned(), "app 2".to_owned()];
         assert_eq!(unique_name("app", &taken), "app 3");
         assert_eq!(unique_name("other", &taken), "other");
+    }
+
+    #[test]
+    fn one_project_spelled_several_ways_is_one_project() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let project = dir.path().join("app");
+        std::fs::create_dir(&project).expect("the project directory");
+
+        // A trailing separator, and the path the user typed with `.` in it.
+        assert!(same_project(&project, &project.join("")));
+        assert!(same_project(&project, &project.join(".")));
+
+        // And a path that goes through a symbolic link, which is what a
+        // project reached through two mount points looks like.
+        let link = dir.path().join("app-link");
+        std::os::unix::fs::symlink(&project, &link).expect("the link");
+        assert!(same_project(&project, &link));
+
+        let other = dir.path().join("another");
+        std::fs::create_dir(&other).expect("the other directory");
+        assert!(!same_project(&project, &other));
+    }
+
+    #[test]
+    fn a_git_worktree_belongs_to_the_repository_it_was_cut_from() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let repository = dir.path().join("app");
+        let git = repository.join(".git");
+        std::fs::create_dir_all(git.join("worktrees").join("feature")).expect("the git directory");
+
+        // Exactly what git writes in a worktree: a `.git` file naming its
+        // administrative directory below the main repository's.
+        let worktree = dir.path().join("app-feature");
+        std::fs::create_dir(&worktree).expect("the worktree directory");
+        std::fs::write(
+            worktree.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                git.join("worktrees").join("feature").display()
+            ),
+        )
+        .expect("the worktree marker");
+
+        assert_eq!(
+            project_root(&worktree),
+            std::fs::canonicalize(&repository).expect("the repository")
+        );
+        assert!(same_project(&worktree, &repository));
+        // A directory below the worktree belongs to the same project too.
+        let inside = worktree.join("crates");
+        std::fs::create_dir(&inside).expect("a directory in the worktree");
+        assert!(same_project(&inside, &repository));
+    }
+
+    #[test]
+    fn an_ordinary_checkout_is_its_own_project() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let repository = dir.path().join("app");
+        std::fs::create_dir_all(repository.join(".git")).expect("the git directory");
+
+        assert_eq!(
+            project_root(&repository),
+            std::fs::canonicalize(&repository).expect("the repository")
+        );
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_looked_at_is_its_own_project() {
+        let missing = Path::new("/no/such/directory");
+        assert_eq!(project_root(missing), missing);
+        assert!(same_project(missing, missing));
+    }
+
+    #[test]
+    fn a_git_file_that_says_nothing_otag_understands_is_not_a_worktree() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let project = dir.path().join("app");
+        std::fs::create_dir(&project).expect("the project directory");
+        std::fs::write(project.join(".git"), "from the future\n").expect("the marker");
+
+        assert_eq!(
+            project_root(&project),
+            std::fs::canonicalize(&project).expect("the project")
+        );
     }
 }

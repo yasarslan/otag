@@ -453,6 +453,30 @@ impl State {
             .map(|workspace| workspace.name().to_owned())
             .collect()
     }
+
+    /// The workspace already open on `cwd`'s project, if there is one.
+    ///
+    /// Compared by [`crate::workspace::same_project`], so a path spelled
+    /// another way, a path through a symbolic link and a git worktree of a
+    /// repository all find the entry the user already has.
+    fn workspace_for_project(&self, cwd: &Path) -> Option<WorkspaceId> {
+        let wanted = crate::workspace::project_root(cwd);
+        self.workspaces
+            .iter()
+            .find(|workspace| {
+                workspace
+                    .cwd()
+                    .is_some_and(|open| crate::workspace::project_root(open) == wanted)
+            })
+            .map(Workspace::id)
+    }
+
+    /// Where the workspace with this identifier is, if it is still here.
+    fn position_of(&self, workspace: WorkspaceId) -> Option<usize> {
+        self.workspaces
+            .iter()
+            .position(|candidate| candidate.id() == workspace)
+    }
 }
 
 impl Session {
@@ -630,6 +654,12 @@ impl Session {
     /// user's shell, which is the same as [`Self::new_workspace`]; a command
     /// starts an agent. Returns the pane, because the client that asked for
     /// it wants to attach to it.
+    ///
+    /// A session started in a project the user already has open joins that
+    /// project as a tab of its own, because that is what the user asked for:
+    /// another session in this project, not another project. Only
+    /// [`Self::new_workspace`] — someone asking for an entry of its own —
+    /// makes a second one for the same directory.
     pub async fn start_session(
         self: &Arc<Self>,
         cwd: Option<&Path>,
@@ -638,7 +668,14 @@ impl Session {
     ) -> Result<PaneId> {
         let pane = {
             let mut state = self.lock()?;
-            self.start_workspace_running(&mut state, cwd, command, title)?
+            // Without this, a second session in a folder whose name was
+            // already taken made an entry called "<project> 2" — which is
+            // what that numbering is for when two *different* checkouts
+            // share a name, and plainly wrong for the same one.
+            match cwd.and_then(|cwd| state.workspace_for_project(cwd)) {
+                Some(open) => self.add_tab_to(&mut state, open, cwd, command, title)?,
+                None => self.start_workspace_running(&mut state, cwd, command, title)?,
+            }
         };
         self.commit(true).await;
         Ok(pane)
@@ -1299,6 +1336,30 @@ impl Session {
         );
         state.workspaces.push(workspace);
         state.active = state.workspaces.len().saturating_sub(1);
+        Ok(pane)
+    }
+
+    /// Add a tab running `command` to a workspace that is already open, and
+    /// show it.
+    fn add_tab_to(
+        self: &Arc<Self>,
+        state: &mut State,
+        workspace: WorkspaceId,
+        cwd: Option<&Path>,
+        command: &[String],
+        title: &str,
+    ) -> Result<PaneId> {
+        let pane = self.start_pane_running(state, workspace, cwd, command, title)?;
+        let tab_id = state.next_tab;
+        state.next_tab = tab_id.next();
+
+        let Some(position) = state.position_of(workspace) else {
+            // It was there a moment ago; the pane is started and the caller
+            // still gets it, so nothing is left running unowned.
+            return Ok(pane);
+        };
+        state.workspaces[position].add_tab(Tab::new(tab_id, title, pane));
+        state.active = position;
         Ok(pane)
     }
 

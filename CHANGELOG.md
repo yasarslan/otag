@@ -238,6 +238,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen is heard even moments after it reported for itself, so nothing
   about this can hide one.
 
+- A new session in a project that is already open joins it instead of making
+  a second entry called "<project> 2". Sessions are matched by the project
+  the directory belongs to rather than by its name: a trailing separator, a
+  path that goes through a symbolic link, and a git worktree all find the
+  entry the user already has, and a worktree session is listed under the
+  repository it was cut from. Two different checkouts that happen to share a
+  folder name are still told apart by the number, which is what it is for.
+
 - A reading is no longer undone by a session that knows less. Readings arrive
   from every session on the machine, and an idle or resumed session re-runs
   its status line on a timer and reports the snapshot it was handed when it

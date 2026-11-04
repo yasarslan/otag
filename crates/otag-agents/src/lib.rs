@@ -248,6 +248,33 @@ pub struct Transcript {
     pub limits: Limits,
     /// How large the model's context is, when the file says.
     pub context_window: Option<u64>,
+    /// Whether the file says a turn is running, when it says anything.
+    pub turn: Option<TurnState>,
+}
+
+/// What an agent's own session file says about its last turn.
+///
+/// An agent without hooks reports nothing to otag, but it does write its own
+/// file, and that file says where a turn began and where it ended. That is a
+/// far better answer than the words on its screen, which lag behind it and
+/// change with every release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnState {
+    /// A turn has begun and has not ended.
+    Working,
+    /// The last turn otag can see has ended.
+    Finished,
+}
+
+impl TurnState {
+    /// The pane status this turn state means.
+    #[must_use]
+    pub const fn status(self) -> PaneStatus {
+        match self {
+            Self::Working => PaneStatus::Working,
+            Self::Finished => PaneStatus::Done,
+        }
+    }
 }
 
 /// Everything otag needs to know about one agent.

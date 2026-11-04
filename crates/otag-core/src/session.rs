@@ -985,9 +985,15 @@ impl Session {
         let changed = self.change(pane, |pane| {
             if from_hook {
                 pane.last_hook = Some(Instant::now());
-            } else if !pane.trusts_the_screen() {
+            } else if !pane.trusts_the_screen() && !status.wants_attention() {
                 // The agent is reporting for itself; its screen is not
                 // needed and may be a turn behind.
+                //
+                // Except when the screen is asking for the user: that is the
+                // screen as it is now, and an agent without hooks has no
+                // other way to say it. Leaving a question unreported because
+                // the agent happened to report a minute ago is the one
+                // mistake here that costs the user something.
                 return false;
             }
             let changed = pane.status != status;

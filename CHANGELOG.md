@@ -228,6 +228,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Codex session no longer reads as "working" for the rest of its life. Its
+  status came only from the words on its screen while it was busy, and a
+  screen matching none of them left the status as it was — so a session that
+  had answered and was waiting at its prompt was still listed as working.
+  otag now reads the turn events Codex writes into its own rollout file,
+  which is the reliable answer and needs no hooks, and also recognises the
+  screen of a session waiting for a prompt. A question an agent puts on its
+  screen is heard even moments after it reported for itself, so nothing
+  about this can hide one.
+
 - A reading is no longer undone by a session that knows less. Readings arrive
   from every session on the machine, and an idle or resumed session re-runs
   its status line on a timer and reports the snapshot it was handed when it

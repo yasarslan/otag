@@ -818,6 +818,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_question_on_the_screen_is_heard_even_just_after_the_agent_reported() {
+        let (daemon, pane) = with_one_pane().await;
+
+        daemon.hook("Stop", Some(pane), "{}").await;
+        assert!(
+            !daemon
+                .session
+                .agent_panes()
+                .first()
+                .expect("the pane")
+                .trusts_the_screen
+        );
+
+        // Everything else the screen could say is ignored while the agent is
+        // reporting for itself, but a question is not: an agent without
+        // hooks has no other way to say it, and a missed one strands the
+        // session.
+        daemon
+            .session
+            .set_status(pane, PaneStatus::Working, false)
+            .await;
+        assert_eq!(
+            daemon.session.agent_panes().first().map(|pane| pane.status),
+            Some(PaneStatus::Done)
+        );
+
+        daemon
+            .session
+            .set_status(pane, PaneStatus::NeedsApproval, false)
+            .await;
+        assert_eq!(
+            daemon.session.agent_panes().first().map(|pane| pane.status),
+            Some(PaneStatus::NeedsApproval)
+        );
+    }
+
+    #[tokio::test]
     async fn a_hook_that_carries_a_session_makes_the_pane_resume_it() {
         let (daemon, pane) = with_one_pane().await;
 

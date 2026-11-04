@@ -49,9 +49,19 @@ pub async fn keep_watching(session: Arc<Session>, shared: Arc<usage::Shared>) {
     }
 }
 
-/// When each pane's session file was last read, so that an unchanged file is
-/// not parsed again every second.
-type Read = HashMap<PaneId, SystemTime>;
+/// What otag remembers about a pane between two passes.
+#[derive(Debug, Default)]
+struct Seen {
+    /// When its session file was last read, so an unchanged file is not
+    /// parsed again every second.
+    at: Option<SystemTime>,
+    /// What that file last said about the agent's turn, so only a change of
+    /// state sets the pane's status.
+    turn: Option<otag_agents::TurnState>,
+}
+
+/// What otag remembers about every pane it is watching.
+type Read = HashMap<PaneId, Seen>;
 
 /// One pass: find the agents, what they are doing, the sessions they resume
 /// by, and what they have spent.
@@ -130,10 +140,12 @@ async fn read_session(
     let Ok(modified) = std::fs::metadata(&path).and_then(|data| data.modified()) else {
         return false;
     };
-    if read.get(&pane.id) == Some(&modified) {
+    let seen = read.entry(pane.id).or_default();
+    if seen.at == Some(modified) {
         return false;
     }
-    read.insert(pane.id, modified);
+    seen.at = Some(modified);
+    let was = seen.turn;
 
     let parsed = tokio::task::spawn_blocking(move || agent.adapter().read_transcript(&path)).await;
     let transcript = match parsed {
@@ -152,6 +164,21 @@ async fn read_session(
     // counted; both are kept, and the report decides which to show. The
     // session it came from is the one this pane is running.
     shared.record_limits(agent, &transcript.limits, pane.session_id.as_deref());
+
+    // The agent's own file is a better witness than its screen, so a turn
+    // that began or ended there is reported as the agent speaking for
+    // itself. Only a change counts: a turn writes many lines, and claiming
+    // the agent reported on every one of them would hide a question it put
+    // on its screen in the middle of that turn.
+    if let Some(turn) = transcript.turn
+        && was != Some(turn)
+    {
+        if let Some(seen) = read.get_mut(&pane.id) {
+            seen.turn = Some(turn);
+        }
+        session.set_status(pane.id, turn.status(), true).await;
+    }
+
     session.set_tokens(pane.id, transcript.tokens).await;
     // Without the size of the model's context, a count of context tokens
     // cannot be drawn as a share of anything.
@@ -536,6 +563,106 @@ mod tests {
             !read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await,
             "parsing a transcript every second would be the daemon's whole budget"
         );
+    }
+
+    #[tokio::test]
+    async fn a_rollout_that_says_the_turn_ended_puts_the_pane_out_of_working() {
+        let session = Session::new(otag_core::pane::PaneSpec::command(["sleep", "30"]));
+        session
+            .attach(otag_core::pane::PaneSize::new(24, 80), None)
+            .await
+            .expect("a pane");
+        let id = session
+            .visible_panes()
+            .first()
+            .copied()
+            .expect("the pane is there");
+        let shared = usage::Shared::new();
+        let mut read = Read::default();
+
+        // A rollout stopping mid-turn, then the same session with the turn
+        // ended: the file has to be able to move the pane both ways.
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let rollout = dir.path().join("rollout.jsonl");
+        let mid = std::fs::read_to_string(Path::new(FIXTURES).join("codex-rollout-working.jsonl"))
+            .expect("the fixture");
+        let whole = std::fs::read_to_string(Path::new(FIXTURES).join("codex-rollout.jsonl"))
+            .expect("the fixture");
+
+        std::fs::write(&rollout, &mid).expect("the rollout can be written");
+        let mut pane = pane_with_session(&rollout);
+        pane.id = id;
+        pane.status = otag_agents::PaneStatus::Idle;
+        assert!(read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+        assert_eq!(
+            session.agent_panes().first().map(|pane| pane.status),
+            Some(otag_agents::PaneStatus::Working)
+        );
+
+        // A new modification time, so the watcher reads the file again.
+        std::fs::write(&rollout, &whole).expect("the rollout can be written");
+        set_modified_later(&rollout);
+        pane.status = otag_agents::PaneStatus::Working;
+        assert!(read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+        assert_eq!(
+            session.agent_panes().first().map(|pane| pane.status),
+            Some(otag_agents::PaneStatus::Done),
+            "the agent wrote that its turn was over"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_has_not_changed_does_not_keep_claiming_the_agent_reported() {
+        let session = Session::new(otag_core::pane::PaneSpec::command(["sleep", "30"]));
+        session
+            .attach(otag_core::pane::PaneSize::new(24, 80), None)
+            .await
+            .expect("a pane");
+        let id = session
+            .visible_panes()
+            .first()
+            .copied()
+            .expect("the pane is there");
+        let shared = usage::Shared::new();
+        let mut read = Read::default();
+
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let rollout = dir.path().join("rollout.jsonl");
+        let mid = std::fs::read_to_string(Path::new(FIXTURES).join("codex-rollout-working.jsonl"))
+            .expect("the fixture");
+        std::fs::write(&rollout, &mid).expect("the rollout can be written");
+        let mut pane = pane_with_session(&rollout);
+        pane.id = id;
+        assert!(read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+
+        // The same turn, one more line in the file: nothing new is reported,
+        // and a question the agent puts on its screen in the middle of a
+        // long turn still reaches the pane. Codex has no hooks, so that
+        // screen is the only place a question can be noticed.
+        std::fs::write(&rollout, format!("{mid}{mid}")).expect("the rollout can be written");
+        set_modified_later(&rollout);
+        assert!(read_session(&session, &shared, &pane, AgentKind::Codex, &mut read).await);
+        session
+            .set_status(id, otag_agents::PaneStatus::NeedsApproval, false)
+            .await;
+        assert_eq!(
+            session.agent_panes().first().map(|pane| pane.status),
+            Some(otag_agents::PaneStatus::NeedsApproval),
+            "one long turn must not silence a question on the screen"
+        );
+    }
+
+    /// Give a file a modification time the watcher is sure to see as new.
+    ///
+    /// Writing twice in the same second can leave the time unchanged on a
+    /// filesystem with a coarse clock, and then nothing would be re-read.
+    fn set_modified_later(path: &Path) {
+        let later = SystemTime::now() + Duration::from_secs(10);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("the file can be opened");
+        file.set_modified(later).expect("the time can be set");
     }
 
     #[tokio::test]

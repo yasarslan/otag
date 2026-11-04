@@ -20,7 +20,7 @@ use serde::Deserialize;
 use crate::claude::is_program;
 use crate::{
     AgentAdapter, AgentKind, Error, LimitWindow, Limits, PaneStatus, Result, SessionRef, Tokens,
-    Transcript,
+    Transcript, TurnState,
 };
 
 /// The program otag starts, and looks for in a pane.
@@ -37,11 +37,18 @@ const DATE_DEPTH: usize = 3;
 
 /// Words the agent puts on screen while it is working.
 ///
-/// Unverified against a running Codex on the machine otag was built on: the
-/// agent was not installed. They are the words its interface is known to use,
-/// and a screen matching none of them gives no status at all rather than a
-/// wrong one.
-const WORKING: [&str; 2] = ["Esc to interrupt", "esc to interrupt"];
+/// Its footer offers the key that stops the turn, and only while there is a
+/// turn to stop. The bare hint is matched as well as the two spellings of the
+/// key, because which key is named there has changed between releases and the
+/// label has not.
+const WORKING: [&str; 3] = ["Esc to interrupt", "esc to interrupt", "to interrupt"];
+
+/// Words the agent puts on screen when it is waiting for a prompt.
+///
+/// Its composer shows the placeholder while it is empty, and its footer the
+/// shortcuts hint whenever there is no turn to interrupt. Checked after
+/// [`WORKING`], so a screen showing both is read as working.
+const IDLE: [&str; 2] = ["Ask Codex to do anything", "for shortcuts"];
 
 /// Words the agent puts on screen when it wants permission.
 const ASKING: [&str; 3] = [
@@ -94,6 +101,12 @@ impl AgentAdapter for Codex {
         }
         if WORKING.iter().any(|marker| screen.contains(marker)) {
             return Some(PaneStatus::Working);
+        }
+        // Without this the status of a pane that was working could only ever
+        // be corrected by the next turn: a screen saying nothing left the
+        // pane reported as working long after the agent had stopped.
+        if IDLE.iter().any(|marker| screen.contains(marker)) {
+            return Some(PaneStatus::Idle);
         }
         None
     }
@@ -456,6 +469,16 @@ fn read_item(transcript: &mut Transcript, commands: &mut BTreeSet<String>, paylo
 
 /// Read one of the events the agent reported.
 fn read_event(transcript: &mut Transcript, payload: &Payload) {
+    // The agent writes one of these at each end of every turn, so the last
+    // of them says whether it is still working. This is the only reliable
+    // answer: it needs no hooks and nothing read off a screen.
+    match payload.r#type.as_deref() {
+        Some("task_started") => transcript.turn = Some(TurnState::Working),
+        Some("task_complete") | Some("turn_aborted") => {
+            transcript.turn = Some(TurnState::Finished);
+        }
+        _ => {}
+    }
     if payload.r#type.as_deref() != Some("token_count") {
         return;
     }
@@ -621,6 +644,61 @@ mod tests {
             Some(PaneStatus::Error)
         );
         assert_eq!(codex.detect_status("$ ls\nREADME.md"), None);
+    }
+
+    #[test]
+    fn a_screen_waiting_for_a_prompt_is_idle_not_still_working() {
+        let codex = Codex;
+        // The whole point: a pane reported as working stayed that way
+        // forever, because the screen it showed afterwards matched nothing.
+        assert_eq!(
+            codex.detect_status("\u{2022} Worked for 14s\n\u{25b8} Ask Codex to do anything"),
+            Some(PaneStatus::Idle)
+        );
+        assert_eq!(
+            codex.detect_status("gpt-5.6-sol  100% context left   ? for shortcuts"),
+            Some(PaneStatus::Idle)
+        );
+        // A screen showing both is working: the turn is the newer fact.
+        assert_eq!(
+            codex.detect_status("Ask Codex to do anything\nWorking (4s \u{2022} esc to interrupt)"),
+            Some(PaneStatus::Working)
+        );
+        // And a question still outranks both.
+        assert_eq!(
+            codex.detect_status("Ask Codex to do anything\nAllow command?"),
+            Some(PaneStatus::NeedsApproval)
+        );
+    }
+
+    #[test]
+    fn a_rollout_says_whether_a_turn_is_still_running() {
+        // The reliable answer, and the only one that needs no hooks and no
+        // guessing from a screen: the agent writes both ends of every turn.
+        assert_eq!(
+            parse_rollout(&fixture("codex-rollout.jsonl"), None).turn,
+            Some(TurnState::Finished)
+        );
+        assert_eq!(
+            parse_rollout(&fixture("codex-rollout-working.jsonl"), None).turn,
+            Some(TurnState::Working)
+        );
+    }
+
+    #[test]
+    fn an_interrupted_turn_has_ended_too() {
+        let text = concat!(
+            r#"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#,
+        );
+        assert_eq!(parse_rollout(text, None).turn, Some(TurnState::Finished));
+    }
+
+    #[test]
+    fn a_rollout_with_no_turn_events_says_nothing_about_the_turn() {
+        let text = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}"#;
+        assert_eq!(parse_rollout(text, None).turn, None);
     }
 
     #[test]

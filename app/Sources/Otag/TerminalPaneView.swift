@@ -39,12 +39,9 @@ struct TerminalPaneView: NSViewRepresentable {
     func makeNSView(context: Context) -> TerminalView {
         let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         view.terminalDelegate = context.coordinator
-        view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        // The terminal takes its colours from the user's appearance, like
-        // every other calm part of otag: nothing is painted that the system
-        // has not chosen.
-        view.nativeBackgroundColor = .textBackgroundColor
-        view.nativeForegroundColor = .textColor
+        // One profile for every pane, whatever is running in it: see
+        // `TerminalProfile`. The agents differ enough already.
+        TerminalProfile.apply(to: view, size: fontSize)
         view.allowMouseReporting = true
 
         context.coordinator.attach(to: view)
@@ -55,10 +52,14 @@ struct TerminalPaneView: NSViewRepresentable {
         context.coordinator.onEnded = onEnded
         context.coordinator.onGone = onGone
         context.coordinator.onFocus = onFocus
-        if view.font.pointSize != fontSize {
-            // Changing the font changes how many cells fit, and the view
-            // reports the new size, which the daemon then tells the program.
-            view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        // Changing the font changes how many cells fit, and the view reports
+        // the new size, which the daemon then tells the program. The palette
+        // follows the appearance, so a switch to dark mode has to reach the
+        // panes that are already open.
+        let dark = TerminalProfile.isDark(view)
+        if view.font.pointSize != fontSize || context.coordinator.drawnDark != dark {
+            context.coordinator.drawnDark = dark
+            TerminalProfile.apply(to: view, size: fontSize)
         }
         if focused, view.window?.firstResponder !== view {
             view.window?.makeFirstResponder(view)
@@ -74,6 +75,9 @@ struct TerminalPaneView: NSViewRepresentable {
     final class Coordinator: NSObject, TerminalViewDelegate {
         private let stream: PaneStream
         private weak var view: TerminalView?
+        /// The appearance the view's palette was installed for, so that a
+        /// switch between light and dark reinstalls it and nothing else does.
+        var drawnDark: Bool?
         var onEnded: (PaneExit?) -> Void
         var onGone: (String) -> Void
         var onFocus: () -> Void

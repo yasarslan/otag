@@ -201,6 +201,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- One terminal look for every session. A pane is a pane: the same font at the
+  same size, the same line height, the same background and the same sixteen
+  ANSI colours, whether Claude Code, Codex or a shell is drawing into it.
+  Each pane used to take the emulator's built-in palette, which does not
+  follow the system appearance, while its background did — so two agents
+  that lean on those colours to very different degrees did not look like the
+  same program. There is now one palette per appearance, chosen for contrast
+  against the pane's own background and reinstalled when the appearance
+  changes, and a pane answers an agent asking what its colours are with
+  exactly those. otag does not write to any agent's configuration.
+
 - The limits are shown as one line per window, everywhere — sidebar widget,
   inspector, menu bar, terminal client and `otag usage`: who, which window,
   what the agent last reported, and when that window resets as a time of day

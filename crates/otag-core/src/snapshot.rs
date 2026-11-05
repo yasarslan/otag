@@ -133,6 +133,9 @@ pub struct PaneSnapshot {
     /// The directory it was running in.
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    /// The nickname the user gave it, so a restart does not lose it.
+    #[serde(default)]
+    pub nickname: String,
     /// The command to run to bring it back, empty for the user's shell.
     ///
     /// An agent pane is brought back with the command that resumes its
@@ -171,12 +174,14 @@ mod tests {
                 PaneSnapshot {
                     id: PaneId::FIRST,
                     title: "shell".to_owned(),
+                    nickname: String::new(),
                     cwd: Some(PathBuf::from("/projects/app")),
                     command: Vec::new(),
                 },
                 PaneSnapshot {
                     id: PaneId::FIRST.next(),
                     title: "claude".to_owned(),
+                    nickname: "backend".to_owned(),
                     cwd: Some(PathBuf::from("/projects/app")),
                     command: vec!["claude".to_owned(), "--resume".to_owned()],
                 },

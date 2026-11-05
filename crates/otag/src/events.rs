@@ -84,6 +84,7 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
             agent: pane.agent,
             status: pane.status,
             session: pane.session,
+            nickname: pane.nickname,
             first_prompt: pane.first_prompt,
             tokens: pane.tokens,
             context_window: pane.context_window,

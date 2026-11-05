@@ -235,6 +235,8 @@ pub struct PaneSummary {
     pub status: PaneStatus,
     /// The agent session otag would resume.
     pub session: Option<String>,
+    /// The word the user gave it for the job it is doing.
+    pub nickname: String,
     /// The first thing the user asked it, when otag knows.
     pub first_prompt: Option<String>,
     /// What the agent in it has spent.
@@ -280,6 +282,8 @@ struct Starting<'a> {
     /// What to run, empty for the user's shell.
     command: &'a [String],
     title: &'a str,
+    /// The nickname it is being restored with, empty for a new pane.
+    nickname: &'a str,
     /// What the pane showed before, when it is being restored.
     restored: &'a [String],
 }
@@ -308,6 +312,12 @@ struct Pane {
     session_id: Option<String>,
     /// The file that session is kept in, for reading what it has spent.
     session_path: Option<PathBuf>,
+    /// The word the user gave it for the job it is doing.
+    ///
+    /// Kept here rather than in a client's preferences so that it survives a
+    /// restart and every client shows the same one. It goes into the
+    /// snapshot with everything else about the pane.
+    nickname: String,
     /// The first thing the user asked it, when otag knows.
     ///
     /// From the prompt a client started it with, or from the agent's own
@@ -952,6 +962,7 @@ impl Session {
                     agent: pane.agent,
                     status: pane.status,
                     session: pane.session_id.clone(),
+                    nickname: pane.nickname.clone(),
                     first_prompt: pane.first_prompt.clone(),
                     tokens: pane.tokens,
                     context_window: pane.context_window,
@@ -1131,6 +1142,26 @@ impl Session {
             .unwrap_or_default()
     }
 
+    /// How long a nickname may be.
+    ///
+    /// A nickname is a word, not a sentence: it has to fit under a name in a
+    /// sidebar row without pushing everything else about.
+    pub const NICKNAME_LIMIT: usize = 40;
+
+    /// Give a session a nickname, or clear it with an empty one.
+    pub async fn set_nickname(self: &Arc<Self>, pane: PaneId, nickname: &str) {
+        let wanted: String = nickname.trim().chars().take(Self::NICKNAME_LIMIT).collect();
+
+        let changed = self.change(pane, |pane| {
+            if pane.nickname == wanted {
+                return false;
+            }
+            pane.nickname = wanted.clone();
+            true
+        });
+        self.commit(changed).await;
+    }
+
     /// How long a first prompt may be when it is carried as a name.
     ///
     /// A name is one short line, and a prompt can be a pasted file. Clipping
@@ -1262,6 +1293,7 @@ impl Session {
                 .map(|pane| PaneSnapshot {
                     id: pane.handle.id(),
                     title: pane.title.clone(),
+                    nickname: pane.nickname.clone(),
                     cwd: pane.cwd.clone(),
                     command: pane.command.clone(),
                 })
@@ -1457,6 +1489,9 @@ impl Session {
                 cwd,
                 command,
                 title,
+                // A pane nobody has nicknamed yet. Only a restore brings
+                // one in, and the user gives the rest.
+                nickname: "",
                 restored: &[],
             },
         )?;
@@ -1511,6 +1546,7 @@ impl Session {
             status: PaneStatus::default(),
             session_id: None,
             session_path: None,
+            nickname: starting.nickname.to_owned(),
             first_prompt: None,
             tokens: Tokens::default(),
             last_hook: None,
@@ -1768,6 +1804,7 @@ fn restore_into(
                     .map(|record| record.title.as_str())
                     .filter(|title| !title.is_empty())
                     .unwrap_or(SHELL_TITLE);
+                let nickname = record.map_or("", |record| record.nickname.as_str());
 
                 match session.start_pane_as(
                     state,
@@ -1777,6 +1814,7 @@ fn restore_into(
                         cwd: cwd.as_deref(),
                         command: &command,
                         title,
+                        nickname,
                         restored: &history(pane),
                     },
                 ) {

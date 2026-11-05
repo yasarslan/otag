@@ -247,6 +247,7 @@ async fn a_session_with_nothing_left_to_restore_starts_fresh() {
         panes: vec![PaneSnapshot {
             id: PaneId::FIRST,
             title: "shell".to_owned(),
+            nickname: String::new(),
             cwd: None,
             command: vec!["/nonexistent/program".to_owned()],
         }],
@@ -360,6 +361,7 @@ async fn what_a_pane_showed_is_kept_as_text_and_nothing_else() {
         panes: vec![PaneSnapshot {
             id: PaneId::FIRST,
             title: "shell".to_owned(),
+            nickname: String::new(),
             cwd: None,
             command: Vec::new(),
         }],

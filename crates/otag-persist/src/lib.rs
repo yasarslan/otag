@@ -425,12 +425,14 @@ mod tests {
                 PaneSnapshot {
                     id: pane(1),
                     title: "shell".to_owned(),
+                    nickname: String::new(),
                     cwd: Some(PathBuf::from("/projects/app")),
                     command: Vec::new(),
                 },
                 PaneSnapshot {
                     id: pane(2),
                     title: "claude".to_owned(),
+                    nickname: String::new(),
                     cwd: Some(PathBuf::from("/projects/app")),
                     command: vec!["claude".to_owned(), "--resume".to_owned()],
                 },

@@ -191,6 +191,10 @@ impl Handler for Daemon {
             Request::ListPanes => Some(Response::Panes {
                 panes: self.panes(),
             }),
+            Request::SetNickname { pane, nickname } => {
+                self.session.set_nickname(pane, &nickname).await;
+                Some(Response::Ok)
+            }
             Request::TerminalAppearance { dark } => {
                 self.session.set_terminal_appearance(dark);
                 tracing::debug!(dark, "a client said which way round its terminal is");

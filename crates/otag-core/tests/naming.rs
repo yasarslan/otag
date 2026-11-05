@@ -213,3 +213,89 @@ async fn what_a_client_says_reaches_the_panes_it_starts_afterwards() {
         "the pane that was already running is left exactly as it was"
     );
 }
+
+#[tokio::test]
+async fn a_session_can_be_given_a_nickname() {
+    let session = Session::new(shell("sleep 10"));
+    session.attach(SIZE, None).await.expect("a pane starts");
+    let pane = only_pane(&session);
+
+    assert_eq!(session.summaries()[0].nickname, "");
+
+    session.set_nickname(pane, "backend").await;
+    assert_eq!(session.summaries()[0].nickname, "backend");
+
+    session.set_nickname(pane, "  tests  ").await;
+    assert_eq!(
+        session.summaries()[0].nickname,
+        "tests",
+        "a nickname is trimmed, because a leading space is not a name"
+    );
+
+    session.set_nickname(pane, "").await;
+    assert_eq!(
+        session.summaries()[0].nickname,
+        "",
+        "an empty nickname clears it"
+    );
+}
+
+#[tokio::test]
+async fn a_nickname_is_a_word_not_an_essay() {
+    let session = Session::new(shell("sleep 10"));
+    session.attach(SIZE, None).await.expect("a pane starts");
+    let pane = only_pane(&session);
+
+    session
+        .set_nickname(pane, &"n".repeat(Session::NICKNAME_LIMIT * 3))
+        .await;
+    assert_eq!(
+        session.summaries()[0].nickname.chars().count(),
+        Session::NICKNAME_LIMIT,
+        "it has to fit under a name in a sidebar row"
+    );
+}
+
+#[tokio::test]
+async fn a_nickname_for_a_pane_that_is_not_there_changes_nothing() {
+    let session = Session::new(shell("sleep 10"));
+    session.attach(SIZE, None).await.expect("a pane starts");
+
+    session
+        .set_nickname(PaneId::FIRST.next().next(), "nowhere")
+        .await;
+    assert_eq!(session.summaries()[0].nickname, "");
+}
+
+#[tokio::test]
+async fn a_nickname_survives_a_restart() {
+    // The reason it lives in the daemon rather than in a client's
+    // preferences: a restart must not lose it, and every client has to see
+    // the same one.
+    let before = Session::new(shell("sleep 10"));
+    before.attach(SIZE, None).await.expect("a pane starts");
+    let pane = only_pane(&before);
+    before.set_nickname(pane, "backend").await;
+
+    let snapshot = before.snapshot();
+    assert_eq!(
+        snapshot.pane(pane).map(|pane| pane.nickname.as_str()),
+        Some("backend"),
+        "the snapshot carries it"
+    );
+
+    let after = Session::new(shell("sleep 10"));
+    after
+        .restore(&snapshot, &|_| Vec::new())
+        .await
+        .expect("the session is restored");
+
+    assert_eq!(
+        after
+            .summaries()
+            .into_iter()
+            .find(|summary| summary.id == pane)
+            .map(|summary| summary.nickname),
+        Some("backend".to_owned())
+    );
+}

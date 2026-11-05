@@ -166,6 +166,14 @@ pub enum Request {
         #[serde(default)]
         size: Option<PaneSize>,
     },
+    /// Give one session a nickname, or clear it with an empty one. Answered
+    /// with [`Response::Ok`].
+    SetNickname {
+        /// The session to name.
+        pane: PaneId,
+        /// What to call it. Empty clears it.
+        nickname: String,
+    },
     /// Say whether the client is drawing its panes on dark or light paper,
     /// so that a program started afterwards is told. Answered with
     /// [`Response::Ok`].
@@ -726,6 +734,14 @@ pub struct PaneInfo {
     /// The agent session otag would resume.
     #[serde(default)]
     pub session: Option<String>,
+    /// A word the user gave this session for the job it is doing.
+    ///
+    /// "backend", "tests". A name says what a session was asked; a nickname
+    /// says what role it is playing, which is the other thing a person wants
+    /// when several sessions are running at once. The daemon keeps it so
+    /// that it survives a restart and every client sees the same one.
+    #[serde(default)]
+    pub nickname: String,
     /// The first thing the user asked this session, when otag knows it.
     ///
     /// What a client calls the session. Every session in one folder is
@@ -1196,6 +1212,7 @@ mod tests {
                     agent: None,
                     status: PaneStatus::Idle,
                     session: None,
+                    nickname: String::new(),
                     first_prompt: None,
                     tokens: Default::default(),
                     context_window: None,
@@ -1213,6 +1230,7 @@ mod tests {
                     agent: Some(AgentKind::Claude),
                     status: PaneStatus::Working,
                     session: Some("a-session".to_owned()),
+                    nickname: "backend".to_owned(),
                     first_prompt: Some("add a parser test".to_owned()),
                     tokens: Default::default(),
                     context_window: Some(200_000),

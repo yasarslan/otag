@@ -51,18 +51,26 @@ struct SessionHeaderBar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if !actions.pane.workspace.isEmpty {
-                Text(actions.pane.workspace)
+            // The project, unless it is already what the session is
+            // called: a session named after its folder used to say that
+            // folder's name twice over, with no separator between any of
+            // the three things the header says.
+            if let project {
+                Separator()
+                Text(project)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
+            Separator()
             Text(actions.pane.status.precise)
                 .font(.system(size: 12))
                 .foregroundStyle(actions.pane.status.badge.wantsAttention
                     ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 .lineLimit(1)
+                .layoutPriority(1)
 
             if actions.isOnNightShift {
                 Image(systemName: "moon.stars")
@@ -100,6 +108,30 @@ struct SessionHeaderBar: View {
         .frame(height: Chrome.headerHeight)
         .chromeBackground()
         .overlay(alignment: .bottom) { Divider() }
+        .help(actions.pane.agent.name)
+    }
+
+    /// The project, when it is worth saying.
+    ///
+    /// Nothing when the session is called the same thing, compared without
+    /// case: the header would otherwise repeat itself, which reads as a bug
+    /// whatever the reason for it.
+    private var project: String? {
+        let workspace = actions.pane.workspace
+        guard !workspace.isEmpty,
+              workspace.caseInsensitiveCompare(actions.name) != .orderedSame
+        else { return nil }
+        return workspace
+    }
+}
+
+/// The dot between two pieces of a header.
+private struct Separator: View {
+    var body: some View {
+        Text(verbatim: "·")
+            .font(.system(size: 12))
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
     }
 }
 

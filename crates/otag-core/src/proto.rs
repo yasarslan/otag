@@ -258,6 +258,19 @@ pub enum Request {
         #[serde(default)]
         plan: Option<NightShiftPlan>,
     },
+    /// Watch one session's limits and do this when they run out. Answered
+    /// with [`Response::Ok`].
+    ///
+    /// No plan at all stops guarding that session. The guard lives in the
+    /// daemon, so it keeps working with every client closed — which is the
+    /// whole point of it.
+    Guard {
+        /// The session to watch.
+        pane: PaneId,
+        /// What to do, or nothing to stop watching.
+        #[serde(default)]
+        plan: Option<GuardPlan>,
+    },
     /// Ask what otag did while nobody was watching. Answered with
     /// [`Response::MorningReport`].
     MorningReport,
@@ -468,6 +481,59 @@ pub struct NightShiftPlan {
     /// Prompts to work through, in order.
     #[serde(default)]
     pub queue: Vec<String>,
+}
+
+/// What otag should do when a guarded session reaches its threshold.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardAction {
+    /// Stop, and leave it to the user to carry on.
+    #[default]
+    Wait,
+    /// Stop, and type the prompt once the window has reset.
+    Resume,
+    /// Hand the work to the other agent, falling back to `Resume` when that
+    /// agent has no room either.
+    Switch,
+}
+
+/// What a client asks the limit guard to do for one session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardPlan {
+    /// Percentage of a window at which to act, or otag's default.
+    #[serde(default)]
+    pub threshold: Option<u16>,
+    /// What to do when it is reached.
+    #[serde(default)]
+    pub when_reached: GuardAction,
+    /// What to type when the window has reset, or otag's default.
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+/// What the limit guard is doing for one session, as a client sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardView {
+    /// The threshold in use.
+    pub threshold: u16,
+    /// What it will do when that is reached.
+    #[serde(default)]
+    pub when_reached: GuardAction,
+    /// What it would type, for the client to show and edit.
+    #[serde(default)]
+    pub prompt: String,
+    /// How much of the worse of this agent's windows is used.
+    #[serde(default)]
+    pub used: u16,
+    /// Whether otag has stopped sending to this session.
+    #[serde(default)]
+    pub paused: bool,
+    /// When the window it is waiting on resets, in seconds since the epoch.
+    #[serde(default)]
+    pub resets_at: Option<i64>,
+    /// Whether the work has already been handed to the other agent.
+    #[serde(default)]
+    pub handed_off: bool,
 }
 
 /// What the night shift is doing for one session, as a client sees it.
@@ -762,6 +828,9 @@ pub struct PaneInfo {
     /// What the night shift is doing for it, when it has been asked to.
     #[serde(default)]
     pub night_shift: Option<NightShiftView>,
+    /// What the limit guard is doing for it, when it is guarded.
+    #[serde(default)]
+    pub guard: Option<GuardView>,
     /// How its program ended, if it has.
     #[serde(default)]
     pub exit: Option<PaneExit>,
@@ -1217,6 +1286,7 @@ mod tests {
                     tokens: Default::default(),
                     context_window: None,
                     night_shift: None,
+                    guard: None,
                     exit: None,
                 }],
             },
@@ -1240,6 +1310,15 @@ mod tests {
                         sent: 1,
                         queued: 3,
                         resume_prompt: "carry on".to_owned(),
+                    }),
+                    guard: Some(GuardView {
+                        threshold: 90,
+                        when_reached: GuardAction::Switch,
+                        prompt: "carry on".to_owned(),
+                        used: 62,
+                        paused: false,
+                        resets_at: Some(1_767_000_000),
+                        handed_off: false,
                     }),
                     exit: Some(PaneExit {
                         code: Some(0),

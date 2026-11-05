@@ -6,6 +6,7 @@
 //! on its own.
 #![forbid(unsafe_code)]
 
+pub mod guard;
 pub mod handoff;
 pub mod inbox;
 pub mod nightshift;

@@ -103,6 +103,7 @@ impl Handler for TestDaemon {
                         tokens: pane.tokens,
                         context_window: pane.context_window,
                         night_shift: None,
+                        guard: None,
                         exit: pane.exit,
                     })
                     .collect(),

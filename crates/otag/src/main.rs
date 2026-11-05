@@ -8,6 +8,7 @@ mod client;
 mod daemon;
 mod events;
 mod git;
+mod guard;
 mod handoff;
 mod hook;
 mod inbox;

@@ -338,7 +338,11 @@ async fn carry_out(session: &Arc<Session>, shifts: &Arc<Shifts>, bus: &Bus, acti
 /// The text is wrapped in paste markers when the program has asked for them,
 /// which is what tells an agent's interface that a block of text is one
 /// paste rather than a burst of keys.
-async fn send_prompt(session: &Arc<Session>, pane: PaneId, prompt: &str) -> otag_core::Result<()> {
+pub(crate) async fn send_prompt(
+    session: &Arc<Session>,
+    pane: PaneId,
+    prompt: &str,
+) -> otag_core::Result<()> {
     let handle = session
         .pane(pane)
         .ok_or(otag_core::Error::PaneGone { id: Some(pane) })?;

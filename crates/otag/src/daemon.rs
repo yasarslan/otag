@@ -15,7 +15,7 @@ use otag_core::server::{Handler, Outbox, Server};
 use otag_core::session::Session;
 use otag_features::inbox::{AskId, Inbox};
 
-use crate::{agents, events, handoff, inbox, nightshift, notify, persist, usage};
+use crate::{agents, events, guard, handoff, inbox, nightshift, notify, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
 pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
@@ -106,16 +106,30 @@ async fn serve(socket: &Path) -> Result<()> {
         bus.clone(),
     ));
 
+    // The limit guard is the same shape: nothing happens until a client
+    // asks for a session to be watched, and it keeps working with every
+    // client closed, which is what it is for.
+    let handoffs = Arc::new(std::sync::Mutex::new(handoff::Recent::new()));
+    let guards = guard::Guards::new();
+    let guarding = tokio::spawn(guard::keep_watching(
+        Arc::clone(&session),
+        Arc::clone(&guards),
+        bus.clone(),
+        Arc::clone(&handoffs),
+    ));
+
     let daemon = Daemon {
         session: Arc::clone(&session),
         shifts: Arc::clone(&shifts),
+        guards: Arc::clone(&guards),
         usage: Arc::clone(&shared_usage),
         events: bus,
         attachments: raw::Attachments::new(),
         inbox,
-        handoffs: Arc::new(std::sync::Mutex::new(handoff::Recent::new())),
+        handoffs,
     };
     let result = server.run_until(daemon, terminate_signal()).await;
+    guarding.abort();
     watching.abort();
     notifying.abort();
     collecting.abort();
@@ -170,6 +184,8 @@ struct Daemon {
     inbox: Arc<std::sync::Mutex<Inbox>>,
     /// What otag is working through for the sessions that asked.
     shifts: Arc<nightshift::Shifts>,
+    /// The sessions whose limits otag is watching.
+    guards: Arc<guard::Guards>,
     /// The panes a handoff has just been made from, so one asked for twice
     /// does not open two sessions.
     handoffs: Arc<std::sync::Mutex<handoff::Recent>>,
@@ -311,6 +327,21 @@ impl Handler for Daemon {
                     Some(Response::Ok)
                 }
             }
+            Request::Guard { pane, plan } => {
+                if self.session.pane(pane).is_none() {
+                    Some(Response::error(format!("otag has no pane {pane}")))
+                } else {
+                    let stopping = plan.is_none();
+                    self.guards.set(pane, plan);
+                    tracing::info!(%pane, stopping, "a limit guard changed");
+                    // The pane list carries the plan, so every client sees
+                    // it without asking.
+                    self.events.publish(Event::Panes {
+                        panes: self.panes(),
+                    });
+                    Some(Response::Ok)
+                }
+            }
             Request::MorningReport => Some(Response::MorningReport {
                 sessions: nightshift::report(&self.session, &self.shifts).await,
             }),
@@ -347,11 +378,21 @@ struct StartSession {
 }
 
 impl Daemon {
-    /// Every pane, with what the night shift is doing for it.
+    /// Every pane, with what the night shift and the guard are doing for it.
     fn panes(&self) -> Vec<otag_core::proto::PaneInfo> {
         let mut panes = events::panes_of(&self.session);
+        let usage = self.usage.report();
         for pane in &mut panes {
             pane.night_shift = self.shifts.view(pane.id);
+            // The guard's view carries the usage it is deciding on, so a
+            // client shows the same number the guard acted on rather than
+            // working one out of its own.
+            pane.guard = pane.agent.and_then(|agent| {
+                self.guards.view(
+                    pane.id,
+                    otag_features::nightshift::worst_used(&usage, agent),
+                )
+            });
         }
         panes
     }
@@ -757,6 +798,7 @@ mod tests {
                 attachments: raw::Attachments::new(),
                 inbox: Arc::new(std::sync::Mutex::new(Inbox::new())),
                 shifts: nightshift::Shifts::new(),
+                guards: guard::Guards::new(),
                 handoffs: Arc::new(std::sync::Mutex::new(handoff::Recent::new())),
             },
             pane,

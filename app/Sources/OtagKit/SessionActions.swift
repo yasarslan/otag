@@ -13,14 +13,18 @@ public enum SessionBadge: String, Sendable, CaseIterable {
     case done
     case idle
 
-    /// What the pill says.
+    /// The catalogue key for what the pill says.
+    ///
+    /// A key rather than a word: the pill is read by a person, so the word
+    /// belongs in the `.strings` files with every other one.
+    public var key: String {
+        "status.\(rawValue)"
+    }
+
+    /// What the pill says, in the language otag is speaking.
+    @MainActor
     public var label: String {
-        switch self {
-        case .working: return "Working"
-        case .needsYou: return "Needs you"
-        case .done: return "Done"
-        case .idle: return "Idle"
-        }
+        Strings.t(key)
     }
 
     /// Whether this is the one thing in the window actually waiting for the
@@ -44,16 +48,22 @@ public extension PaneStatus {
     /// What the pill says for this status.
     var badge: SessionBadge { SessionBadge.of(self) }
 
-    /// The exact word, for a tooltip and for the header bar.
+    /// The catalogue key for the exact word.
     ///
     /// "needs you" and "going in circles" and "error" all wear the same
     /// pill; this is where they are told apart.
-    var precise: String {
+    var preciseKey: String {
         switch self {
-        case .looping: return "going in circles"
-        case .error: return "error"
-        default: return label
+        case .looping: return "status.precise.looping"
+        case .error: return "status.precise.error"
+        default: return "status.precise.\(badge.rawValue)"
         }
+    }
+
+    /// The exact word, in the language otag is speaking.
+    @MainActor
+    var localizedPrecise: String {
+        Strings.t(preciseKey)
     }
 
     /// Whether the pill understates this status, so the window should say
@@ -95,6 +105,38 @@ public struct SessionActions {
     /// What this session is called.
     public var name: String {
         names.name(of: pane)
+    }
+
+    /// The word the user gave it for the job it is doing.
+    public var nickname: String {
+        pane.nickname
+    }
+
+    /// How a popup lists this session: the nickname, the agent and the
+    /// project, with whatever is missing left out rather than left blank.
+    public var oneLine: String {
+        [nickname, pane.agent.name, pane.workspace]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    /// Whether the limit guard is watching this session.
+    public var isGuarded: Bool {
+        pane.guardPlan != nil
+    }
+
+    /// Give this session a nickname, or clear it with an empty one.
+    ///
+    /// The daemon keeps it, which is why this is a request rather than a
+    /// preference: a nickname has to survive a restart and reach every
+    /// client.
+    public func setNickname(_ nickname: String) {
+        store.send(.setNickname(pane: pane.id, nickname: nickname))
+    }
+
+    /// Watch this session's limits, or stop watching.
+    public func guardLimits(_ plan: GuardPlan?) {
+        store.send(.guardLimits(pane: pane.id, plan: plan))
     }
 
     /// The one primary action, named after where the work would go — which

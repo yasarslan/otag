@@ -16,6 +16,12 @@ struct SidebarView: View {
     /// Ask the window something about one session.
     let ask: (PaneID, SessionPrompt.Kind) -> Void
 
+    /// The session whose nickname is being typed, if any.
+    ///
+    /// Edited in the row rather than in a sheet: a nickname is one word, and
+    /// a dialog for one word is a dialog too many.
+    @State private var naming: PaneID?
+
     var body: some View {
         List(selection: $selection) {
             ForEach(store.workspaces) { workspace in
@@ -54,14 +60,22 @@ struct SidebarView: View {
             name: names.name(of: pane),
             number: number(of: pane.id),
             ask: store.asks.first { $0.pane == pane.id },
-            answer: { chosen in deliver(chosen, for: pane.id) }
+            naming: naming == pane.id,
+            answer: { chosen in deliver(chosen, for: pane.id) },
+            rename: { nickname in
+                naming = nil
+                actions(for: pane).setNickname(nickname)
+            },
+            cancel: { naming = nil }
         )
         .tag(pane.id)
         .draggable(DraggedSession(pane: pane.id)) { dragPreview(of: pane) }
         .contextMenu {
             SessionContextMenu(
                 actions: actions(for: pane),
-                ask: { kind in ask(pane.id, kind) }
+                everything: store.panes,
+                ask: { kind in ask(pane.id, kind) },
+                setNickname: { naming = pane.id }
             )
         }
     }
@@ -122,7 +136,14 @@ private struct SessionRow: View {
     let number: Int?
     /// What it is waiting for, when it is waiting for anything.
     let ask: AskView?
+    /// Whether the nickname is being typed right now.
+    let naming: Bool
     let answer: (Answer) -> Void
+    let rename: (String) -> Void
+    let cancel: () -> Void
+
+    @State private var typed = ""
+    @FocusState private var typing: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -135,7 +156,39 @@ private struct SessionRow: View {
 
                 Spacer(minLength: 4)
 
+                if guarded {
+                    Image(systemName: "shield.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(held ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        .help(guardHelp)
+                }
+
                 StatusPill(status: pane.status)
+            }
+
+            // The nickname: what job this session is doing, under what it
+            // was asked. Only a line when there is one, so a sidebar of
+            // sessions nobody has nicknamed looks exactly as it did.
+            if naming {
+                TextField(Strings.t("sidebar.nickname"), text: $typed)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .font(.caption)
+                    .focused($typing)
+                    .onSubmit { rename(typed) }
+                    .onExitCommand(perform: cancel)
+                    .padding(.leading, 16)
+                    .onAppear {
+                        typed = pane.nickname
+                        typing = true
+                    }
+            } else if !pane.nickname.isEmpty {
+                Text(pane.nickname)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 16)
             }
 
             // The one thing in this window that is actually waiting for the
@@ -148,10 +201,10 @@ private struct SessionRow: View {
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
-                        Button("Allow") { answer(.allow) }
+                        Button(Strings.t("ask.allow")) { answer(.allow) }
                             .controlSize(.small)
                             .keyboardShortcut(.defaultAction)
-                        Button("Deny") { answer(.deny) }
+                        Button(Strings.t("ask.deny")) { answer(.deny) }
                             .controlSize(.small)
                         Spacer(minLength: 0)
                     }
@@ -162,11 +215,40 @@ private struct SessionRow: View {
         }
         .padding(.vertical, 3)
         .animation(.easeOut(duration: 0.15), value: ask?.id)
+        .animation(.easeOut(duration: 0.15), value: naming)
         .help(help)
     }
 
+    /// Whether the limit guard is watching this session.
+    private var guarded: Bool {
+        pane.guardPlan != nil
+    }
+
+    /// Whether the guard has actually stopped it, rather than only watching.
+    private var held: Bool {
+        guard let plan = pane.guardPlan else { return false }
+        return plan.paused || plan.handedOff
+    }
+
+    private var guardHelp: String {
+        guard let plan = pane.guardPlan else { return "" }
+        if plan.handedOff {
+            return Strings.t("guard.help.handed")
+        }
+        if plan.paused {
+            guard let resets = Readable.resetClock(plan.resetsAt) else {
+                return Strings.t("guard.help.stopped")
+            }
+            return Strings.t("guard.help.stopped.until", resets)
+        }
+        return Strings.t("guard.help.watching", Int(plan.threshold))
+    }
+
     private var help: String {
-        var parts = [name, pane.agent.name, pane.status.precise]
+        var parts = [name]
+        if !pane.nickname.isEmpty { parts.append(pane.nickname) }
+        parts.append(pane.agent.name)
+        parts.append(pane.status.localizedPrecise)
         if let number { parts.append("⌘\(number)") }
         return parts.joined(separator: " · ")
     }
@@ -180,11 +262,11 @@ private struct EmptySidebar: View {
         VStack(spacing: Chrome.gap) {
             if case .connecting = state {
                 ProgressView().controlSize(.small)
-                Text("Looking for the daemon…")
+                Text(Strings.t("sidebar.looking"))
             } else {
-                Text("No sessions")
+                Text(Strings.t("sidebar.empty.title"))
                     .font(.headline)
-                Text("Press ⌘N to start one, or run `otag` in a terminal.")
+                Text(Strings.t("sidebar.empty.detail"))
                     .font(.caption)
                     .multilineTextAlignment(.center)
             }

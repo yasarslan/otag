@@ -3,12 +3,10 @@ import SwiftUI
 
 /// Something the window is asking the user about one session.
 ///
-/// `sheet(item:)` wants something identifiable, and all four of these are
-/// "this session, plus which question", so they are one type.
+/// `sheet(item:)` wants something identifiable, and all of these are "this
+/// session, plus which question", so they are one type.
 struct SessionPrompt: Identifiable {
     enum Kind {
-        /// Which model to continue on.
-        case model
         /// Which session to put beside this one.
         case split
         /// What to call it.
@@ -23,86 +21,61 @@ struct SessionPrompt: Identifiable {
     var id: String { "\(pane)-\(kind)" }
 }
 
-/// The one strip above a session: what it is, and the two controls it has.
+/// The one strip above a session: what it is, and a close button.
 ///
-/// Left: the agent, the project and what it is doing, as plain text. Right:
-/// **one** primary button — the handoff — and **one** `⋯` menu. Nothing else
-/// goes here, ever. The strip before this had six symbol buttons and a
-/// tooltip for each, which is six things to learn in the place a person is
-/// trying to read a terminal.
+/// It used to hold six symbol buttons; then one primary button and a `⋯`.
+/// Now it holds no menu at all. Everything that was in that menu went
+/// somewhere a person can see it — the toolbar's two popovers, the sidebar's
+/// right click, the Session menu — and what is left here is the one thing a
+/// header should be: a label saying which session this is.
+///
+/// `nickname · name · project · status`, and nothing twice.
 struct SessionHeaderBar: View {
     let actions: SessionActions
-    /// Every session the daemon is running, for `Split with…`.
-    let everything: [PaneInfo]
     /// Whether this session has the keyboard, which only matters when it is
     /// sharing the window.
     let focused: Bool
     /// Whether it is sharing the window at all.
     let sharing: Bool
-    /// Ask the window something about this session.
-    let ask: (SessionPrompt.Kind) -> Void
 
     var body: some View {
         HStack(spacing: Chrome.gap) {
             AgentMark(agent: actions.pane.agent)
 
-            Text(actions.name)
-                .font(.system(size: 12, weight: focused && sharing ? .semibold : .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            // The project, unless it is already what the session is
-            // called: a session named after its folder used to say that
-            // folder's name twice over, with no separator between any of
-            // the three things the header says.
-            if let project {
-                Separator()
-                Text(project)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                if index > 0 { Separator() }
+                Text(part.text)
+                    .font(.system(size: 12, weight: part.weight))
+                    .foregroundStyle(part.style)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
 
-            Separator()
-            Text(actions.pane.status.precise)
-                .font(.system(size: 12))
-                .foregroundStyle(actions.pane.status.badge.wantsAttention
-                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                .lineLimit(1)
-                .layoutPriority(1)
-
+            if actions.isGuarded {
+                Image(systemName: "shield.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(guardIsHolding ? AnyShapeStyle(.tint)
+                        : AnyShapeStyle(.secondary))
+                    .help(Strings.t(guardIsHolding
+                        ? "guard.help.stopped" : "guard.help.header"))
+            }
             if actions.isOnNightShift {
                 Image(systemName: "moon.stars")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .help("The night shift is working on this session")
+                    .help(Strings.t("header.nightshift"))
             }
 
             Spacer(minLength: Chrome.gap)
 
-            if actions.isHandingOff {
-                Text("switching…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } else if actions.canHandOff {
-                Button(actions.handOffTitle) { actions.handOff() }
-                    .primaryActionStyle(prominent: actions.isRunningOut)
-                    .help(actions.isRunningOut
-                        ? "\(actions.handOffTitle) — this agent is nearly out of room"
-                        : "\(actions.handOffTitle), with a package it can read")
+            Button(action: actions.close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
             }
-
-            Menu {
-                SessionMenuItems(actions: actions, everything: everything, ask: ask)
-            } label: {
-                Image(systemName: "ellipsis")
-            }
-            .menuStyle(.button)
-            .chromeButtonStyle()
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Everything else about this session")
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(Strings.t("header.close"))
+            .accessibilityLabel(Strings.t("header.close.label"))
         }
         .padding(.horizontal, Chrome.gutter)
         .frame(height: Chrome.headerHeight)
@@ -111,17 +84,51 @@ struct SessionHeaderBar: View {
         .help(actions.pane.agent.name)
     }
 
-    /// The project, when it is worth saying.
+    /// One piece of the header's line.
+    private struct Part {
+        let text: String
+        var weight: Font.Weight = .regular
+        var style: AnyShapeStyle = AnyShapeStyle(.secondary)
+    }
+
+    /// What the header says, with nothing said twice.
     ///
-    /// Nothing when the session is called the same thing, compared without
-    /// case: the header would otherwise repeat itself, which reads as a bug
-    /// whatever the reason for it.
-    private var project: String? {
-        let workspace = actions.pane.workspace
-        guard !workspace.isEmpty,
-              workspace.caseInsensitiveCompare(actions.name) != .orderedSame
-        else { return nil }
-        return workspace
+    /// A session named after its folder used to read the folder's name
+    /// twice; anything that repeats a part already shown is left out, and
+    /// the comparison ignores case so a rename differing only in capitals
+    /// cannot slip through.
+    private var parts: [Part] {
+        var shown: [Part] = []
+        func add(_ text: String, weight: Font.Weight = .regular, style: AnyShapeStyle) {
+            let wanted = text.trimmingCharacters(in: .whitespaces)
+            guard !wanted.isEmpty else { return }
+            guard !shown.contains(where: {
+                $0.text.caseInsensitiveCompare(wanted) == .orderedSame
+            }) else { return }
+            shown.append(Part(text: wanted, weight: weight, style: style))
+        }
+
+        add(actions.nickname, weight: .semibold, style: AnyShapeStyle(.primary))
+        add(
+            actions.name,
+            weight: actions.nickname.isEmpty
+                ? (focused && sharing ? .semibold : .medium) : .regular,
+            style: AnyShapeStyle(actions.nickname.isEmpty ? .primary : .secondary)
+        )
+        add(actions.pane.workspace, style: AnyShapeStyle(.secondary))
+        add(
+            actions.pane.status.localizedPrecise,
+            style: actions.pane.status.badge.wantsAttention
+                ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
+        )
+        return shown
+    }
+
+    /// Whether the guard has actually stopped this session, rather than only
+    /// watching it.
+    private var guardIsHolding: Bool {
+        guard let plan = actions.pane.guardPlan else { return false }
+        return plan.paused || plan.handedOff
     }
 }
 
@@ -135,56 +142,50 @@ private struct Separator: View {
     }
 }
 
-/// The `⋯` menu, and the sidebar's right click.
+/// The sidebar's right click.
 ///
-/// One list in one order, used in both places, so a right click and the
-/// header can never drift apart. `Split with…` is the only item the sidebar
-/// leaves out, because splitting is relative to a session that is showing.
-struct SessionMenuItems: View {
+/// What is left after the header's menu went: the two names, putting a
+/// session beside this one, the night shift, and closing. Everything else is
+/// a toolbar button now.
+struct SessionContextMenu: View {
     let actions: SessionActions
     let everything: [PaneInfo]
     let ask: (SessionPrompt.Kind) -> Void
-    /// Whether this is the header's menu, which can offer a split.
-    var canSplit = true
+    /// Start editing the nickname in the row itself.
+    let setNickname: () -> Void
 
     var body: some View {
-        if canSplit {
-            Button("Split with…", systemImage: "square.split.2x1") { ask(.split) }
-                .disabled(actions.splitCandidates(among: everything).isEmpty)
-        }
+        Button(
+            Strings.t(actions.nickname.isEmpty ? "menu.nickname.set" : "menu.nickname.change"),
+            systemImage: "tag"
+        ) { setNickname() }
 
-        Button("Lighter model…", systemImage: "arrow.down.right.circle") { ask(.model) }
-            .disabled(actions.pane.agent == nil)
+        Button(Strings.t("menu.rename"), systemImage: "pencil") { ask(.rename) }
+
+        Divider()
+
+        Button(Strings.t("menu.split"), systemImage: "square.split.2x1") { ask(.split) }
+            .disabled(actions.splitCandidates(among: everything).isEmpty)
 
         if actions.isOnNightShift {
-            Button("Stop the night shift", systemImage: "moon.zzz") { actions.stopNightShift() }
+            Button(Strings.t("menu.nightshift.stop"), systemImage: "moon.zzz") {
+                actions.stopNightShift()
+            }
         } else {
-            Button("Night shift…", systemImage: "moon.stars") { ask(.nightShift) }
-                .disabled(actions.pane.agent == nil)
+            Button(Strings.t("menu.nightshift"), systemImage: "moon.stars") {
+                ask(.nightShift)
+            }
+            .disabled(actions.pane.agent == nil)
+        }
+
+        if actions.isGuarded {
+            Button(Strings.t("guard.stop.one"), systemImage: "shield.slash") {
+                actions.guardLimits(nil)
+            }
         }
 
         Divider()
 
-        Button("Rename…", systemImage: "pencil") { ask(.rename) }
-        Button("Morning report…", systemImage: "sunrise") { actions.askForMorningReport() }
-
-        Divider()
-
-        Button("Close", systemImage: "xmark") { actions.close() }
-    }
-}
-
-/// The sidebar's right click: the same list, without the split.
-struct SessionContextMenu: View {
-    let actions: SessionActions
-    let ask: (SessionPrompt.Kind) -> Void
-
-    var body: some View {
-        Button(actions.handOffTitle, systemImage: "arrow.left.arrow.right") {
-            actions.handOff()
-        }
-        .disabled(!actions.canHandOff)
-
-        SessionMenuItems(actions: actions, everything: [], ask: ask, canSplit: false)
+        Button(Strings.t("menu.close"), systemImage: "xmark") { actions.close() }
     }
 }

@@ -11,13 +11,11 @@ struct PanesView: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
-    /// Ask the window something about one session.
-    let ask: (PaneID, SessionPrompt.Kind) -> Void
 
     var body: some View {
         Group {
             if let root = workbench.root {
-                PaneTree(node: root, store: store, names: names, workbench: workbench, ask: ask)
+                PaneTree(node: root, store: store, names: names, workbench: workbench)
                     // Drag a session out of the sidebar and onto a side to
                     // put it there. Nothing is drawn until something is over
                     // them.
@@ -36,7 +34,6 @@ private struct PaneTree: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
-    let ask: (PaneID, SessionPrompt.Kind) -> Void
 
     var body: some View {
         switch node {
@@ -50,7 +47,7 @@ private struct PaneTree: View {
             // selecting a session in the sidebar appeared to do nothing.
             // The identity makes the old view go and a new one arrive, which
             // is what attaching to a different pane actually is.
-            PaneCell(pane: pane, store: store, names: names, workbench: workbench, ask: ask)
+            PaneCell(pane: pane, store: store, names: names, workbench: workbench)
                 .id(pane)
 
         case let .split(axis, children, fractions):
@@ -64,8 +61,7 @@ private struct PaneTree: View {
                         node: child,
                         store: store,
                         names: names,
-                        workbench: workbench,
-                        ask: ask
+                        workbench: workbench
                     )
                     .frame(
                         width: axis == .horizontal ? usable * share(fractions, index) : nil,
@@ -140,7 +136,6 @@ private struct PaneCell: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
-    let ask: (PaneID, SessionPrompt.Kind) -> Void
 
     @AppStorage(Preference.dimIdle) private var dimIdle = true
     /// Why this pane cannot be followed any more, once that has happened.
@@ -156,10 +151,8 @@ private struct PaneCell: View {
                         names: names,
                         pane: info
                     ),
-                    everything: store.panes,
                     focused: workbench.focus == pane,
-                    sharing: workbench.panes.count > 1,
-                    ask: { kind in ask(pane, kind) }
+                    sharing: workbench.panes.count > 1
                 )
             }
             terminal
@@ -217,13 +210,13 @@ private struct PaneGoneOverlay: View {
         VStack(spacing: Chrome.gap) {
             Spacer()
             VStack(spacing: 4) {
-                Label("This session is no longer running", systemImage: "xmark.circle")
+                Label(Strings.t("pane.gone"), systemImage: "xmark.circle")
                     .font(.callout)
                 Text(reason)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Button("Close", action: close)
+                Button(Strings.t("pane.gone.close"), action: close)
                     .padding(.top, 4)
             }
             .padding(14)

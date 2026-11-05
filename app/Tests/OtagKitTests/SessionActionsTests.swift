@@ -5,6 +5,7 @@ import Testing
 
 /// What a session is doing, in the words the window uses.
 @Suite("Status pills")
+@MainActor
 struct SessionBadgeTests {
     @Test("six statuses become four words")
     func theMapping() {
@@ -20,10 +21,13 @@ struct SessionBadgeTests {
     @Test("every status has a pill, and the four pills have names")
     func nothingFallsThrough() {
         for status in PaneStatus.allCases {
-            #expect(!status.badge.label.isEmpty, "\(status) has no pill")
+            #expect(!status.badge.key.isEmpty, "\(status) has no pill")
+            // A key, not a word: the words are in the `.strings` files and
+            // `LocalizationTests` is what checks they are all there.
+            #expect(status.badge.key.hasPrefix("status."))
         }
-        #expect(SessionBadge.allCases.map(\.label)
-            == ["Working", "Needs you", "Done", "Idle"])
+        #expect(SessionBadge.allCases.map(\.key)
+            == ["status.working", "status.needsYou", "status.done", "status.idle"])
     }
 
     @Test("only one pill is waiting for the user")
@@ -36,15 +40,21 @@ struct SessionBadgeTests {
 
     @Test("the pill never swallows what the status actually was")
     func theLongerWord() {
-        #expect(PaneStatus.looping.precise == "going in circles")
-        #expect(PaneStatus.error.precise == "error")
+        #expect(PaneStatus.looping.preciseKey == "status.precise.looping")
+        #expect(PaneStatus.error.preciseKey == "status.precise.error")
         #expect(PaneStatus.looping.needsTheLongerWord)
         #expect(PaneStatus.error.needsTheLongerWord)
+        #expect(PaneStatus.looping.localizedPrecise == "going in circles")
+        #expect(PaneStatus.error.localizedPrecise == "error")
 
         // The other four say the same thing either way, so the window has
-        // nothing extra to add.
+        // nothing extra to add. The pill capitalises — it is a label — and
+        // the precise word does not, because it sits inside a sentence.
         for status in [PaneStatus.idle, .working, .done, .needsApproval] {
-            #expect(status.precise == status.label)
+            #expect(
+                status.localizedPrecise.caseInsensitiveCompare(status.badge.label)
+                    == .orderedSame
+            )
             #expect(!status.needsTheLongerWord)
         }
     }

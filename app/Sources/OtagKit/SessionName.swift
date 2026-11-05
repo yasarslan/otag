@@ -200,6 +200,10 @@ public enum SessionName {
 
 /// The names the user has given their sessions.
 ///
+/// Nicknames are *not* here: the daemon keeps those, because they have to
+/// survive a restart and reach every client. These are the renames, which
+/// only this window cares about.
+///
 /// Only the renames: a session's own name comes from the first prompt, which
 /// the daemon reports, so there is nothing for the app to remember about it.
 /// Kept in `UserDefaults` so a restart does not forget a rename, and pruned

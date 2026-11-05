@@ -1,11 +1,13 @@
 import OtagKit
 import SwiftUI
 
-/// The four questions the `⋯` menu can ask about a session.
+/// The questions the sidebar's right click can ask about a session.
 ///
-/// One sheet, four bodies. They share a title, a Cancel and a default
+/// One sheet, three bodies. They share a title, a Cancel and a default
 /// button, which is the half of a dialog that is easy to get subtly wrong
-/// four times.
+/// three times over. Choosing a model is *not* here: that moved to the
+/// toolbar's Switch agent popover, beside the handoff, because they are the
+/// two answers to one question.
 struct SessionSheet: View {
     let actions: SessionActions
     let kind: SessionPrompt.Kind
@@ -23,7 +25,6 @@ struct SessionSheet: View {
 
             Group {
                 switch kind {
-                case .model: ModelBody(actions: actions, dismiss: { dismiss() })
                 case .split: SplitBody(
                         actions: actions,
                         everything: everything,
@@ -40,10 +41,9 @@ struct SessionSheet: View {
 
     private var title: String {
         switch kind {
-        case .model: return "Continue on another model"
-        case .split: return "Put a session beside this one"
-        case .rename: return "Rename this session"
-        case .nightShift: return "Night shift"
+        case .split: return Strings.t("sheet.split.title")
+        case .rename: return Strings.t("sheet.rename.title")
+        case .nightShift: return Strings.t("sheet.nightshift.title")
         }
     }
 
@@ -57,34 +57,11 @@ struct SessionSheet: View {
         var body: some View {
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel, action: cancel)
+                Button(Strings.t("sheet.cancel"), role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
                 Button(confirm, action: run)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!enabled)
-            }
-        }
-    }
-
-    /// Which model to continue this same session on.
-    private struct ModelBody: View {
-        let actions: SessionActions
-        let dismiss: () -> Void
-        @State private var model = ""
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("The conversation is kept; only the model changes. Leave this empty for "
-                    + "the agent's fallback, where otag has a verified one.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                TextField("Model", text: $model, prompt: Text("sonnet"))
-                    .textFieldStyle(.roundedBorder)
-                Buttons(confirm: "Continue", cancel: dismiss) {
-                    actions.continueOn(model: model)
-                    dismiss()
-                }
             }
         }
     }
@@ -103,7 +80,7 @@ struct SessionSheet: View {
         var body: some View {
             VStack(alignment: .leading, spacing: 12) {
                 if candidates.isEmpty {
-                    Text("Every session otag is running is already on screen.")
+                    Text(Strings.t("sheet.split.none"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
@@ -115,21 +92,23 @@ struct SessionSheet: View {
                     .labelsHidden()
 
                     Picker("Where", selection: $axis) {
-                        Text("Beside it").tag(SplitAxis.horizontal)
-                        Text("Below it").tag(SplitAxis.vertical)
+                        Text(Strings.t("sheet.split.beside")).tag(SplitAxis.horizontal)
+                        Text(Strings.t("sheet.split.below")).tag(SplitAxis.vertical)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
 
-                    Text("otag shows up to \(Workbench.maximumPanes) sessions at once. You can "
-                        + "also drag a session from the list onto the side or the bottom of "
-                        + "this area.")
+                    Text(Strings.t("sheet.split.detail", Workbench.maximumPanes))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Buttons(confirm: "Split", enabled: chosen != nil, cancel: dismiss) {
+                Buttons(
+                    confirm: Strings.t("sheet.split.confirm"),
+                    enabled: chosen != nil,
+                    cancel: dismiss
+                ) {
                     guard let chosen else { return }
                     actions.split(with: chosen, axis: axis)
                     dismiss()
@@ -152,14 +131,14 @@ struct SessionSheet: View {
 
         var body: some View {
             VStack(alignment: .leading, spacing: 12) {
-                TextField("Name", text: $name)
+                TextField(Strings.t("sheet.rename.field"), text: $name)
                     .textFieldStyle(.roundedBorder)
                     .focused($focused)
                     .onSubmit(save)
-                Text("Leave this empty to go back to the name otag chose.")
+                Text(Strings.t("sheet.rename.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Buttons(confirm: "Rename", cancel: dismiss, run: save)
+                Buttons(confirm: Strings.t("sheet.rename.confirm"), cancel: dismiss, run: save)
             }
             .onAppear {
                 name = actions.names.isRenamed(actions.pane.id) ? actions.name : ""
@@ -198,7 +177,7 @@ struct SessionSheet: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Pause at")
+                        Text(Strings.t("sheet.nightshift.pauseAt"))
                         Spacer(minLength: 6)
                         Text("\(Int(pauseAt))%")
                             .monospacedDigit()
@@ -209,14 +188,14 @@ struct SessionSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("When a window resets, send")
+                    Text(Strings.t("sheet.nightshift.onReset"))
                         .font(.callout)
-                    TextField("nothing", text: $resumePrompt)
+                    TextField(Strings.t("sheet.nightshift.nothing"), text: $resumePrompt)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Queue · one prompt per line")
+                    Text(Strings.t("sheet.nightshift.queue"))
                         .font(.callout)
                     TextEditor(text: $queueText)
                         .font(.callout)
@@ -226,23 +205,26 @@ struct SessionSheet: View {
                         }
                 }
 
-                Text("otag sends the next prompt only while this session is idle and its "
-                    + "window has room. It never types past a question.")
+                Text(Strings.t("sheet.nightshift.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack {
                     if actions.isOnNightShift {
-                        Button("Stop") {
+                        Button(Strings.t("sheet.nightshift.stop")) {
                             actions.stopNightShift()
                             dismiss()
                         }
                     }
                     Spacer()
-                    Button("Cancel", role: .cancel, action: dismiss)
+                    Button(Strings.t("sheet.cancel"), role: .cancel, action: dismiss)
                         .keyboardShortcut(.cancelAction)
-                    Button(actions.isOnNightShift ? "Update" : "Start", action: start)
+                    Button(
+                        Strings.t(actions.isOnNightShift
+                            ? "sheet.nightshift.update" : "sheet.nightshift.start"),
+                        action: start
+                    )
                         .keyboardShortcut(.defaultAction)
                         .disabled(prompts.isEmpty && resumePrompt.isEmpty)
                 }
@@ -276,14 +258,14 @@ struct SessionSheet: View {
 
         private func running(_ shift: NightShiftView) -> String {
             if shift.paused {
-                return "Paused at \(shift.pauseAt)%, waiting for the window to reset"
+                return Strings.t("sheet.nightshift.paused", Int(shift.pauseAt))
             }
             if shift.queued > 0 {
-                return "\(shift.sent) of \(shift.queued) sent"
+                return Strings.t("sheet.nightshift.sentOf", shift.sent, shift.queued)
             }
             return shift.sent > 0
-                ? "\(shift.sent) sent"
-                : "Waiting for the session to be idle"
+                ? Strings.t("sheet.nightshift.sent", shift.sent)
+                : Strings.t("sheet.nightshift.waiting")
         }
     }
 }
@@ -296,10 +278,10 @@ struct MorningReportView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Morning report")
+                Text(Strings.t("report.title"))
                     .font(.headline)
                 Spacer()
-                Button("Done", action: dismiss)
+                Button(Strings.t("report.done"), action: dismiss)
                     .keyboardShortcut(.defaultAction)
             }
             .padding(Chrome.gutter)
@@ -307,9 +289,9 @@ struct MorningReportView: View {
 
             if sessions.isEmpty {
                 VStack(spacing: 6) {
-                    Text("Nothing to report")
+                    Text(Strings.t("report.empty.title"))
                         .font(.title3)
-                    Text("otag reports what the night shift did. Nothing has been queued yet.")
+                    Text(Strings.t("report.empty.detail"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -360,7 +342,7 @@ private struct SessionReportView: View {
 
             if !session.commits.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Commits")
+                    Text(Strings.t("report.commits"))
                         .font(.caption.weight(.medium))
                     ForEach(session.commits, id: \.self) { commit in
                         Text(commit)
@@ -372,7 +354,7 @@ private struct SessionReportView: View {
 
             if !session.log.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("What otag did")
+                    Text(Strings.t("report.whatItDid"))
                         .font(.caption.weight(.medium))
                     ForEach(session.log) { entry in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -393,14 +375,16 @@ private struct SessionReportView: View {
 
     private var sent: String {
         if session.remaining > 0 {
-            return "\(session.sent) prompts sent · \(session.remaining) still queued"
+            return Strings.t("report.prompts.queued", session.sent, session.remaining)
         }
-        return session.sent == 1 ? "1 prompt sent" : "\(session.sent) prompts sent"
+        return session.sent == 1
+            ? Strings.t("report.prompts.one")
+            : Strings.t("report.prompts.many", session.sent)
     }
 
     private var spent: String {
         let total = session.tokens.input + session.tokens.output
             + session.tokens.cacheRead + session.tokens.cacheWritten
-        return total == 0 ? "" : Readable.tokens(total) + " tokens"
+        return total == 0 ? "" : Strings.t("report.tokens", Readable.tokens(total))
     }
 }

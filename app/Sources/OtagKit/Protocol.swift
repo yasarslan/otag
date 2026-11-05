@@ -87,6 +87,16 @@ public enum AgentKind: String, Codable, Sendable {
     }
 }
 
+public extension Optional where Wrapped == AgentKind {
+    /// What to call it in a line of text, including when there is no agent.
+    ///
+    /// Here rather than beside the views because the popups, the sidebar and
+    /// `SessionActions` all need the same word for "no agent".
+    var name: String {
+        self?.label ?? "shell"
+    }
+}
+
 /// How many tokens a session has used.
 public struct Tokens: Codable, Hashable, Sendable {
     public var input: UInt64 = 0
@@ -124,6 +134,11 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     public var agent: AgentKind?
     public var status: PaneStatus = .idle
     public var session: String?
+    /// The word the user gave this session for the job it is doing.
+    ///
+    /// "backend", "tests". The daemon keeps it, so it survives a restart and
+    /// every client shows the same one.
+    public var nickname: String = ""
     /// The first thing the user asked this session, when the daemon knows.
     ///
     /// What the session is called. It comes from the prompt otag started it
@@ -137,13 +152,17 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     public var contextWindow: UInt64?
     /// What the night shift is doing for it, when it has been asked to.
     public var nightShift: NightShiftView?
+    /// What the limit guard is doing for it, when it is guarded.
+    public var guardPlan: GuardView?
     public var exit: PaneExit?
 
     enum CodingKeys: String, CodingKey {
         case id, size, workspace, cwd, title, agent, status, session, tokens, exit
+        case nickname
         case firstPrompt = "first_prompt"
         case contextWindow = "context_window"
         case nightShift = "night_shift"
+        case guardPlan = "guard"
     }
 
     /// One pane, built rather than decoded.
@@ -161,10 +180,12 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         agent: AgentKind? = nil,
         status: PaneStatus = .idle,
         session: String? = nil,
+        nickname: String = "",
         firstPrompt: String? = nil,
         tokens: Tokens = Tokens(),
         contextWindow: UInt64? = nil,
         nightShift: NightShiftView? = nil,
+        guardPlan: GuardView? = nil,
         exit: PaneExit? = nil
     ) {
         self.id = id
@@ -175,10 +196,12 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         self.agent = agent
         self.status = status
         self.session = session
+        self.nickname = nickname
         self.firstPrompt = firstPrompt
         self.tokens = tokens
         self.contextWindow = contextWindow
         self.nightShift = nightShift
+        self.guardPlan = guardPlan
         self.exit = exit
     }
 
@@ -194,10 +217,12 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         agent = try? container.decodeIfPresent(AgentKind.self, forKey: .agent)
         status = (try? container.decodeIfPresent(PaneStatus.self, forKey: .status)) ?? .idle
         session = try container.decodeIfPresent(String.self, forKey: .session)
+        nickname = try container.decodeIfPresent(String.self, forKey: .nickname) ?? ""
         firstPrompt = try container.decodeIfPresent(String.self, forKey: .firstPrompt)
         tokens = try container.decodeIfPresent(Tokens.self, forKey: .tokens) ?? Tokens()
         contextWindow = try container.decodeIfPresent(UInt64.self, forKey: .contextWindow)
         nightShift = try container.decodeIfPresent(NightShiftView.self, forKey: .nightShift)
+        guardPlan = try container.decodeIfPresent(GuardView.self, forKey: .guardPlan)
         exit = try container.decodeIfPresent(PaneExit.self, forKey: .exit)
     }
 }
@@ -504,6 +529,86 @@ public struct StartSession: Sendable, Equatable {
     }
 }
 
+/// What otag should do when a guarded session reaches its threshold.
+public enum GuardAction: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Stop, and leave it to the user to carry on.
+    case wait
+    /// Stop, and type the prompt once the window has reset.
+    case resume
+    /// Hand the work to the other agent, falling back to `resume` when that
+    /// agent has no room either.
+    case switchAgent = "switch"
+
+    public var id: String { rawValue }
+}
+
+/// What a client asks the limit guard to do for one session.
+public struct GuardPlan: Codable, Sendable, Hashable {
+    /// Percentage of a window at which to act, or the daemon's default.
+    public var threshold: UInt16?
+    /// What to do when it is reached.
+    public var whenReached: GuardAction = .wait
+    /// What to type when the window has reset, or the daemon's default.
+    public var prompt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case threshold
+        case whenReached = "when_reached"
+        case prompt
+    }
+
+    public init(threshold: UInt16? = nil, whenReached: GuardAction = .wait, prompt: String? = nil) {
+        self.threshold = threshold
+        self.whenReached = whenReached
+        self.prompt = prompt
+    }
+}
+
+/// What the limit guard is doing for one session.
+public struct GuardView: Codable, Sendable, Hashable {
+    /// The threshold in use.
+    public var threshold: UInt16 = 90
+    /// What it will do when that is reached.
+    public var whenReached: GuardAction = .wait
+    /// What it would type, for the client to show and edit.
+    public var prompt: String = ""
+    /// How much of the worse of this agent's windows is used.
+    public var used: UInt16 = 0
+    /// Whether otag has stopped sending to this session.
+    public var paused: Bool = false
+    /// When the window it is waiting on resets.
+    public var resetsAt: Int64?
+    /// Whether the work has already been handed to the other agent.
+    public var handedOff: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case threshold
+        case whenReached = "when_reached"
+        case prompt, used, paused
+        case resetsAt = "resets_at"
+        case handedOff = "handed_off"
+    }
+
+    /// When the pause ends, as a date.
+    public var resetsDate: Date? {
+        resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        threshold = try container.decodeIfPresent(UInt16.self, forKey: .threshold) ?? 90
+        whenReached = (try? container.decodeIfPresent(GuardAction.self, forKey: .whenReached))
+            .flatMap { $0 } ?? .wait
+        prompt = try container.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        used = try container.decodeIfPresent(UInt16.self, forKey: .used) ?? 0
+        paused = try container.decodeIfPresent(Bool.self, forKey: .paused) ?? false
+        resetsAt = try container.decodeIfPresent(Int64.self, forKey: .resetsAt)
+        handedOff = try container.decodeIfPresent(Bool.self, forKey: .handedOff) ?? false
+    }
+}
+
 /// A command the app sends the daemon.
 public enum Request: Sendable {
     case ping
@@ -519,6 +624,8 @@ public enum Request: Sendable {
     case nightShift(pane: PaneID, plan: NightShiftPlan?)
     case morningReport
     case attachPane(pane: PaneID, size: PaneSize?)
+    case setNickname(pane: PaneID, nickname: String)
+    case guardLimits(pane: PaneID, plan: GuardPlan?)
     case terminalAppearance(dark: Bool)
     case detachPane(pane: PaneID)
     case paneInput(pane: PaneID, bytes: Data)
@@ -595,6 +702,14 @@ extension Request: Encodable {
             try container.encode("attach_pane", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
             try container.encodeIfPresent(size, forKey: Key("size"))
+        case let .setNickname(pane, nickname):
+            try container.encode("set_nickname", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            try container.encode(nickname, forKey: Key("nickname"))
+        case let .guardLimits(pane, plan):
+            try container.encode("guard", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            try container.encodeIfPresent(plan, forKey: Key("plan"))
         case let .terminalAppearance(dark):
             try container.encode("terminal_appearance", forKey: Key("type"))
             try container.encode(dark, forKey: Key("dark"))

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Handoff sessions inherit their source session's name with the receiving
+  agent in parentheses, and keep its nickname, instead of being named after
+  otag's instruction to read the handoff package.
 - Choosing a session in the app's sidebar now shows that session. It changed
   which session had the keyboard but went on drawing the previous one's
   terminal: a terminal view holds one session's byte stream, and when the

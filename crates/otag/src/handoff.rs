@@ -234,8 +234,12 @@ async fn split(
     command: &[String],
     agent: AgentKind,
 ) -> Result<PaneId, String> {
+    let label = match agent {
+        AgentKind::Claude => "Claude",
+        AgentKind::Codex => "Codex",
+    };
     session
-        .split_running(beside, Direction::LeftRight, command, agent.name())
+        .split_running(beside, Direction::LeftRight, command, label)
         .await
         .map_err(|error| format!("otag cannot open a pane for {agent}: {error}"))
 }
@@ -403,6 +407,38 @@ mod tests {
         assert_eq!(session.visible_panes().len(), 2, "the old pane stays open");
         assert!(session.visible_panes().contains(&pane));
         assert!(session.visible_panes().contains(&done.pane));
+    }
+
+    #[tokio::test]
+    async fn handoff_names_and_nicknames_follow_the_source_in_both_directions() {
+        for from in AgentKind::ALL {
+            let dir = tempfile::tempdir().expect("a temporary directory");
+            let (session, pane) = with_one_pane(dir.path()).await;
+            session.set_agent(pane, Some(from)).await;
+            session.set_first_prompt(pane, "Fix parser tests").await;
+            session.set_nickname(pane, "backend").await;
+
+            let done = run(&session, pane, Mode::SwitchAgent { to: None })
+                .await
+                .expect("the handoff happens");
+            let path = done.package.expect("a package was written");
+            // A later transcript read must never replace the seeded name
+            // with otag's own first instruction.
+            session
+                .set_first_prompt(done.pane, &Package::prompt(&path))
+                .await;
+            let panes = session.summaries();
+            let started = panes.iter().find(|p| p.id == done.pane).expect("new pane");
+            let expected = match from {
+                AgentKind::Claude => "Fix parser tests (Codex)",
+                AgentKind::Codex => "Fix parser tests (Claude)",
+            };
+            assert_eq!(started.first_prompt.as_deref(), Some(expected));
+            assert_eq!(started.nickname, "backend");
+            let source = panes.iter().find(|p| p.id == pane).expect("source pane");
+            assert_eq!(source.first_prompt.as_deref(), Some("Fix parser tests"));
+            assert_eq!(source.nickname, "backend");
+        }
     }
 
     #[tokio::test]

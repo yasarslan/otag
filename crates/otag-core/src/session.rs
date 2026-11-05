@@ -623,8 +623,18 @@ impl Session {
             let workspace = from.workspace;
             let cwd = from.cwd.clone();
 
+            // Seed the name before publishing the pane: its transcript starts
+            // with otag's handoff instruction rather than the user's task.
+            let name = from.first_prompt.as_deref().unwrap_or(&from.title);
+            let first_prompt = format!("{name} ({title})");
+            let nickname = from.nickname.clone();
+
             let pane =
                 self.start_pane_running(&mut state, workspace, cwd.as_deref(), command, title)?;
+            if let Some(started) = state.panes.get_mut(&pane) {
+                started.first_prompt = Some(first_prompt);
+                started.nickname = nickname;
+            }
             // The split happens next to the pane being handed over from, so
             // the focus is moved there first.
             let placed = state.tab_mut().is_some_and(|tab| {

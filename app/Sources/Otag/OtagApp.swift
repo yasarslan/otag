@@ -29,6 +29,8 @@ struct OtagApp: App {
     @State private var attention = Attention()
     @State private var palette = false
     @AppStorage("hasOnboarded") private var onboarded = false
+    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.system.rawValue
+    @Environment(\.colorScheme) private var appearance
 
     var body: some Scene {
         WindowGroup {
@@ -44,6 +46,15 @@ struct OtagApp: App {
                 attention.prepare()
                 store.start()
             }
+            // A program started in a pane is told which way round the
+            // terminal is, so it can pick readable colours before it has
+            // asked the pane anything. Sent on connecting and whenever the
+            // theme changes; the daemon applies it to panes started after.
+            .onChange(of: store.state) { _, state in
+                if case .connected = state { tellTheDaemonAboutTheTheme() }
+            }
+            .onChange(of: theme) { _, _ in tellTheDaemonAboutTheTheme() }
+            .onChange(of: appearance) { _, _ in tellTheDaemonAboutTheTheme() }
             // The Dock badge and the notifications follow the inbox, which
             // the daemon keeps in step with the panes themselves.
             .onChange(of: store.asks) { _, asks in
@@ -132,6 +143,12 @@ struct OtagApp: App {
         Settings {
             SettingsView()
         }
+    }
+
+    /// Tell the daemon whether the panes are being drawn on dark paper.
+    private func tellTheDaemonAboutTheTheme() {
+        let resolved = TerminalThemeChoice.stored(theme).resolved(dark: appearance == .dark)
+        store.send(.terminalAppearance(dark: resolved.isDark))
     }
 
     /// The session the window is showing.
@@ -243,10 +260,7 @@ struct MainView: View {
             NewSessionSheet(
                 socket: store.socket,
                 suggestedProject: store.suggestedProject(near: workbench.focus)
-            ) { pane, prompt in
-                if !prompt.isEmpty {
-                    names.remember(firstPrompt: prompt, for: pane)
-                }
+            ) { pane in
                 place(pane: pane, axis: request.axis)
             }
         }
@@ -301,7 +315,9 @@ struct MainView: View {
             for pane in workbench.panes where !alive.contains(pane) {
                 workbench.close(pane: pane)
             }
-            names.prune(to: panes.map(\.id))
+            // The daemon's list is what the session numbering counts along,
+            // and what a rename of a session that is over is pruned against.
+            names.took(panes)
             workbench.save()
         }
         .onChange(of: workbench.root) { _, _ in workbench.save() }

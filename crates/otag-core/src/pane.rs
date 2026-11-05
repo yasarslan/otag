@@ -29,6 +29,26 @@ pub const TERM: &str = "xterm-256color";
 /// as RGB, so the claim holds end to end.
 pub const COLORTERM: &str = "truecolor";
 
+/// The variable a program reads to learn whether it is drawing on light or
+/// dark paper.
+pub const COLORFGBG: &str = "COLORFGBG";
+
+/// What `COLORFGBG` says, for a pane drawn on dark or light paper.
+///
+/// The convention, from rxvt onwards, is `<foreground>;<background>` as ANSI
+/// colour *numbers* rather than as colours: `15;0` is a light foreground on
+/// a dark background, `0;15` the other way round. Codex reads this variable
+/// among the things it checks about a terminal, and so do several other
+/// programs that want to pick readable colours without asking.
+///
+/// A pane also answers the `OSC 10` and `OSC 11` queries with the exact
+/// colours of the client's theme, which is both more precise and live. This
+/// is for the moment before a program has asked anything.
+#[must_use]
+pub fn colorfgbg(dark: bool) -> &'static str {
+    if dark { "15;0" } else { "0;15" }
+}
+
 /// Identifier of a pane, unique within one daemon run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

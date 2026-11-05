@@ -362,6 +362,8 @@ pub struct Session {
     template: PaneSpec,
     /// Bumped on every structural change, so clients know to ask for a view.
     changes: watch::Sender<u64>,
+    /// Coalesced screen changes, for saving history without idle polling.
+    content_changes: watch::Sender<u64>,
     state: Mutex<State>,
 }
 
@@ -514,6 +516,7 @@ impl Session {
         Arc::new(Self {
             template,
             changes: watch::Sender::new(0),
+            content_changes: watch::Sender::new(0),
             state: Mutex::new(State {
                 workspaces: Vec::new(),
                 active: 0,
@@ -536,6 +539,12 @@ impl Session {
     #[must_use]
     pub fn changes(&self) -> watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+
+    /// A receiver that wakes when any pane publishes a screen or exits.
+    #[must_use]
+    pub fn content_changes(&self) -> watch::Receiver<u64> {
+        self.content_changes.subscribe()
     }
 
     /// Attach a client: lay the session out for its terminal, starting a
@@ -1605,6 +1614,8 @@ impl Session {
     fn reap(self: &Arc<Self>, handle: PaneHandle) {
         let session = Arc::clone(self);
         let mut updates = handle.watch();
+        self.content_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
         tokio::spawn(async move {
             let exit = loop {
                 // The borrow is dropped before the await: holding it across
@@ -1618,6 +1629,9 @@ impl Session {
                     // exit, which happens while the daemon shuts down.
                     break None;
                 }
+                session
+                    .content_changes
+                    .send_modify(|revision| *revision = revision.wrapping_add(1));
             };
             session.close_pane(handle.id(), exit).await;
         });

@@ -537,3 +537,40 @@ async fn a_pane_reports_the_directory_it_is_working_in() {
         .expect("the pane is listed");
     assert_eq!(summary.cwd.as_deref(), Some(project.as_path()));
 }
+
+#[tokio::test]
+async fn history_watchers_wake_on_screen_output_without_structural_changes() {
+    let session = Session::new(shell(
+        "printf 'ready'; read -r answer; printf 'received %s' \"$answer\"; read -r rest",
+    ));
+    let mut content = session.content_changes();
+    session
+        .attach(PaneSize::new(24, 80), None)
+        .await
+        .expect("a pane");
+    let handle = session.focused_pane().expect("the pane");
+    wait_for_text(&handle, "ready").await;
+    let generation = session.view().generation;
+    content.borrow_and_update();
+    handle.input(b"hello\n".to_vec()).await.expect("input");
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            content.changed().await.expect("content channel stays open");
+            if handle.snapshot().screen.text().contains("received hello") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("output wakes history saving");
+    assert_eq!(
+        session.view().generation,
+        generation,
+        "screen output does not wake structural subscribers"
+    );
+    handle
+        .input(b"\n".to_vec())
+        .await
+        .expect("finish the program");
+    wait_for(&handle, |state| state.exit.is_some()).await;
+}

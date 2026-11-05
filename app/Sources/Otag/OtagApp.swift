@@ -231,6 +231,8 @@ struct MainView: View {
 
     /// What the window is asking about one session, when it is asking.
     @State private var prompt: SessionPrompt?
+    /// Whether this window is visible; terminal streams follow it.
+    @State private var windowVisible = true
     /// Which toolbar popover is open.
     @State private var guarding = false
     @State private var switching = false
@@ -262,6 +264,14 @@ struct MainView: View {
             } else {
                 PanesView(store: store, names: names, workbench: workbench, browsers: browsers, webViews: webViews)
             }
+        }
+        .environment(\.windowVisible, windowVisible)
+        .background {
+            WindowVisibility { visible, anyVisible in
+                windowVisible = visible
+                store.setUIActive(anyVisible)
+            }
+            .frame(width: 0, height: 0)
         }
         .toolbar { toolbar }
         .sheet(item: $pending) { request in

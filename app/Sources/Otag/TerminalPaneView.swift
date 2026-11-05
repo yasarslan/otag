@@ -24,6 +24,8 @@ struct TerminalPaneView: NSViewRepresentable {
     /// Called when the user clicks into this pane.
     let onFocus: () -> Void
 
+    @Environment(\.windowVisible) private var windowVisible
+
     @AppStorage(Preference.fontSize) private var fontSize = Preference.defaultFontSize
     @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.system.rawValue
 
@@ -52,8 +54,9 @@ struct TerminalPaneView: NSViewRepresentable {
         context.coordinator.drawn = theme
         TerminalProfile.apply(to: view, theme: theme, size: fontSize)
         view.allowMouseReporting = true
+        view.suspendsRenderingWhenNotVisible = true
 
-        context.coordinator.attach(to: view)
+        context.coordinator.attach(to: view, active: windowVisible)
         return view
     }
 
@@ -61,6 +64,7 @@ struct TerminalPaneView: NSViewRepresentable {
         context.coordinator.onEnded = onEnded
         context.coordinator.onGone = onGone
         context.coordinator.onFocus = onFocus
+        context.coordinator.setActive(windowVisible)
         // Changing the font changes how many cells fit, and the view reports
         // the new size, which the daemon then tells the program. The theme
         // is watched the same way, which is what makes choosing one in
@@ -79,6 +83,17 @@ struct TerminalPaneView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: TerminalView, coordinator: Coordinator) {
         coordinator.stop()
+        closeUI(view)
+    }
+
+    private static func closeUI(_ view: TerminalView) {
+        // SwiftTerm can defer teardown while a submitted GPU frame finishes.
+        // Retry only that teardown; there is no repeating cleanup timer.
+        if !view.updateUiClosed() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) {
+                closeUI(view)
+            }
+        }
     }
 
     /// Carries bytes between the daemon and one terminal view.
@@ -86,6 +101,9 @@ struct TerminalPaneView: NSViewRepresentable {
     final class Coordinator: NSObject, TerminalViewDelegate {
         private let stream: PaneStream
         private weak var view: TerminalView?
+        private var active = false
+        private var pending: [UInt8] = []
+        private var flushWork: DispatchWorkItem?
         /// The theme the view was last drawn in, so that a change reinstalls
         /// the palette and nothing else does.
         var drawn: TerminalTheme?
@@ -108,40 +126,58 @@ struct TerminalPaneView: NSViewRepresentable {
         }
 
         /// Start following the pane and feeding this view.
-        func attach(to view: TerminalView) {
+        func attach(to view: TerminalView, active: Bool) {
             self.view = view
 
-            stream.onScreen = { [weak view] size, bytes in
-                guard let view else { return }
+            stream.onScreen = { [weak self] size, bytes in
+                guard let self, let view = self.view else { return }
+                cancelFlush()
                 // The bytes clear the screen themselves and then draw it, so
                 // feeding them is enough; the size is the daemon agreeing
                 // with what this view asked for.
                 _ = size
                 view.feed(byteArray: bytes[...])
             }
-            stream.onOutput = { [weak view] bytes in
-                view?.feed(byteArray: bytes[...])
+            stream.onOutput = { [weak self] bytes in
+                self?.enqueue(bytes)
             }
             stream.onEnded = { [weak self] exit in
+                self?.flush()
                 self?.onEnded(exit)
             }
-            stream.onFailure = { [weak view] message in
+            stream.onFailure = { [weak self] message in
+                self?.flush()
                 // Said on the pane itself, dimmed: it is otag speaking, not
                 // the program.
                 let text = "\r\n\u{1b}[2m-- \(message) --\u{1b}[0m\r\n"
-                view?.feed(text: text)
+                self?.view?.feed(text: text)
             }
-            stream.onReattached = { [weak view] in
+            stream.onReattached = { [weak self] in
+                self?.cancelFlush()
                 // The daemon is about to send the pane's whole screen, and
                 // those bytes clear what is there first. Resetting the
                 // emulator as well means a restart cannot leave the view in
                 // a mode the old program set.
-                view?.softReset()
+                self?.view?.softReset()
             }
             stream.onGone = { [weak self] message in
                 self?.onGone(message)
             }
 
+            setActive(active)
+        }
+
+        /// A hidden pane detaches from raw output. The daemon retains its
+        /// screen, and a new attach replays that screen on becoming visible.
+        func setActive(_ active: Bool) {
+            guard self.active != active else { return }
+            self.active = active
+            guard active, let view else {
+                cancelFlush()
+                stream.stop()
+                return
+            }
+            view.softReset()
             let size = view.terminalDimensions
             stream.start(size: PaneSize(
                 rows: UInt16(max(size.rows, 1)),
@@ -149,7 +185,35 @@ struct TerminalPaneView: NSViewRepresentable {
             ))
         }
 
+        private func enqueue(_ bytes: [UInt8]) {
+            guard active else { return }
+            pending.append(contentsOf: bytes)
+            if pending.count >= 64 * 1024 {
+                flush()
+            } else if flushWork == nil {
+                let work = DispatchWorkItem { [weak self] in self?.flush() }
+                flushWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16), execute: work)
+            }
+        }
+
+        private func flush() {
+            flushWork?.cancel()
+            flushWork = nil
+            guard !pending.isEmpty else { return }
+            view?.feed(byteArray: pending[...])
+            pending.removeAll(keepingCapacity: true)
+        }
+
+        private func cancelFlush() {
+            flushWork?.cancel()
+            flushWork = nil
+            pending.removeAll(keepingCapacity: true)
+        }
+
         func stop() {
+            active = false
+            cancelFlush()
             stream.stop()
         }
 

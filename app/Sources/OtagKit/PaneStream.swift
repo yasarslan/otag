@@ -177,7 +177,7 @@ public final class PaneStream {
             }
         }
 
-        self.connection = nil
+        if self.connection === connection { self.connection = nil }
         if Task.isCancelled { return .ended }
         // The daemon closed the connection without saying the pane ended,
         // which means the daemon itself went away.

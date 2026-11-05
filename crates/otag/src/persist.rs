@@ -1,9 +1,9 @@
 //! Keeping the daemon's session on disk, and putting it back.
 //!
 //! The daemon saves the shape of its session whenever it changes, and the
-//! lines its panes have shown on a slow timer, because those are large and
-//! nobody loses much by them being a few seconds behind. Saving happens
-//! on a thread that may block: SQLite is a file, not a service, and the
+//! lines its panes have shown after screen changes, coalesced over ten
+//! seconds. Nothing wakes or writes history while every pane is idle. Saving
+//! happens on a thread that may block: SQLite is a file, not a service, and the
 //! runtime serving the panes must never wait on a disk.
 //!
 //! Nothing here is allowed to take the daemon down. A database that cannot be
@@ -157,10 +157,9 @@ pub async fn restore(session: &Arc<Session>, snapshots: &Snapshots) {
 /// Ends when the session is gone, which happens as the daemon shuts down.
 pub async fn keep_saving(session: Arc<Session>, snapshots: Snapshots) {
     let mut changes = session.changes();
-    let mut history = tokio::time::interval(HISTORY_INTERVAL);
-    history.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The first tick is immediate, and there is nothing to save yet.
-    history.tick().await;
+    let mut content = session.content_changes();
+    let mut history_due =
+        (!session.is_empty()).then(|| tokio::time::Instant::now() + HISTORY_INTERVAL);
 
     loop {
         tokio::select! {
@@ -173,7 +172,18 @@ pub async fn keep_saving(session: Arc<Session>, snapshots: Snapshots) {
                 changes.mark_unchanged();
                 snapshots.save_session(session.snapshot()).await;
             }
-            _ = history.tick() => {
+            changed = content.changed() => {
+                if changed.is_err() { return; }
+                history_due.get_or_insert_with(|| tokio::time::Instant::now() + HISTORY_INTERVAL);
+            }
+            () = async {
+                match history_due {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                history_due = None;
+                content.mark_unchanged();
                 save_everything(&session, &snapshots).await;
             }
         }

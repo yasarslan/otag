@@ -62,6 +62,20 @@ struct StreamTests {
         try await screens.wait(for: "the program's output") {
             $0.text.contains("from the app")
         }
+
+        // Hiding detaches the UI stream; showing it again must replay the
+        // daemon's screen and keep a live connection after cancellation.
+        for round in 1...2 {
+            stream.stop()
+            screens.forget()
+            stream.start(size: PaneSize(rows: 24, cols: 80))
+            try await screens.wait(for: "the replay after restoring") {
+                $0.text.contains("from the app")
+            }
+            let marker = "restored-\(round)"
+            stream.send(Array("printf 'restored-%s\\n' '\(round)'\r".utf8))
+            try await screens.wait(for: "input after restoring") { $0.text.contains(marker) }
+        }
     }
 
     @Test("a night shift plan reaches the daemon and comes back on the pane")

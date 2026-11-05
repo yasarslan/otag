@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handoff sessions inherit their source session's name with the receiving
   agent in parentheses, and keep its nickname, instead of being named after
   otag's instruction to read the handoff package.
+- Hidden or minimized app windows suspend terminal streams and periodic usage
+  refreshes, then replay the current screen when shown again. Terminal output
+  is batched, idle history saving sleeps until content changes, and background
+  process scans slow down after sessions start.
 - Choosing a session in the app's sidebar now shows that session. It changed
   which session had the keyboard but went on drawing the previous one's
   terminal: a terminal view holds one session's byte stream, and when the

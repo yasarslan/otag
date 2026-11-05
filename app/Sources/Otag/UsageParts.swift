@@ -13,18 +13,7 @@ import SwiftUI
 struct UsageRefresh: View {
     let store: SessionStore
 
-    /// How far the icon has turned, and the task turning it.
-    ///
-    /// One finite step at a time rather than one endless animation: an
-    /// animation told to repeat forever is only stopped by changing the
-    /// value it animates, and the value it had already reached was the
-    /// value it was going to be set to. So it never stopped.
-    @State private var turn = 0.0
-    @State private var spinning: Task<Void, Never>?
     @State private var justUpdated = false
-
-    /// How long one step of the turn takes.
-    private static let step = Duration.milliseconds(250)
 
     var body: some View {
         HStack(spacing: 4) {
@@ -40,7 +29,7 @@ struct UsageRefresh: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(turn))
+                    .symbolEffect(.pulse, options: .repeating, isActive: store.refreshingUsage)
                     // A hit area a person can actually hit: the glyph itself
                     // is ten points across, and this is the whole square.
                     .frame(width: 20, height: 20)
@@ -50,40 +39,12 @@ struct UsageRefresh: View {
             .help(Strings.t("limits.refresh"))
             .accessibilityLabel(Strings.t("limits.refresh.label"))
         }
-        .onChange(of: store.refreshingUsage) { _, refreshing in
-            spin(refreshing)
-        }
         .onChange(of: store.usageUpdatedAt) {
             withAnimation { justUpdated = true }
             Task {
                 try? await Task.sleep(for: .seconds(2))
                 withAnimation { justUpdated = false }
             }
-        }
-        .onDisappear {
-            spinning?.cancel()
-            spinning = nil
-        }
-    }
-
-    /// Turn the icon while a re-read is in flight, and stop when it is not.
-    ///
-    /// Each step is an animation that ends, so the icon stops as soon as
-    /// nothing is asking it to turn: the store clears its flag when the
-    /// report arrives, and gives up by itself if none does.
-    private func spin(_ refreshing: Bool) {
-        spinning?.cancel()
-        guard refreshing else {
-            withAnimation(.easeOut(duration: 0.2)) { turn = 0 }
-            return
-        }
-
-        spinning = Task { @MainActor in
-            while !Task.isCancelled, store.refreshingUsage {
-                withAnimation(.linear(duration: 0.25)) { turn += 120 }
-                try? await Task.sleep(for: Self.step)
-            }
-            withAnimation(.easeOut(duration: 0.2)) { turn = 0 }
         }
     }
 }

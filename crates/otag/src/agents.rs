@@ -1,17 +1,11 @@
 //! Noticing the agents running in the panes.
 //!
-//! Hooks are the better source of what an agent is doing, but they only
-//! exist once the user has installed them, and they say nothing about an
-//! agent that was simply started in a shell. So the daemon also looks: once
-//! a second it lists the processes, finds the ones below each pane's shell,
-//! and asks the adapters whether any of them is an agent they know.
-//!
-//! Everything here is a guess that may be wrong, so it is cheap and it never
-//! fails: one `ps` per second for all panes at once, no reading of an agent's
-//! memory or file descriptors, and a pane whose processes cannot be read is
-//! left as it was.
+//! Hooks report agent changes immediately when installed. As a fallback,
+//! scan processes every thirty seconds, briefly using a one-second interval
+//! while new sessions start. Structural notifications wake an empty daemon
+//! without a timer, and ordinary metadata changes do not restart the scan.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -21,12 +15,50 @@ use otag_core::pane::PaneId;
 use otag_core::session::{AgentPane, Session};
 
 use crate::usage;
+use tokio::time::Instant;
 
-/// How often the processes are listed.
-///
-/// A second is below what a user notices and costs one short-lived process,
-/// which is less than the agent itself spends on one frame of its spinner.
-const INTERVAL: Duration = Duration::from_secs(1);
+const IDLE_INTERVAL: Duration = Duration::from_secs(30);
+const STARTING_INTERVAL: Duration = Duration::from_secs(1);
+const STARTING_WINDOW: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+struct ScanSchedule {
+    panes: HashSet<PaneId>,
+    starting_until: Option<Instant>,
+    next: Option<Instant>,
+}
+
+impl ScanSchedule {
+    fn update(&mut self, panes: HashSet<PaneId>, now: Instant) {
+        if panes.is_empty() {
+            self.next = None;
+            self.starting_until = None;
+        } else if panes.iter().any(|pane| !self.panes.contains(pane)) {
+            self.starting_until = Some(now + STARTING_WINDOW);
+            self.next = Some(now);
+        }
+        self.panes = panes;
+    }
+
+    fn scanned(&mut self, now: Instant) {
+        let starting = self.starting_until.is_some_and(|until| now < until);
+        self.next = Some(
+            now + if starting {
+                STARTING_INTERVAL
+            } else {
+                IDLE_INTERVAL
+            },
+        );
+    }
+
+    async fn wait(&self) {
+        if let Some(next) = self.next {
+            tokio::time::sleep_until(next).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    }
+}
 
 /// The arguments that list what is running, in the order the fields are read.
 ///
@@ -39,13 +71,25 @@ const PS: [&str; 3] = ["-ax", "-o", "pid=,ppid=,args="];
 /// Watch the panes for agents until the daemon stops.
 pub async fn keep_watching(session: Arc<Session>, shared: Arc<usage::Shared>) {
     let home = home_dir();
-    let mut ticks = tokio::time::interval(INTERVAL);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut changes = session.changes();
+    let mut schedule = ScanSchedule::default();
     let mut read = Read::default();
 
     loop {
-        ticks.tick().await;
-        watch_once(&session, home.as_deref(), &shared, &mut read).await;
+        let panes = session.summaries().iter().map(|pane| pane.id).collect();
+        schedule.update(panes, Instant::now());
+        if schedule.panes.is_empty() {
+            read.clear();
+        }
+        tokio::select! {
+            changed = changes.changed() => {
+                if changed.is_err() { return; }
+            }
+            () = schedule.wait() => {
+                watch_once(&session, home.as_deref(), &shared, &mut read).await;
+                schedule.scanned(Instant::now());
+            }
+        }
     }
 }
 
@@ -53,7 +97,7 @@ pub async fn keep_watching(session: Arc<Session>, shared: Arc<usage::Shared>) {
 #[derive(Debug, Default)]
 struct Seen {
     /// When its session file was last read, so an unchanged file is not
-    /// parsed again every second.
+    /// parsed again on each scan.
     at: Option<SystemTime>,
     /// What that file last said about the agent's turn, so only a change of
     /// state sets the pane's status.
@@ -422,6 +466,45 @@ mod tests {
         let processes = parse_ps("  10    10 -zsh\n");
         let tree = Tree::of(&processes);
         assert_eq!(tree.agent_in(10), None);
+    }
+
+    #[test]
+    fn scans_sleep_when_empty_and_slow_down_after_startup() {
+        let now = Instant::now();
+        let mut schedule = ScanSchedule::default();
+        schedule.update(HashSet::new(), now);
+        assert!(schedule.next.is_none(), "empty sessions have no deadline");
+
+        let panes = HashSet::from([PaneId::FIRST]);
+        schedule.update(panes.clone(), now);
+        assert_eq!(
+            schedule.next,
+            Some(now),
+            "new panes are scanned immediately"
+        );
+        schedule.scanned(now);
+        assert_eq!(schedule.next, Some(now + STARTING_INTERVAL));
+
+        // Metadata notifications must not keep resetting the startup window.
+        schedule.update(panes, now + STARTING_WINDOW);
+        schedule.scanned(now + STARTING_WINDOW);
+        assert_eq!(schedule.next, Some(now + STARTING_WINDOW + IDLE_INTERVAL));
+
+        schedule.update(HashSet::new(), now + STARTING_WINDOW);
+        assert!(schedule.next.is_none(), "the last pane removes the timer");
+    }
+
+    #[test]
+    fn adding_a_pane_wakes_a_slow_watcher_without_waiting_thirty_seconds() {
+        let now = Instant::now();
+        let mut schedule = ScanSchedule::default();
+        schedule.update(HashSet::from([PaneId::FIRST]), now);
+        schedule.scanned(now + STARTING_WINDOW);
+        let later = now + STARTING_WINDOW + Duration::from_secs(2);
+        schedule.update(HashSet::from([PaneId::FIRST, PaneId::FIRST.next()]), later);
+        assert_eq!(schedule.next, Some(later));
+        schedule.scanned(later);
+        assert_eq!(schedule.next, Some(later + STARTING_INTERVAL));
     }
 
     #[tokio::test]

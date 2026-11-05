@@ -168,6 +168,7 @@ public final class SessionStore {
     /// Forget the last notice.
     public func clearNotice() {
         notice = nil
+        noticePane = nil
         noticeWaiting?.cancel()
         noticeWaiting = nil
     }
@@ -178,6 +179,8 @@ public final class SessionStore {
     var noticeTimeout = SessionStore.defaultNoticeTimeout
 
     private var noticeWaiting: Task<Void, Never>?
+    private var noticePane: PaneID?
+    private var uiActive = true
 
     /// Say that a handoff happened, until the session it opened is there.
     ///
@@ -190,23 +193,22 @@ public final class SessionStore {
     private func note(handoff text: String, opened pane: PaneID) {
         clearNotice()
         guard !text.isEmpty else { return }
+        guard !panes.contains(where: { $0.id == pane }) else { return }
         notice = text
-
+        noticePane = pane
         noticeWaiting = Task { [weak self] in
             let waiting = self?.noticeTimeout ?? Self.defaultNoticeTimeout
-            let step = Duration.milliseconds(100)
-            var waited = Duration.zero
-            while waited < waiting {
-                try? await Task.sleep(for: step)
-                guard let self, !Task.isCancelled else { return }
-                waited += step
-                // The session it was telling the user about is on screen;
-                // the line has nothing left to say.
-                if panes.contains(where: { $0.id == pane }) { break }
-            }
+            try? await Task.sleep(for: waiting)
             guard let self, !Task.isCancelled else { return }
-            notice = nil
-            noticeWaiting = nil
+            clearNotice()
+        }
+    }
+
+    private func took(panes: [PaneInfo]) {
+        if self.panes != panes { self.panes = panes }
+        if !hasLoadedPanes { hasLoadedPanes = true }
+        if let pane = noticePane, panes.contains(where: { $0.id == pane }) {
+            clearNotice()
         }
     }
 
@@ -275,6 +277,7 @@ public final class SessionStore {
     /// spending tokens, so otag asks the daemon, never the agent.
     /// How often the app asks for the numbers again, in seconds.
     static let usageRefresh = 30
+    var usageRefreshInterval = Duration.seconds(SessionStore.usageRefresh)
 
     public func refreshUsage() {
         guard connection != nil else { return }
@@ -303,12 +306,14 @@ public final class SessionStore {
 
     /// Take in a usage report, however it arrived.
     private func took(_ report: UsageReport) {
-        usage = report
+        if usage != report {
+            usage = report
+            remember(report)
+        }
         usageUpdatedAt = Date()
         refreshingUsage = false
         answerWaiting?.cancel()
         answerWaiting = nil
-        remember(report)
     }
 
     /// Forget the report, so the window can be opened fresh.
@@ -323,7 +328,25 @@ public final class SessionStore {
         listening = Task { [weak self] in
             await self?.run()
         }
-        guard refreshing == nil else { return }
+        startUsageRefresh()
+    }
+
+    /// Pause periodic UI work while all main windows are hidden or minimized.
+    /// The event subscription stays connected for inbox notifications.
+    public func setUIActive(_ active: Bool) {
+        guard uiActive != active else { return }
+        uiActive = active
+        if active {
+            if case .connected = state { refreshUsage() }
+            startUsageRefresh()
+        } else {
+            refreshing?.cancel()
+            refreshing = nil
+        }
+    }
+
+    private func startUsageRefresh() {
+        guard uiActive, listening != nil, refreshing == nil else { return }
         refreshing = Task { [weak self] in
             await self?.keepUsageCurrent()
         }
@@ -337,7 +360,7 @@ public final class SessionStore {
     /// request and usually no redraw at all.
     private func keepUsageCurrent() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(Self.usageRefresh))
+            try? await Task.sleep(for: usageRefreshInterval)
             if Task.isCancelled { return }
             guard case .connected = state else { continue }
             refreshUsage()
@@ -349,6 +372,7 @@ public final class SessionStore {
         handoffSettled()
         noticeWaiting?.cancel()
         noticeWaiting = nil
+        noticePane = nil
         listening?.cancel()
         listening = nil
         refreshing?.cancel()
@@ -416,8 +440,7 @@ public final class SessionStore {
         case let .event(event):
             apply(event)
         case let .panes(panes):
-            self.panes = panes
-            hasLoadedPanes = true
+            took(panes: panes)
         case let .usage(report):
             took(report)
         case let .inbox(asks):
@@ -480,8 +503,7 @@ public final class SessionStore {
     private func apply(_ event: Event) {
         switch event {
         case let .panes(panes):
-            self.panes = panes
-            hasLoadedPanes = true
+            took(panes: panes)
         case let .usage(report):
             took(report)
         case let .asked(ask):

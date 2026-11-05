@@ -79,6 +79,27 @@ struct RefreshTests {
         #expect(!store.refreshingUsage, "there is nobody to answer, so nothing is pending")
     }
 
+    @Test("hidden windows suspend periodic usage work and restoring refreshes once")
+    func hiddenWindowsPauseRefresh() async throws {
+        let silent = try SilentSocket()
+        defer { silent.stop() }
+        let store = SessionStore(socket: silent.url)
+        store.usageRefreshInterval = .milliseconds(100)
+        store.usageTimeout = .milliseconds(200)
+        store.setUIActive(false)
+        store.start()
+        defer { store.disconnect() }
+        try await until("the store connects") { store.state == .connected }
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(!store.refreshingUsage, "a hidden window does not poll")
+        store.setUIActive(true)
+        #expect(store.refreshingUsage, "restoring asks for a fresh reading immediately")
+        store.setUIActive(false)
+        try await until("the last request times out") { !store.refreshingUsage }
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(!store.refreshingUsage, "the refresh task stays cancelled")
+    }
+
     /// Wait for something to become true, or fail saying what did not.
     @discardableResult
     private func until(_ what: String, _ ready: () -> Bool) async throws {

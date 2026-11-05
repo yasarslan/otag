@@ -97,7 +97,7 @@ struct HandoffNoticeTests {
         // the line was about.
         let opened = try JSONDecoder().decode(PaneInfo.self, from: Data(#"{"id":7}"#.utf8))
         store.apply(.panes([opened]))
-        try await until("the line to go by itself") { store.notice == nil }
+        #expect(store.notice == nil, "the pane event clears the line without polling")
     }
 
     @Test("a line whose session never arrives still goes")

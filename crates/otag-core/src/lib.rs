@@ -11,6 +11,7 @@ pub mod frame;
 pub mod layout;
 pub mod pane;
 pub mod paths;
+pub mod process;
 pub mod proto;
 pub mod pty;
 pub mod raw;

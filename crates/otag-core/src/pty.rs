@@ -138,6 +138,15 @@ impl Pty {
 
     /// Ask the program to stop.
     pub fn kill(&mut self) {
+        // portable-pty's killer targets only the initial shell. Foreground
+        // jobs may have their own groups; daemon shutdown also walks those
+        // descendants before the shell can disappear.
+        if let Some(pid) = self.pid {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pid as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
         if let Err(error) = self.killer.kill() {
             // A process that has already exited cannot be killed, which is
             // the common case here and not worth reporting.

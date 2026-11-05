@@ -3,6 +3,7 @@
 
 mod agents;
 mod attach;
+mod cleanup;
 mod cli;
 mod client;
 mod daemon;

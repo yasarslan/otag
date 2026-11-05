@@ -1,5 +1,8 @@
 //! The daemon: owns the socket, the panes, and the programs running on them.
 
+use nix::fcntl::{Flock, FlockArg};
+use nix::unistd::{Pid, getppid};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -8,7 +11,7 @@ use otag_agents::approval::Answer;
 use otag_agents::{AgentKind, SessionRef, claude, hooks};
 use otag_core::attach;
 use otag_core::pane::{PaneId, PaneSize, PaneSpec};
-use otag_core::paths::{Dirs, SOCKET_ENV};
+use otag_core::paths::SOCKET_ENV;
 use otag_core::proto::{AskView, Event, Handoff as ProtoHandoff, PaneUsage, Request, Response};
 use otag_core::raw;
 use otag_core::server::{Handler, Outbox, Server};
@@ -18,11 +21,37 @@ use otag_features::inbox::{AskId, Inbox};
 use crate::{agents, events, guard, handoff, inbox, nightshift, notify, persist, usage};
 
 /// Run the daemon in the foreground until it is asked to stop.
-pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
+pub fn run(
+    socket: &Path,
+    state: &Path,
+    parent: Option<u32>,
+    log_filter: Option<&str>,
+) -> Result<()> {
+    // The lock precedes logs, socket binding and restore. Never unlink it:
+    // replacing a locked inode would let a second daemon open the database.
+    std::fs::create_dir_all(state).context("cannot create the daemon state directory")?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state.join("daemon.lock"))
+        .context("cannot open the daemon state lock")?;
+    let _state_lock = Flock::lock(file, FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, error)| anyhow::anyhow!("another otag daemon owns state directory {} ({error}); stop it before starting another", state.display()))?;
+    std::fs::write(state.join("daemon.pid"), std::process::id().to_string())?;
+    let parent = parent.map(|pid| {
+        if pid == 0 {
+            getppid().as_raw()
+        } else {
+            pid as i32
+        }
+    });
     // Keep the guard alive for the whole run so buffered log lines are
     // flushed before the process exits.
-    let _log_guard = match Dirs::from_env().log_dir() {
-        Ok(log_dir) => Some(crate::logging::init_daemon(&log_dir, log_filter)?),
+    let log_dir = state.join("logs");
+    let _log_guard = match std::fs::create_dir_all(&log_dir) {
+        Ok(()) => Some(crate::logging::init_daemon(&log_dir, log_filter)?),
         Err(error) => {
             // Without a log directory the daemon still runs; it just logs to
             // stderr, which `otag` redirects to a file when it spawns us.
@@ -37,10 +66,10 @@ pub fn run(socket: &Path, log_filter: Option<&str>) -> Result<()> {
         .build()
         .context("cannot start the async runtime")?;
 
-    runtime.block_on(serve(socket))
+    runtime.block_on(serve(socket, state, parent))
 }
 
-async fn serve(socket: &Path) -> Result<()> {
+async fn serve(socket: &Path, state: &Path, parent: Option<i32>) -> Result<()> {
     let server = Server::bind(socket)
         .await
         .with_context(|| format!("cannot start the otag daemon on {}", socket.display()))?;
@@ -52,7 +81,7 @@ async fn serve(socket: &Path) -> Result<()> {
 
     // Persistence is a convenience, not a requirement: a daemon that cannot
     // save its state still runs the user's panes.
-    let snapshots = open_snapshots();
+    let snapshots = open_snapshots(state);
     let saving = match &snapshots {
         Some(snapshots) => {
             persist::restore(&session, snapshots).await;
@@ -128,7 +157,15 @@ async fn serve(socket: &Path) -> Result<()> {
         inbox,
         handoffs,
     };
-    let result = server.run_until(daemon, terminate_signal()).await;
+    let socket_identity = std::fs::metadata(socket).context("cannot inspect the bound socket")?;
+    let result = server
+        .run_until(daemon, async {
+            tokio::select! {
+                () = terminate_signal() => {},
+                () = lifetime(socket, &socket_identity, parent) => {},
+            }
+        })
+        .await;
     guarding.abort();
     watching.abort();
     notifying.abort();
@@ -145,22 +182,21 @@ async fn serve(socket: &Path) -> Result<()> {
         persist::save_usage(&shared_usage, snapshots).await;
     }
 
+    let daemon_pid = std::process::id() as i32;
+    match tokio::task::spawn_blocking(move || otag_core::process::terminate_children(daemon_pid))
+        .await
+    {
+        Ok(Ok(())) => {}
+        other => tracing::error!(?other, "cannot finish stopping the pane process trees"),
+    }
     tracing::info!("otag daemon stopped");
     result.context("the otag daemon stopped with an error")
 }
 
 /// Open the snapshot database, or report why the daemon will not remember
 /// anything.
-fn open_snapshots() -> Option<persist::Snapshots> {
-    let state_dir = match Dirs::from_env().state_dir() {
-        Ok(state_dir) => state_dir,
-        Err(error) => {
-            tracing::warn!(%error, "otag will not remember this session");
-            return None;
-        }
-    };
-
-    match persist::Snapshots::open(state_dir.join(otag_persist::DATABASE_FILE_NAME)) {
+fn open_snapshots(state: &Path) -> Option<persist::Snapshots> {
+    match persist::Snapshots::open(state.join(otag_persist::DATABASE_FILE_NAME)) {
         Ok(snapshots) => {
             tracing::info!(database = %snapshots.path().display(), "otag is saving its state");
             Some(snapshots)
@@ -169,6 +205,39 @@ fn open_snapshots() -> Option<persist::Snapshots> {
             tracing::warn!(%error, "otag will not remember this session");
             None
         }
+    }
+}
+
+/// A forgotten test socket or a dead launching process is a shutdown request.
+async fn lifetime(socket: &Path, identity: &std::fs::Metadata, parent: Option<i32>) {
+    let parent_identity = parent.and_then(|pid| {
+        otag_core::process::table()
+            .ok()?
+            .into_iter()
+            .find(|p| p.pid == pid)
+    });
+    loop {
+        let exists = std::fs::metadata(socket)
+            .is_ok_and(|now| now.dev() == identity.dev() && now.ino() == identity.ino());
+        if !exists {
+            return;
+        }
+        if let Some(pid) = parent {
+            if pid <= 1 || nix::sys::signal::kill(Pid::from_raw(pid), None).is_err() {
+                return;
+            }
+            if let Some(identity) = &parent_identity {
+                match otag_core::process::table() {
+                    Ok(all) if !all.iter().any(|p| identity.same(p)) => return,
+                    Err(error) => {
+                        tracing::warn!(%error, "cannot verify the daemon parent");
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }
 

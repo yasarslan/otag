@@ -177,7 +177,7 @@ final class Collected {
 }
 
 /// A daemon of its own, in a home directory of its own.
-struct Daemonless {
+final class Daemonless {
     /// The `otag` binary a development build leaves in `target/debug`.
     static let binary: URL? = {
         // .../app/Tests/OtagKitTests/StreamTests.swift → the repository root.
@@ -206,7 +206,7 @@ struct Daemonless {
         // Short on purpose: a unix socket's whole path has to fit in about
         // a hundred characters, and the temporary directory uses most of it.
         let suffix = String(UUID().uuidString.prefix(8))
-        home = URL(fileURLWithPath: NSTemporaryDirectory())
+        home = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OTAG_TEST_RUN_DIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent("otag-\(suffix)")
         project = home.appendingPathComponent("project")
         socket = home.appendingPathComponent("otag.sock")
@@ -221,11 +221,17 @@ struct Daemonless {
     private static func spawn(home: URL, socket: URL) throws -> Process {
         let process = Process()
         process.executableURL = try #require(Self.binary)
-        process.arguments = ["daemon", "--socket", socket.path]
+        process.arguments = ["daemon", "--socket", socket.path,
+                             "--state", home.appendingPathComponent("state").path,
+                             "--exit-with-parent", String(ProcessInfo.processInfo.processIdentifier)]
         process.environment = [
             "HOME": home.path,
+            "SHELL": "/bin/sh",
             "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
             "OTAG_NO_NOTIFY": "1",
+            "OTAG_STATE_DIR": home.appendingPathComponent("state").path,
+            "XDG_STATE_HOME": home.appendingPathComponent("xdg-state").path,
+            "XDG_RUNTIME_DIR": home.appendingPathComponent("run").path,
         ]
         // Kept, so a daemon that will not start can say why. Appended to, so
         // a restart does not throw away what the first one said.
@@ -238,14 +244,14 @@ struct Daemonless {
         process.standardOutput = output
         process.standardError = output
         try process.run()
+        output.closeFile()
         return process
     }
 
     /// Stop the daemon and start another one on the same socket, with the
     /// same state directory, which is what an upgrade looks like.
-    mutating func restart() throws {
-        process.terminate()
-        process.waitUntilExit()
+    func restart() throws {
+        stopProcess()
         process = try Self.spawn(home: home, socket: socket)
     }
 
@@ -255,7 +261,22 @@ struct Daemonless {
     }
 
     func stop() {
-        process.terminate()
+        stopProcess()
         try? FileManager.default.removeItem(at: home)
     }
+
+    private func stopProcess() {
+        guard process.isRunning else { return }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            Issue.record("test daemon ignored shutdown and required SIGKILL")
+        }
+        process.waitUntilExit()
+        #expect(!process.isRunning, "test daemon must be gone before fixture cleanup")
+    }
+
+    deinit { stop() }
 }

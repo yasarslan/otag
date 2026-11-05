@@ -50,13 +50,13 @@ const SIZE_CHECK: Duration = Duration::from_secs(1);
 const NOTICE: Duration = Duration::from_secs(8);
 
 /// Attach to the session and draw it until the user detaches or it ends.
-pub async fn run(socket: &Path) -> Result<()> {
+pub async fn run(socket: &Path, state: &Path) -> Result<()> {
     // Checked before anything else: a client that cannot draw should not
     // start a daemon, and the failure should reach the user plainly rather
     // than from inside a terminal that has already been taken over.
     otag_ui::terminal::require().context("cannot attach to a session")?;
 
-    crate::client::ensure_daemon(socket).await?;
+    crate::client::ensure_daemon(socket, state).await?;
 
     otag_ui::terminal::install_panic_hook();
     let mut guard = Guard::enter().context("cannot prepare the terminal for otag")?;

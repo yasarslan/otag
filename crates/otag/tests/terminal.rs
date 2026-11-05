@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use otag_core::layout::{Area, BORDER, Chrome, Direction, Layout};
 use otag_core::pane::{PaneId, PaneSize};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
-use tempfile::TempDir;
+mod common;
+use common::TestHome as TempDir;
 
 /// Path of the binary under test, provided by Cargo.
 const OTAG: &str = env!("CARGO_BIN_EXE_otag");
@@ -55,6 +56,7 @@ impl Terminal {
             .expect("a pseudo-terminal");
 
         let mut command = CommandBuilder::new(OTAG);
+        common::configure_pty(&mut command, home.path(), &socket);
         command.env("HOME", home.path());
         command.env("OTAG_SOCKET", &socket);
         command.env("TERM", "xterm-256color");
@@ -352,12 +354,14 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
         // Never leave a daemon behind, even if the test failed.
         let _ = std::process::Command::new(OTAG)
             .args(["kill-server", "--socket"])
             .arg(&self.socket)
             .env("HOME", self._home.path())
             .output();
+        self._home.stop();
     }
 }
 
@@ -458,7 +462,9 @@ fn answer_queries(
 
 /// Run an otag command and return its output.
 fn run_otag(home: &Path, socket: &Path, arguments: &[&str]) -> String {
-    let output = std::process::Command::new(OTAG)
+    let mut command = std::process::Command::new(OTAG);
+    common::configure(&mut command, home, socket);
+    let output = command
         .args(arguments)
         .arg("--socket")
         .arg(socket)

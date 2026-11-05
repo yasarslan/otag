@@ -40,7 +40,7 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Test
-        run: cargo test --all --all-features --locked
+        run: python3 scripts/check-test-daemons.py -- cargo test --all --all-features --locked
 
       - name: Build documentation
         run: cargo doc --no-deps --all-features --locked
@@ -109,7 +109,7 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Test
-        run: cargo test --all --all-features --locked
+        run: python3 scripts/check-test-daemons.py -- cargo test --all --all-features --locked
 
       # The macOS app is a client of the same daemon, so it is built and
       # tested wherever the daemon is.
@@ -117,7 +117,7 @@ jobs:
         run: swift build --package-path app
 
       - name: Test the app
-        run: swift test --package-path app
+        run: python3 scripts/check-test-daemons.py -- swift test --package-path app
 
       - name: Bundle the app
         run: ./scripts/bundle-app.sh --debug

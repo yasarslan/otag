@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Test daemons use isolated sockets, state and home directories and are reaped
+  on fixture teardown or parent loss. Custom sockets no longer open the real
+  session database. Daemons lock their state directory, stop when their socket
+  disappears, and terminate owned pane process trees on shutdown. `otag cleanup`
+  lists and, after confirmation, stops stray daemons and their children.
 - Handoff sessions inherit their source session's name with the receiving
   agent in parentheses, and keep its nickname, instead of being named after
   otag's instruction to read the handoff package.

@@ -13,9 +13,23 @@ import Testing
 @Suite("Reconnecting to the daemon", .enabled(if: Daemonless.binary != nil))
 @MainActor
 struct ReconnectTests {
+    @Test("a missing custom socket never starts the installed daemon")
+    func missingFixtureDoesNotAutostart() async throws {
+        let daemon = try Daemonless()
+        defer { daemon.stop() }
+        let connection = try await connect(to: daemon.socket)
+        connection.close()
+        let store = SessionStore(socket: daemon.socket)
+        store.start()
+        defer { store.disconnect() }
+        daemon.stop()
+        try await Task.sleep(for: .seconds(3))
+        #expect(!FileManager.default.fileExists(atPath: daemon.socket.path),
+                "reconnection must not create a replacement daemon for a test fixture")
+    }
     @Test("a pane is picked up again, with its screen, after the daemon restarts")
     func reattachesAfterARestart() async throws {
-        var daemon = try Daemonless()
+        let daemon = try Daemonless()
         defer { daemon.stop() }
 
         let connection = try await connect(to: daemon.socket)

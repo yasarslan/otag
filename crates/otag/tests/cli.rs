@@ -9,7 +9,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use tempfile::TempDir;
+mod common;
+use common::TestHome as TempDir;
 
 /// Path of the binary under test, provided by Cargo.
 const OTAG: &str = env!("CARGO_BIN_EXE_otag");
@@ -46,12 +47,11 @@ impl Sandbox {
     /// testing the `--socket` flag.
     fn bare_otag(&self) -> Command {
         let mut command = Command::new(OTAG);
+        common::configure(&mut command, self.home(), &self.socket());
         command
             .env("HOME", self.home())
             .env_remove("OTAG_SOCKET")
-            .env_remove("OTAG_LOG")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("XDG_STATE_HOME");
+            .env_remove("OTAG_LOG");
         command
     }
 }

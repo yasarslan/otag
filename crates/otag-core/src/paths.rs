@@ -17,6 +17,9 @@ pub const SOCKET_FILE_NAME: &str = "otag.sock";
 /// Environment variable that overrides the socket path.
 pub const SOCKET_ENV: &str = "OTAG_SOCKET";
 
+/// Environment variable selecting an explicit, isolated state directory.
+pub const STATE_ENV: &str = "OTAG_STATE_DIR";
+
 /// Operating-system conventions otag follows when placing its files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -41,6 +44,8 @@ impl Platform {
 /// it directly in tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dirs {
+    /// Explicit state directory; unlike XDG_STATE_HOME no suffix is added.
+    pub state_override: Option<PathBuf>,
     /// Value of `OTAG_SOCKET`, which overrides the socket path entirely.
     pub socket_override: Option<PathBuf>,
     /// Value of `HOME`.
@@ -60,6 +65,7 @@ impl Dirs {
     /// matching the XDG specification.
     pub fn from_env() -> Self {
         Self {
+            state_override: env_path(STATE_ENV, true),
             socket_override: env_path(SOCKET_ENV, false),
             home: env_path("HOME", true),
             runtime_dir: env_path("XDG_RUNTIME_DIR", true),
@@ -71,6 +77,7 @@ impl Dirs {
     /// A [`Dirs`] with no environment values at all, for tests and defaults.
     pub fn empty(platform: Platform) -> Self {
         Self {
+            state_override: None,
             socket_override: None,
             home: None,
             runtime_dir: None,
@@ -101,6 +108,9 @@ impl Dirs {
     /// Directory holding otag's persistent state, such as the snapshot
     /// database.
     pub fn state_dir(&self) -> Result<PathBuf> {
+        if let Some(state) = &self.state_override {
+            return Ok(state.clone());
+        }
         match self.platform {
             Platform::MacOs => Ok(self
                 .home_dir("state")?
@@ -121,6 +131,22 @@ impl Dirs {
     /// Directory holding the daemon's log files.
     pub fn log_dir(&self) -> Result<PathBuf> {
         Ok(self.state_dir()?.join("logs"))
+    }
+
+    /// Resolve daemon storage without sharing the real database with a custom
+    /// socket. Only an explicit state override may opt into sharing storage.
+    pub fn daemon_state_dir(&self, socket: &Path) -> Result<PathBuf> {
+        if let Some(state) = &self.state_override {
+            return Ok(state.clone());
+        }
+        let mut defaults = self.clone();
+        defaults.socket_override = None;
+        if defaults.socket_path().ok().as_deref() == Some(socket) {
+            return self.state_dir();
+        }
+        let mut state = socket.as_os_str().to_os_string();
+        state.push(".state");
+        Ok(PathBuf::from(state))
     }
 
     fn home_dir(&self, what: &'static str) -> Result<&Path> {
@@ -208,6 +234,29 @@ mod tests {
         assert_eq!(
             dirs.log_dir().expect("resolves"),
             PathBuf::from("/home/testuser/Library/Application Support/otag/logs")
+        );
+    }
+
+    #[test]
+    fn custom_socket_storage_is_private_even_with_the_real_home_available() {
+        let dirs = macos();
+        let socket = Path::new("/tmp/fixture/otag.sock");
+        assert_eq!(
+            dirs.daemon_state_dir(socket).expect("private state"),
+            PathBuf::from("/tmp/fixture/otag.sock.state")
+        );
+        let default = dirs.socket_path().expect("default socket");
+        assert_eq!(
+            dirs.daemon_state_dir(&default).expect("default state"),
+            dirs.state_dir().expect("state")
+        );
+        let explicit = Dirs {
+            state_override: Some(PathBuf::from("/tmp/chosen-state")),
+            ..dirs
+        };
+        assert_eq!(
+            explicit.daemon_state_dir(socket).expect("explicit state"),
+            PathBuf::from("/tmp/chosen-state")
         );
     }
 

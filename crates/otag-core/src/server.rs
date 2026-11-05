@@ -142,6 +142,7 @@ where
 pub struct Server {
     listener: UnixListener,
     path: PathBuf,
+    identity: std::fs::Metadata,
     shutdown: Arc<Notify>,
 }
 
@@ -163,11 +164,14 @@ impl Server {
         let listener = UnixListener::bind(&path)
             .map_err(|source| Error::io(format!("cannot bind the otag socket {path:?}"), source))?;
         set_mode(&path, SOCKET_MODE)?;
+        let identity = std::fs::metadata(&path)
+            .map_err(|source| Error::io("cannot inspect the daemon socket", source))?;
 
         tracing::info!(socket = %path.display(), "otag daemon listening");
         Ok(Self {
             listener,
             path,
+            identity,
             shutdown: Arc::new(Notify::new()),
         })
     }
@@ -189,7 +193,7 @@ impl Server {
     /// Accept errors are logged and retried, so a transient failure does not
     /// take the daemon down.
     pub async fn run_until<H: Handler>(
-        self,
+        &self,
         handler: H,
         shutdown: impl Future<Output = ()>,
     ) -> Result<()> {
@@ -200,23 +204,26 @@ impl Server {
         // alive across iterations: a shutdown requested while the loop is busy
         // elsewhere must not be missed.
         let mut requested = std::pin::pin!(notify.notified());
+        let (closing, closed) = watch::channel(false);
+        let mut connections = tokio::task::JoinSet::new();
 
         loop {
             tokio::select! {
                 () = &mut requested => {
                     tracing::info!("shutdown requested, otag daemon stopping");
-                    return Ok(());
+                    break;
                 }
                 () = &mut shutdown => {
                     tracing::info!("shutdown signal received, otag daemon stopping");
-                    return Ok(());
+                    break;
                 }
                 accepted = self.listener.accept() => match accepted {
                     Ok((stream, _addr)) => {
                         let handler = Arc::clone(&handler);
                         let notify = Arc::clone(&notify);
-                        tokio::spawn(async move {
-                            if let Err(error) = serve_connection(stream, handler, notify).await {
+                        let closed = closed.clone();
+                        connections.spawn(async move {
+                            if let Err(error) = serve_connection(stream, handler, notify, closed).await {
                                 tracing::warn!(%error, "otag connection ended with an error");
                             }
                         });
@@ -225,8 +232,21 @@ impl Server {
                         tracing::warn!(%error, "cannot accept an otag connection");
                     }
                 },
+                _ = connections.join_next(), if !connections.is_empty() => {},
             }
         }
+        // Close client streams before the daemon stops pane processes. A
+        // shutdown is a lost connection, not an ordinary pane-ended event.
+        let _ = closing.send(true);
+        if tokio::time::timeout(DRAIN_TIMEOUT + Duration::from_millis(100), async {
+            while connections.join_next().await.is_some() {}
+        })
+        .await
+        .is_err()
+        {
+            connections.shutdown().await;
+        }
+        Ok(())
     }
 
     /// Serve requests until a client asks the daemon to shut down.
@@ -237,6 +257,12 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        if !std::fs::metadata(&self.path)
+            .is_ok_and(|now| now.ino() == self.identity.ino() && now.dev() == self.identity.dev())
+        {
+            return;
+        }
         // Leaving the socket behind would make the next start look like a
         // crashed daemon, so remove it. A failure here is not worth an error.
         if let Err(error) = std::fs::remove_file(&self.path)
@@ -273,6 +299,7 @@ async fn serve_connection<H: Handler>(
     stream: UnixStream,
     handler: Arc<H>,
     shutdown: Arc<Notify>,
+    mut closing: watch::Receiver<bool>,
 ) -> Result<()> {
     let (read_half, write_half) = stream.into_split();
     let (messages_tx, messages_rx) = mpsc::channel(OUTBOX_QUEUE);
@@ -282,9 +309,13 @@ async fn serve_connection<H: Handler>(
         messages: messages_tx,
         finished: finished_rx,
     };
-    let mut writer = tokio::spawn(write_messages(write_half, messages_rx));
+    let mut writer = std::pin::pin!(write_messages(write_half, messages_rx));
 
-    let result = read_requests(read_half, handler, shutdown, &outbox).await;
+    let result = tokio::select! {
+        result = read_requests(read_half, handler, shutdown, &outbox) => result,
+        _ = closing.changed() => Ok(()),
+        result = &mut writer => return result,
+    };
 
     // Tell everything pushing messages to this client to stop, then drop the
     // last outbox so the writer sees the end of the queue.
@@ -295,11 +326,10 @@ async fn serve_connection<H: Handler>(
     // gets written, and a task that ignores the end of the connection cannot
     // hold this one open.
     match tokio::time::timeout(DRAIN_TIMEOUT, &mut writer).await {
-        Ok(Ok(Err(error))) => return Err(error),
+        Ok(Err(error)) => return Err(error),
         Ok(_) => {}
         Err(_) => {
             tracing::debug!("giving up on writing the rest of a client's messages");
-            writer.abort();
         }
     }
     result

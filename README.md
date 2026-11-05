@@ -211,6 +211,7 @@ otag uninstall-hooks      # take it out again
 otag ping                 # check the daemon, starting it if needed
 otag version              # this binary's version, and the daemon's
 otag kill-server          # stop the daemon and its panes
+otag cleanup              # list stray daemons and ask before stopping them
 otag daemon               # run the daemon in the foreground, for debugging
 ```
 
@@ -221,6 +222,7 @@ There is no configuration file yet. These environment variables work today:
 | Variable | What it does |
 |---|---|
 | `OTAG_SOCKET` | Path of the daemon's socket |
+| `OTAG_STATE_DIR` | Explicit directory for the daemon's database and logs |
 | `OTAG_LOG` | Log filter, for example `debug` or `otag_core=trace` |
 | `OTAG_NO_NOTIFY` | Set it to turn desktop notifications off |
 
@@ -229,6 +231,20 @@ socket, its state database and its log live under
 `~/Library/Application Support/otag/` on macOS, and under `$XDG_STATE_HOME`
 (or `~/.local/state/otag/`) on Linux, with the socket in `$XDG_RUNTIME_DIR`
 where there is one.
+
+`--state DIR` (or `OTAG_STATE_DIR`) chooses a different database and log
+directory. A custom `--socket PATH` without a state override uses `PATH.state`,
+so it cannot accidentally restore your normal sessions. One daemon may own a
+state directory at a time. `daemon --exit-with-parent` stops when its launcher
+exits; an optional PID selects another parent to follow. Removing the listening
+socket also stops the daemon and its pane process trees.
+
+`otag cleanup` shows daemons on nondefault sockets and their descendants,
+then asks before stopping them (`--yes` skips the question). The default daemon,
+unrelated processes, and the daemon owning the cleanup command itself are
+protected. To remove that last daemon, run cleanup from an independent terminal.
+`--state DIR cleanup` limits recovery to that state directory. Old stray daemons
+are stopped without saving their accidental restored sessions back to disk.
 
 Handoff packages are written to `.otag/handoff/` inside the project they
 belong to, and a worktree the app makes for a session goes to

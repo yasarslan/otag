@@ -21,19 +21,22 @@ public enum Daemon {
     }
 
     /// Connect to the daemon, starting one if none is listening.
-    public static func connect(socket: URL) async throws -> DaemonConnection {
+    public static func connect(socket: URL, startIfNeeded: Bool = true) async throws -> DaemonConnection {
         if let connection = try? DaemonConnection(socket: socket) {
             return connection
         }
 
+        try Task.checkCancellation()
+        guard startIfNeeded else { throw DaemonError.disconnected }
         try start(socket: socket)
 
         let deadline = ContinuousClock.now + startupTimeout
         while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
             if let connection = try? DaemonConnection(socket: socket) {
                 return connection
             }
-            try? await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(for: .milliseconds(100))
         }
         throw DaemonError.didNotStart(path: socket.path)
     }

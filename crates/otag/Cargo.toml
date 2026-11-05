@@ -23,6 +23,7 @@ otag-features = { workspace = true }
 otag-persist = { workspace = true }
 otag-ui = { workspace = true }
 anyhow = { workspace = true }
+nix = { workspace = true }
 clap = { workspace = true }
 crossterm = { workspace = true }
 serde_json = { workspace = true }

@@ -1084,6 +1084,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "nix 0.29.0",
  "otag-agents",
  "otag-core",
  "otag-features",
@@ -1115,6 +1116,7 @@ name = "otag-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "nix 0.29.0",
  "otag-agents",
  "otag-features",
  "portable-pty",

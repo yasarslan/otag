@@ -19,6 +19,15 @@ pub struct Cli {
     #[arg(long, value_name = "PATH", global = true)]
     socket: Option<PathBuf>,
 
+    /// Persistent data directory. Defaults to OTAG_STATE_DIR; custom sockets
+    /// otherwise get a private directory beside the socket.
+    #[arg(long, value_name = "DIR", global = true)]
+    state: Option<PathBuf>,
+
+    /// Exit when the starting process (or the supplied PID) dies.
+    #[arg(long, num_args = 0..=1, default_missing_value = "0", global = true)]
+    exit_with_parent: Option<u32>,
+
     /// Log filter, in the `tracing` syntax, for example `debug` or
     /// `otag_core=trace`. Defaults to the `OTAG_LOG` environment variable.
     #[arg(long, value_name = "FILTER", global = true)]
@@ -43,6 +52,12 @@ pub enum Command {
     Daemon,
     /// Stop the daemon.
     KillServer,
+    /// List stray otag daemons and their descendants, then ask to stop them.
+    Cleanup {
+        /// Stop the listed stray daemons without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// List workspaces and panes.
     Ls,
     /// Hand a pane's work to another agent, or to another model.
@@ -109,17 +124,26 @@ pub enum Command {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let socket = cli.socket_path()?;
+    let mut dirs = Dirs::from_env();
+    if let Some(state) = &cli.state {
+        dirs.state_override = Some(std::path::absolute(state)?);
+    }
+    let state = dirs.daemon_state_dir(&socket)?;
+    let parent = cli
+        .exit_with_parent
+        .or_else(|| std::env::var("OTAG_EXIT_WITH_PARENT").ok()?.parse().ok());
 
     match cli.command.unwrap_or(Command::Attach) {
         Command::Attach => {
             logging::init_client(cli.log.as_deref());
-            client_runtime()?.block_on(crate::attach::run(&socket))
+            client_runtime()?.block_on(crate::attach::run(&socket, &state))
         }
         Command::Ping => {
             logging::init_client(cli.log.as_deref());
-            client_runtime()?.block_on(crate::client::ping(&socket))
+            client_runtime()?.block_on(crate::client::ping(&socket, &state))
         }
-        Command::Daemon => crate::daemon::run(&socket, cli.log.as_deref()),
+        Command::Daemon => crate::daemon::run(&socket, &state, parent, cli.log.as_deref()),
+        Command::Cleanup { yes } => crate::cleanup::run(yes, dirs.state_override.as_deref()),
         Command::KillServer => {
             logging::init_client(cli.log.as_deref());
             client_runtime()?.block_on(crate::client::kill_server(&socket))
@@ -176,9 +200,13 @@ impl Cli {
     /// Resolve the socket path from the flag, the environment, or the
     /// platform's conventions, in that order.
     fn socket_path(&self) -> Result<PathBuf> {
+        let mut dirs = Dirs::from_env();
+        if let Some(state) = &self.state {
+            dirs.state_override = Some(std::path::absolute(state)?);
+        }
         match &self.socket {
             Some(path) => Ok(path.clone()),
-            None => Dirs::from_env().socket_path().with_context(|| {
+            None => dirs.socket_path().with_context(|| {
                 format!("pass --socket or set {SOCKET_ENV} to choose the socket path")
             }),
         }

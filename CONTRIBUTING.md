@@ -15,7 +15,7 @@ open an issue describing what you want to do before writing a large patch.
 
 ```sh
 cargo build
-cargo test
+python3 scripts/check-test-daemons.py -- cargo test
 ```
 
 Before opening a pull request, run the same checks CI runs:
@@ -23,7 +23,7 @@ Before opening a pull request, run the same checks CI runs:
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all
+python3 scripts/check-test-daemons.py -- cargo test --all
 cargo deny check          # cargo install cargo-deny
 cargo doc --no-deps --all-features
 ```
@@ -38,12 +38,19 @@ so it is built and tested separately:
 
 ```sh
 swift build --package-path app
-swift test --package-path app
+python3 scripts/check-test-daemons.py -- swift test --package-path app
 ./scripts/bundle-app.sh            # assembles target/Otag.app
 ```
 
 The bundle carries the daemon it was built with in `Contents/Resources`, and
 signing is ad-hoc, which is enough to run it on the machine that built it.
+
+The test wrapper gives each run a unique temporary namespace and fails if an
+otag daemon remains after the suite. Binary integration tests use the shared
+Rust `tests/common` helper; Swift daemon tests use `Daemonless`. Both provide
+temporary HOME, socket and state directories, parent-loss monitoring and
+kill-on-drop teardown. Never start a daemon through an unguarded process or
+enable app autostart for a test socket.
 
 ## Code expectations
 

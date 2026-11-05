@@ -77,9 +77,13 @@ public final class SessionStore {
     private var listening: Task<Void, Never>?
     private var refreshing: Task<Void, Never>?
     private var answerWaiting: Task<Void, Never>?
+    private let startDaemon: Bool
 
-    public init(socket: URL = Paths.socket()) {
+    public init(socket: URL = Paths.socket(), startDaemon: Bool? = nil) {
         self.socket = socket
+        // A custom socket belongs to an external daemon or a test fixture.
+        // Never spawn the installed binary with the real HOME for that socket.
+        self.startDaemon = startDaemon ?? (socket == Paths.socket())
     }
 
     /// The sessions grouped by project, in the order the daemon lists them.
@@ -372,7 +376,7 @@ public final class SessionStore {
         while !Task.isCancelled {
             state = .connecting
             do {
-                let connection = try await Daemon.connect(socket: socket)
+                let connection = try await Daemon.connect(socket: socket, startIfNeeded: startDaemon)
                 self.connection = connection
                 try connection.send(.subscribe)
                 try connection.send(.version)

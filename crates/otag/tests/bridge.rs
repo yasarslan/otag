@@ -25,6 +25,7 @@ fn otag(home: &Path, arguments: &[&str], stdin: &str) -> (String, bool, Duration
     let mut child = Command::new(env!("CARGO_BIN_EXE_otag"))
         .args(arguments)
         .env("HOME", home)
+        .env("OTAG_STATE_DIR", home.join("state"))
         // An XDG machine would otherwise place otag's state outside the
         // temporary home.
         .env("XDG_STATE_HOME", home.join("state"))

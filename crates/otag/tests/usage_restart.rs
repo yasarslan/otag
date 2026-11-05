@@ -9,20 +9,21 @@
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+mod common;
 
 /// How long to wait for a daemon to start listening.
 const STARTUP: Duration = Duration::from_secs(10);
 
 /// A daemon with a home of its own, so nothing on the machine is touched.
 struct Daemon {
-    home: tempfile::TempDir,
+    home: common::TestHome,
     socket: std::path::PathBuf,
     process: Option<Child>,
 }
 
 impl Daemon {
     fn start() -> Self {
-        let home = tempfile::tempdir().expect("a temporary home");
+        let home = common::TestHome::new().expect("a temporary home");
         let socket = home.path().join("otag.sock");
         let mut daemon = Self {
             home,
@@ -50,6 +51,7 @@ impl Daemon {
     /// otag, with everything pointed at this test's own home.
     fn command(&self, arguments: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_otag"));
+        common::configure(&mut command, self.home.path(), &self.socket);
         command
             .args(arguments)
             .env("HOME", self.home.path())
@@ -87,7 +89,12 @@ impl Daemon {
     fn wait_until_listening(&self) {
         let started = Instant::now();
         while started.elapsed() < STARTUP {
-            if self.run(&["ping"], "").contains("pong") {
+            // Binding precedes restore. Use a non-starting protocol request,
+            // not ping (which could spawn a second, unowned daemon).
+            if self
+                .run(&["version"], "")
+                .contains(&format!("daemon {}", env!("CARGO_PKG_VERSION")))
+            {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -121,8 +128,7 @@ impl Daemon {
 impl Drop for Daemon {
     fn drop(&mut self) {
         if let Some(mut process) = self.process.take() {
-            let _ = process.kill();
-            let _ = process.wait();
+            common::stop_child(&mut process);
         }
     }
 }

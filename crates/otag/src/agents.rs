@@ -179,6 +179,12 @@ async fn read_session(
         session.set_status(pane.id, turn.status(), true).await;
     }
 
+    // What the session was first asked, which is what a client calls it.
+    // Offered on every pass because only the first one is ever kept.
+    if let Some(prompt) = transcript.first_prompt() {
+        session.set_first_prompt(pane.id, prompt).await;
+    }
+
     session.set_tokens(pane.id, transcript.tokens).await;
     // Without the size of the model's context, a count of context tokens
     // cannot be drawn as a share of anything.

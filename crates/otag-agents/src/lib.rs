@@ -252,6 +252,60 @@ pub struct Transcript {
     pub turn: Option<TurnState>,
 }
 
+impl Transcript {
+    /// The first thing the user actually asked, skipping what the agent put
+    /// in front of it.
+    ///
+    /// Both agents write injected context into the transcript as a message
+    /// from the user: Codex opens every rollout with an
+    /// `<environment_context>` block naming the directory and the shell, and
+    /// Claude Code wraps slash commands and reminders in tags of their own.
+    /// None of those is anybody's prompt, and naming a session after one
+    /// would be worse than not naming it.
+    ///
+    /// So the first prompt is the first one that reads like a person typing:
+    /// it does not begin with a tag, and it is not one of the markers either
+    /// agent uses. Verified against real session files from both agents on
+    /// this machine before it was written.
+    #[must_use]
+    pub fn first_prompt(&self) -> Option<&str> {
+        self.prompts
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .find(|prompt| is_a_persons_prompt(prompt))
+    }
+}
+
+/// Tags that mean a message came from the agent rather than from the user.
+///
+/// Matched anywhere in the text, not only at the start, because Claude Code
+/// appends a reminder to the end of a prompt as often as it prepends one.
+const INJECTED: &[&str] = &[
+    "<environment_context>",
+    "<user_instructions>",
+    "<system-reminder>",
+    "<command-name>",
+    "<local-command-stdout>",
+    "<command-message>",
+    "<ide_opened_file>",
+    "Caveat: The messages below",
+];
+
+/// Whether a message from the user is one a person typed.
+#[must_use]
+fn is_a_persons_prompt(prompt: &str) -> bool {
+    if prompt.is_empty() {
+        return false;
+    }
+    // Anything that opens with a tag is a block the agent put there; a
+    // person writing about `<T>` does not start the line with it.
+    if prompt.starts_with('<') {
+        return false;
+    }
+    !INJECTED.iter().any(|marker| prompt.contains(marker))
+}
+
 /// What an agent's own session file says about its last turn.
 ///
 /// An agent without hooks reports nothing to otag, but it does write its own
@@ -425,6 +479,98 @@ pub(crate) const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reading one of this repository's fixtures.
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(FIXTURES).join(name)
+    }
+
+    #[test]
+    fn the_first_prompt_is_the_first_thing_a_person_asked() {
+        let transcript = AgentKind::Codex
+            .adapter()
+            .read_transcript(&fixture("codex-rollout.jsonl"))
+            .expect("a transcript");
+        assert_eq!(transcript.first_prompt(), Some("add a test for the parser"));
+    }
+
+    #[test]
+    fn an_injected_context_block_is_not_the_first_prompt() {
+        // Verified against a real rollout on this machine before this was
+        // written: every Codex session opens with an `<environment_context>`
+        // block written as a message from the user. Naming a session after
+        // it would be worse than not naming it.
+        let transcript = AgentKind::Codex
+            .adapter()
+            .read_transcript(&fixture("codex-rollout-injected-context.jsonl"))
+            .expect("a transcript");
+
+        assert!(
+            transcript.prompts[0].starts_with("<environment_context>"),
+            "the block is still carried, for the handoff package, and the \
+             fixture still has the shape this test is about: {:?}",
+            transcript.prompts.first()
+        );
+        assert_eq!(
+            transcript.first_prompt(),
+            Some("make the parser accept an empty file"),
+            "the name is what the person typed"
+        );
+    }
+
+    #[test]
+    fn a_claude_transcript_names_itself_from_its_first_prompt() {
+        let transcript = AgentKind::Claude
+            .adapter()
+            .read_transcript(&fixture("claude-transcript.jsonl"))
+            .expect("a transcript");
+        assert_eq!(
+            transcript.first_prompt(),
+            transcript.prompts.first().map(String::as_str)
+        );
+        assert!(transcript.first_prompt().is_some());
+    }
+
+    #[test]
+    fn a_transcript_with_nothing_a_person_said_has_no_name() {
+        assert_eq!(Transcript::default().first_prompt(), None);
+
+        let transcript = Transcript {
+            prompts: vec![
+                "<environment_context><cwd>/x</cwd></environment_context>".to_owned(),
+                "   ".to_owned(),
+                "<system-reminder>be good</system-reminder>".to_owned(),
+            ],
+            ..Transcript::default()
+        };
+        assert_eq!(transcript.first_prompt(), None);
+    }
+
+    #[test]
+    fn a_marker_anywhere_in_a_prompt_disqualifies_it() {
+        // Claude Code appends a reminder to the end of a prompt as often as
+        // it puts one in front.
+        let transcript = Transcript {
+            prompts: vec![
+                "fix the build\n<system-reminder>remember this</system-reminder>".to_owned(),
+                "fix the build".to_owned(),
+            ],
+            ..Transcript::default()
+        };
+        assert_eq!(transcript.first_prompt(), Some("fix the build"));
+    }
+
+    #[test]
+    fn a_prompt_that_merely_mentions_a_tag_is_still_a_prompt() {
+        let transcript = Transcript {
+            prompts: vec!["make Vec<T> generic over the allocator".to_owned()],
+            ..Transcript::default()
+        };
+        assert_eq!(
+            transcript.first_prompt(),
+            Some("make Vec<T> generic over the allocator")
+        );
+    }
 
     #[test]
     fn every_agent_has_an_adapter_that_reports_itself() {

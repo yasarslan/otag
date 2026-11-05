@@ -166,6 +166,19 @@ pub enum Request {
         #[serde(default)]
         size: Option<PaneSize>,
     },
+    /// Say whether the client is drawing its panes on dark or light paper,
+    /// so that a program started afterwards is told. Answered with
+    /// [`Response::Ok`].
+    ///
+    /// otag puts `COLORFGBG` into every pane it starts from then on. It
+    /// cannot change the environment of a program that is already running,
+    /// so this reaches new panes only — a running agent learns the same
+    /// thing by asking the pane with `OSC 11`, which it is answered
+    /// truthfully and at once.
+    TerminalAppearance {
+        /// Whether the client's terminal theme is a dark one.
+        dark: bool,
+    },
     /// Stop watching one pane. Answered with [`Response::Ok`]; the pane and
     /// its program keep running.
     DetachPane {
@@ -713,6 +726,16 @@ pub struct PaneInfo {
     /// The agent session otag would resume.
     #[serde(default)]
     pub session: Option<String>,
+    /// The first thing the user asked this session, when otag knows it.
+    ///
+    /// What a client calls the session. Every session in one folder is
+    /// otherwise named after that folder, which is the same as having no
+    /// names at all. It comes from the prompt a client started the session
+    /// with, or from the agent's own transcript for a session otag did not
+    /// start, and it is clipped so that a pasted essay cannot travel as a
+    /// name.
+    #[serde(default)]
+    pub first_prompt: Option<String>,
     /// What the agent in it has spent.
     #[serde(default)]
     pub tokens: Tokens,
@@ -1173,6 +1196,7 @@ mod tests {
                     agent: None,
                     status: PaneStatus::Idle,
                     session: None,
+                    first_prompt: None,
                     tokens: Default::default(),
                     context_window: None,
                     night_shift: None,
@@ -1189,6 +1213,7 @@ mod tests {
                     agent: Some(AgentKind::Claude),
                     status: PaneStatus::Working,
                     session: Some("a-session".to_owned()),
+                    first_prompt: Some("add a parser test".to_owned()),
                     tokens: Default::default(),
                     context_window: Some(200_000),
                     night_shift: Some(NightShiftView {

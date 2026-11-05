@@ -98,6 +98,7 @@ impl Handler for TestDaemon {
                         agent: pane.agent,
                         status: pane.status,
                         session: pane.session,
+                        first_prompt: pane.first_prompt,
                         tokens: pane.tokens,
                         context_window: pane.context_window,
                         night_shift: None,

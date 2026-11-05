@@ -235,6 +235,8 @@ pub struct PaneSummary {
     pub status: PaneStatus,
     /// The agent session otag would resume.
     pub session: Option<String>,
+    /// The first thing the user asked it, when otag knows.
+    pub first_prompt: Option<String>,
     /// What the agent in it has spent.
     pub tokens: Tokens,
     /// How large the model's context is, when otag knows.
@@ -306,6 +308,13 @@ struct Pane {
     session_id: Option<String>,
     /// The file that session is kept in, for reading what it has spent.
     session_path: Option<PathBuf>,
+    /// The first thing the user asked it, when otag knows.
+    ///
+    /// From the prompt a client started it with, or from the agent's own
+    /// transcript for a session otag did not start. Only the first one is
+    /// kept: it is what the session is *for*, and a name that changed every
+    /// turn would not be a name.
+    first_prompt: Option<String>,
     /// What the agent in it has spent, as far as otag has read.
     tokens: Tokens,
     /// When a hook last said what the agent is doing.
@@ -375,6 +384,13 @@ struct State {
     /// out. The session does not compute this; it carries it to the clients
     /// with everything else they draw.
     usage: Report,
+    /// What `COLORFGBG` should say in a pane started from now on, once a
+    /// client has said which way round its terminal is.
+    ///
+    /// Not set until a client says, because guessing would be worse than
+    /// saying nothing: a program that reads the variable would be told
+    /// something otag made up.
+    colorfgbg: Option<String>,
 }
 
 impl State {
@@ -501,6 +517,7 @@ impl Session {
                 last_exit: None,
                 ended: VecDeque::new(),
                 usage: Report::default(),
+                colorfgbg: None,
             }),
         })
     }
@@ -935,6 +952,7 @@ impl Session {
                     agent: pane.agent,
                     status: pane.status,
                     session: pane.session_id.clone(),
+                    first_prompt: pane.first_prompt.clone(),
                     tokens: pane.tokens,
                     context_window: pane.context_window,
                     workspace: state
@@ -1111,6 +1129,48 @@ impl Session {
         self.lock()
             .map(|state| state.usage.clone())
             .unwrap_or_default()
+    }
+
+    /// How long a first prompt may be when it is carried as a name.
+    ///
+    /// A name is one short line, and a prompt can be a pasted file. Clipping
+    /// here rather than in the client means nothing large travels over the
+    /// socket on every pane report.
+    pub const FIRST_PROMPT_LIMIT: usize = 400;
+
+    /// Record the first thing the user asked a pane.
+    ///
+    /// Only the first: it is what the session is *for*, and a name that
+    /// changed every turn would not be a name. So a prompt arriving for a
+    /// pane that already has one changes nothing, which is also what lets
+    /// the transcript reader offer one on every pass without cost.
+    pub async fn set_first_prompt(self: &Arc<Self>, pane: PaneId, prompt: &str) {
+        let wanted = prompt.trim();
+        if wanted.is_empty() {
+            return;
+        }
+        let wanted: String = wanted.chars().take(Self::FIRST_PROMPT_LIMIT).collect();
+
+        let changed = self.change(pane, |pane| {
+            if pane.first_prompt.is_some() {
+                return false;
+            }
+            pane.first_prompt = Some(wanted.clone());
+            true
+        });
+        self.commit(changed).await;
+    }
+
+    /// Say whether the clients are drawing their panes on dark paper, so
+    /// that a pane started from now on can tell its program.
+    ///
+    /// Panes already running are not touched: a process's environment cannot
+    /// be changed from outside it. A running agent learns the same thing by
+    /// asking its pane with `OSC 11`.
+    pub fn set_terminal_appearance(&self, dark: bool) {
+        if let Ok(mut state) = self.state.lock() {
+            state.colorfgbg = Some(crate::pane::colorfgbg(dark).to_owned());
+        }
     }
 
     /// Record how large the context of the model in a pane is.
@@ -1424,6 +1484,14 @@ impl Session {
             spec.with_cwd_opt(starting.cwd)
         };
 
+        // What the client said about its own paper, so a program that reads
+        // `COLORFGBG` rather than asking the terminal is told the truth from
+        // its first line.
+        let spec = match &state.colorfgbg {
+            Some(value) => spec.with_env(crate::pane::COLORFGBG, value),
+            None => spec,
+        };
+
         // A pane is started at the size of the whole content area and told
         // its real size as soon as the layout is known, which is one resize
         // before the program has drawn anything.
@@ -1443,6 +1511,7 @@ impl Session {
             status: PaneStatus::default(),
             session_id: None,
             session_path: None,
+            first_prompt: None,
             tokens: Tokens::default(),
             last_hook: None,
             context_window: None,

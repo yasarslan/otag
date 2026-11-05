@@ -191,6 +191,11 @@ impl Handler for Daemon {
             Request::ListPanes => Some(Response::Panes {
                 panes: self.panes(),
             }),
+            Request::TerminalAppearance { dark } => {
+                self.session.set_terminal_appearance(dark);
+                tracing::debug!(dark, "a client said which way round its terminal is");
+                Some(Response::Ok)
+            }
             Request::Usage => Some(Response::Usage {
                 report: Box::new(self.usage.report()),
                 panes: self
@@ -387,6 +392,13 @@ impl Daemon {
             .await
         {
             Ok(pane) => {
+                // What the client asked for is what the session is for, so
+                // it is its name from the first moment rather than once the
+                // agent has written its transcript.
+                if let Some(prompt) = asked.prompt.as_deref() {
+                    self.session.set_first_prompt(pane, prompt).await;
+                }
+
                 let workspace = self
                     .session
                     .summaries()

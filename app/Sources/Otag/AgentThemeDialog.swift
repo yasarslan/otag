@@ -20,7 +20,7 @@ struct AgentThemeDialog: View {
                 Image(systemName: "paintpalette")
                     .font(.title3)
                     .foregroundStyle(.tint)
-                Text("Match the agents to \(theme.name)")
+                Text(Strings.t("agentTheme.title", theme.name))
                     .font(.headline)
                 Spacer()
             }
@@ -45,12 +45,12 @@ struct AgentThemeDialog: View {
             HStack {
                 Spacer()
                 if outcome != nil {
-                    Button("Done") { dismiss() }
+                    Button(Strings.t("agentTheme.ok")) { dismiss() }
                         .keyboardShortcut(.defaultAction)
                 } else {
-                    Button("Cancel", role: .cancel) { dismiss() }
+                    Button(Strings.t("sheet.cancel"), role: .cancel) { dismiss() }
                         .keyboardShortcut(.cancelAction)
-                    Button("Change these files") { apply() }
+                    Button(Strings.t("agentTheme.apply")) { apply() }
                         .disabled(plan?.isEmpty ?? true)
                 }
             }
@@ -64,11 +64,10 @@ struct AgentThemeDialog: View {
     private func offer(_ plan: AgentTheme.Plan) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             if plan.isEmpty {
-                Text("There is nothing to change.")
+                Text(Strings.t("agentTheme.nothing"))
                     .font(.callout)
             } else {
-                Text("otag would make exactly these changes, and nothing else. A timestamped "
-                    + "copy of each file is kept first.")
+                Text(Strings.t("agentTheme.detail"))
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -113,9 +112,7 @@ struct AgentThemeDialog: View {
                 }
             }
 
-            Text("Your panes already answer an agent's \"what colour are you?\" query with "
-                + "this theme, so this is only about the agents' own accents. Nothing here "
-                + "is needed for otag to work.")
+            Text(Strings.t("agentTheme.osc"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -128,16 +125,17 @@ struct AgentThemeDialog: View {
             if !outcome.written.isEmpty {
                 Label(
                     outcome.written.count == 1
-                        ? "One file changed." : "\(outcome.written.count) files changed.",
+                        ? Strings.t("agentTheme.done.one")
+                        : Strings.t("agentTheme.done.many", outcome.written.count),
                     systemImage: "checkmark.circle"
                 )
                 .font(.callout)
-                Text("A running agent may need restarting before it picks the theme up.")
+                Text(Strings.t("agentTheme.restart"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             ForEach(outcome.backups, id: \.self) { path in
-                Text("Backup: \(path)")
+                Text(Strings.t("agentTheme.backup", path))
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

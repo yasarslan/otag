@@ -4,6 +4,9 @@ import PackageDescription
 
 let package = Package(
     name: "Otag",
+    // Every user-visible string lives in OtagKit's `.lproj` resources, and
+    // English is the language they are written in.
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Otag", targets: ["Otag"]),
@@ -19,6 +22,7 @@ let package = Package(
         // so that it can be tested on its own.
         .target(
             name: "OtagKit",
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         // The app itself: views and nothing else worth testing.

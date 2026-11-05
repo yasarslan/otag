@@ -33,7 +33,7 @@ struct PaletteView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField("Go to a session, or run a command…", text: $query)
+            TextField(Strings.t("palette.field"), text: $query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .padding(14)
@@ -43,7 +43,7 @@ struct PaletteView: View {
             Divider()
 
             if matches.isEmpty {
-                Text("Nothing matches")
+                Text(Strings.t("palette.nothing"))
                     .foregroundStyle(.secondary)
                     .padding(20)
             } else {

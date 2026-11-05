@@ -143,7 +143,7 @@ struct TerminalThemeTests {
         for choice in TerminalThemeChoice.allCases where choice != .system {
             #expect(
                 choice.resolved(dark: true) == choice.resolved(dark: false),
-                "\(choice.label) changes with the appearance"
+                Comment(rawValue: "\(choice.rawValue) changes with the appearance")
             )
         }
         #expect(TerminalThemeChoice.midnight.resolved(dark: false) == .midnight)

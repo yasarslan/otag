@@ -34,7 +34,7 @@ struct WelcomeView: View {
                 Image(systemName: "square.split.2x1")
                     .font(.title2)
                     .foregroundStyle(.tint)
-                Text("Welcome to otag")
+                Text(Strings.t("welcome.title"))
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Dots(of: Self.steps, at: step)
@@ -56,22 +56,23 @@ struct WelcomeView: View {
             Divider()
             HStack {
                 if step > 0 {
-                    Button("Back") { step -= 1 }
+                    Button(Strings.t("welcome.back")) { step -= 1 }
                 }
                 Spacer()
                 switch step {
                 case 0:
-                    Button("Continue") { step = 1 }
+                    Button(Strings.t("welcome.continue")) { step = 1 }
                         .keyboardShortcut(.defaultAction)
                 case 1:
-                    Button("Skip") { step = 2 }
+                    Button(Strings.t("welcome.skip")) { step = 2 }
                         .keyboardShortcut(.cancelAction)
-                    Button(installing ? "Installing…" : "Install hooks") { install() }
+                    Button(Strings.t(installing
+                        ? "welcome.hooks.installing" : "welcome.hooks.install")) { install() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(installing || installed != nil)
                 default:
-                    Button("Not now", action: dismiss)
-                    Button("New session…", action: start)
+                    Button(Strings.t("welcome.notNow"), action: dismiss)
+                    Button(Strings.t("welcome.first.new"), action: start)
                         .keyboardShortcut(.defaultAction)
                 }
             }
@@ -83,11 +84,9 @@ struct WelcomeView: View {
     /// Step one: what otag is.
     private var what: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("otag runs your agents in sessions it owns, and shows you what each one is "
-                + "doing — side by side, with the limits in front of you.")
+            Text(Strings.t("welcome.what"))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("The agents keep running when you quit otag: a daemon owns them, and this "
-                + "window is looking in.")
+            Text(Strings.t("welcome.daemon"))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -97,8 +96,7 @@ struct WelcomeView: View {
             }
             .padding(.top, 4)
 
-            Text("An agent otag cannot find is not a problem — you can run anything in a "
-                + "session, and otag notices an agent as soon as one starts.")
+            Text(Strings.t("welcome.notFound"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -108,19 +106,15 @@ struct WelcomeView: View {
     /// Step two: the hooks, and exactly what they change.
     private var hooks: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Claude Code can tell otag what it is doing.")
+            Text(Strings.t("welcome.hooks.title"))
                 .font(.headline)
-            Text("With its hooks installed, otag knows when an agent is working, done or "
-                + "waiting for permission — and how much of your limits is left — instead of "
-                + "guessing from the screen.")
+            Text(Strings.t("welcome.hooks.detail"))
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("What this changes")
+                Text(Strings.t("welcome.hooks.changes"))
                     .font(.subheadline.weight(.semibold))
-                Text("~/.claude/settings.json gains an `otag hook …` command on six events "
-                    + "and a status line that runs otag's and then yours. A copy of the file "
-                    + "is kept first, and `otag uninstall-hooks` puts it back.")
+                Text(Strings.t("welcome.hooks.changes.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -145,17 +139,14 @@ struct WelcomeView: View {
     /// Step three: the thing they came here to do.
     private var first: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Start your first session.")
+            Text(Strings.t("welcome.first.title"))
                 .font(.headline)
-            Text("Choose a project folder and an agent, and otag runs it. Your sessions "
-                + "appear in the list on the left; clicking one shows it.")
+            Text(Strings.t("welcome.first.detail"))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Drag a session from that list onto the side of the window to put two side "
-                + "by side, and use the button above a session to hand its work to the other "
-                + "agent.")
+            Text(Strings.t("welcome.first.more"))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("You can see this screen again from the Help menu.")
+            Text(Strings.t("welcome.first.again"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
@@ -180,7 +171,7 @@ struct WelcomeView: View {
                         .frame(width: 6, height: 6)
                 }
             }
-            .accessibilityLabel("Step \(at + 1) of \(count)")
+            .accessibilityLabel(Strings.t("welcome.step", at + 1, count))
         }
     }
 
@@ -196,7 +187,7 @@ struct WelcomeView: View {
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(name)
-                Text(path ?? "not on your PATH")
+                Text(path ?? Strings.t("welcome.notOnPath"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -235,11 +226,12 @@ struct WelcomeView: View {
                 await MainActor.run {
                     installing = false
                     if process.terminationStatus == 0 {
-                        installed = text.isEmpty ? "Hooks installed." : lastLine(text)
+                        installed = text.isEmpty
+                            ? Strings.t("welcome.hooks.installed") : lastLine(text)
                         step = 2
                     } else {
                         problem = text.isEmpty
-                            ? "otag could not install the hooks."
+                            ? Strings.t("welcome.hooks.failed")
                             : lastLine(text)
                     }
                 }

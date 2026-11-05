@@ -36,7 +36,7 @@ struct NewSessionSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("New session")
+            Text(Strings.t("new.title"))
                 .font(.headline)
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -44,28 +44,27 @@ struct NewSessionSheet: View {
 
             Form {
                 Section {
-                    LabeledContent("Project") {
+                    LabeledContent(Strings.t("new.project")) {
                         HStack(spacing: 8) {
-                            Text(folder?.path ?? "Choose a folder…")
+                            Text(folder?.path ?? Strings.t("new.project.choose"))
                                 .lineLimit(1)
                                 .truncationMode(.head)
                                 .foregroundStyle(folder == nil ? .secondary : .primary)
                             Spacer(minLength: 0)
-                            Button("Choose…", action: choose)
+                            Button(Strings.t("new.project.button"), action: choose)
                         }
                     }
 
-                    Picker("Runs", selection: $agent) {
-                        Text("Claude Code").tag(AgentKind?.some(.claude))
-                        Text("Codex").tag(AgentKind?.some(.codex))
-                        Text("Shell").tag(AgentKind?.none)
+                    Picker(Strings.t("new.runs"), selection: $agent) {
+                        Text(Strings.t("new.runs.claude")).tag(AgentKind?.some(.claude))
+                        Text(Strings.t("new.runs.codex")).tag(AgentKind?.some(.codex))
+                        Text(Strings.t("new.runs.shell")).tag(AgentKind?.none)
                     }
 
                     Toggle(isOn: $worktree) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Give it a git worktree of its own")
-                            Text("A branch and a directory to itself, so it cannot "
-                                + "collide with the other sessions in this checkout.")
+                            Text(Strings.t("new.worktree"))
+                            Text(Strings.t("new.worktree.detail"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -74,10 +73,14 @@ struct NewSessionSheet: View {
                 }
 
                 Section {
-                    TextField("Model", text: $model, prompt: Text("the agent's default"))
+                    TextField(
+                        Strings.t("new.model"),
+                        text: $model,
+                        prompt: Text(Strings.t("new.model.default"))
+                    )
                         .disabled(agent == nil)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("First prompt")
+                        Text(Strings.t("new.prompt"))
                         TextEditor(text: $prompt)
                             .font(.body)
                             .frame(minHeight: 70)
@@ -102,9 +105,9 @@ struct NewSessionSheet: View {
             Divider()
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button(Strings.t("sheet.cancel"), role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(starting ? "Starting…" : "Start") { start() }
+                Button(Strings.t(starting ? "new.starting" : "new.start")) { start() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(folder == nil || starting)
             }
@@ -133,8 +136,8 @@ struct NewSessionSheet: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        panel.message = "Choose the project this session works in"
+        panel.prompt = Strings.t("new.project.prompt")
+        panel.message = Strings.t("new.project.panel")
         if panel.runModal() == .OK {
             folder = panel.url
             problem = nil

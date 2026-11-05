@@ -22,9 +22,9 @@ struct LimitsCard: View {
         } label: {
             VStack(alignment: .leading, spacing: 5) {
                 if store.usage.rows.isEmpty, store.usage.counted.isEmpty {
-                    Text("Limits")
+                    Text(Strings.t("limits.title"))
                         .font(.caption.weight(.medium))
-                    Text("Nothing reported yet.")
+                    Text(Strings.t("limits.none"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -49,7 +49,7 @@ struct LimitsCard: View {
         }
         .buttonStyle(.plain)
         .padding(10)
-        .help("Limits, the timeline, and what each session is spending")
+        .help(Strings.t("limits.card.help"))
         .popover(isPresented: $open, arrowEdge: .trailing) {
             LimitsPopover(store: store, focused: focused)
         }
@@ -134,10 +134,12 @@ private struct Connection: View {
     private var label: String {
         switch store.state {
         case .connected:
-            if let version = store.daemonVersion { return "daemon \(version)" }
-            return "connected"
+            if let version = store.daemonVersion {
+                return Strings.t("daemon.version", version)
+            }
+            return Strings.t("daemon.connected")
         case .connecting:
-            return "connecting…"
+            return Strings.t("daemon.connecting")
         case let .failed(message):
             return message
         }
@@ -157,7 +159,7 @@ struct LimitsPopover: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                section("Limits", accessory: { UsageRefresh(store: store) }) {
+                section(Strings.t("limits.title"), accessory: { UsageRefresh(store: store) }) {
                     ForEach(store.usage.rows) { row in
                         UsageRowView(row: row)
                     }
@@ -167,8 +169,7 @@ struct LimitsPopover: View {
                             .foregroundStyle(.secondary)
                     }
                     if store.usage.isEmpty {
-                        Text("No agent has reported a reading yet. otag never asks an agent "
-                            + "for your limits itself — that would spend tokens.")
+                        Text(Strings.t("limits.unreported"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -176,18 +177,18 @@ struct LimitsPopover: View {
                 }
 
                 if !store.usage.isEmpty {
-                    section("Timeline") {
+                    section(Strings.t("limits.timeline")) {
                         UsageChart(samples: store.history)
                     }
                 }
 
                 if let focused {
-                    section("This session") {
+                    section(Strings.t("limits.thisSession")) {
                         ContextBar(pane: focused)
                     }
                 }
 
-                section("What each session is spending") {
+                section(Strings.t("limits.spending")) {
                     ForEach(spenders) { pane in
                         HStack(spacing: 6) {
                             AgentMark(agent: pane.agent, size: 7)
@@ -202,7 +203,7 @@ struct LimitsPopover: View {
                         .font(.caption)
                     }
                     if spenders.isEmpty {
-                        Text("Nothing counted yet.")
+                        Text(Strings.t("limits.spending.none"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

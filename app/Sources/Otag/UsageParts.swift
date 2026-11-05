@@ -29,7 +29,7 @@ struct UsageRefresh: View {
     var body: some View {
         HStack(spacing: 4) {
             if justUpdated {
-                Text("Updated")
+                Text(Strings.t("limits.updated"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
@@ -47,8 +47,8 @@ struct UsageRefresh: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .help("Re-read the limits")
-            .accessibilityLabel("Refresh usage")
+            .help(Strings.t("limits.refresh"))
+            .accessibilityLabel(Strings.t("limits.refresh.label"))
         }
         .onChange(of: store.refreshingUsage) { _, refreshing in
             spin(refreshing)
@@ -109,7 +109,7 @@ struct UsageRowView: View {
             Meter(fraction: row.fraction, colour: colour)
 
             if let resets = Readable.resetClock(row.resetsAt) {
-                Text("resets \(resets)")
+                Text(Strings.t("limits.resets", resets))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -160,17 +160,16 @@ struct UsageChart: View {
 
     var body: some View {
         if samples.count < 2 {
-            Text("A chart needs a few readings. otag keeps them across restarts, so this "
-                + "fills in as the agents work.")
+            Text(Strings.t("limits.chart.waiting"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
             Chart(samples) { sample in
                 LineMark(
-                    x: .value("When", sample.date),
-                    y: .value("Used", sample.usedPercent)
+                    x: .value(Strings.t("limits.chart.when"), sample.date),
+                    y: .value(Strings.t("limits.chart.used"), sample.usedPercent)
                 )
-                .foregroundStyle(by: .value("Window", label(sample)))
+                .foregroundStyle(by: .value(Strings.t("limits.chart.window"), label(sample)))
                 .interpolationMethod(.monotone)
             }
             .chartYScale(domain: 0 ... 100)
@@ -204,7 +203,7 @@ struct ContextBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text("Context")
+                Text(Strings.t("context.label"))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 6)
                 Text(detail)
@@ -228,6 +227,6 @@ struct ContextBar: View {
         let used = Readable.tokens(pane.tokens.context)
         guard let window = pane.contextWindow, window > 0 else { return used }
         let percent = Int((Double(pane.tokens.context) / Double(window) * 100).rounded())
-        return "\(used) of \(Readable.tokens(window)) · \(percent)%"
+        return Strings.t("context.of", used, Readable.tokens(window), percent)
     }
 }

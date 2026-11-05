@@ -32,9 +32,9 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             AppearanceSettings()
-                .tabItem { Label("Appearance", systemImage: "paintpalette") }
+                .tabItem { Label(Strings.t("settings.appearance"), systemImage: "paintpalette") }
             AttentionSettings()
-                .tabItem { Label("Attention", systemImage: "bell") }
+                .tabItem { Label(Strings.t("settings.attention"), systemImage: "bell") }
         }
         .frame(width: 480, height: 520)
     }
@@ -51,8 +51,10 @@ private struct AppearanceSettings: View {
 
     var body: some View {
         Form {
-            Section("Terminal theme") {
-                Picker("Theme", selection: $theme) {
+            LanguageSettings()
+
+            Section(Strings.t("settings.theme")) {
+                Picker(Strings.t("settings.theme"), selection: $theme) {
                     ForEach(TerminalThemeChoice.allCases) { choice in
                         Text(choice.label).tag(choice.rawValue)
                     }
@@ -63,38 +65,33 @@ private struct AppearanceSettings: View {
                 ThemePreview(theme: resolved, fontSize: fontSize)
                     .padding(.vertical, 4)
 
-                Text(resolved.detail + " Every session uses this theme, whatever is running in "
-                    + "it — a Claude pane and a Codex pane are the same terminal. Changing it "
-                    + "reaches every open session at once.")
+                Text(resolved.detail + " " + Strings.t("settings.theme.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section("Text") {
+            Section(Strings.t("settings.text")) {
                 HStack {
-                    Text("Font size")
+                    Text(Strings.t("settings.fontSize"))
                     Spacer()
                     Text("\(Int(fontSize)) pt")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
                 Slider(value: $fontSize, in: 9 ... 20, step: 1)
-                Text("Sessions are resized to fit, so the agent is told the truth about how "
-                    + "much room it has.")
+                Text(Strings.t("settings.fontSize.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Toggle("Dim sessions that are doing nothing", isOn: $dimIdle)
+                Toggle(Strings.t("settings.dimIdle"), isOn: $dimIdle)
             }
 
-            Section("The agents' own colours") {
-                Text("Every pane already tells an agent what colour it is, so an agent that "
-                    + "asks follows this theme by itself. Both agents also have a theme "
-                    + "setting of their own, which otag can match — with your permission.")
+            Section(Strings.t("settings.agentThemes")) {
+                Text(Strings.t("settings.agentThemes.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Match the agents to this theme…") { offering = true }
+                Button(Strings.t("settings.agentThemes.button")) { offering = true }
             }
         }
         .formStyle(.grouped)
@@ -116,9 +113,8 @@ private struct AttentionSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Notify me when a session needs me", isOn: $notify)
-                Text("With notifications off, the Dock badge and the menu bar still show who "
-                    + "is waiting. With the app closed, the daemon notifies instead.")
+                Toggle(Strings.t("settings.notify"), isOn: $notify)
+                Text(Strings.t("settings.notify.detail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -75,7 +75,7 @@ struct OtagApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Session…") { pending = PendingSession(axis: nil) }
+                Button(Strings.t("menu.newSession")) { pending = PendingSession(axis: nil) }
                     .keyboardShortcut("n", modifiers: .command)
             }
             // Cmd-K is for whoever already knows it is there. It is not on
@@ -83,47 +83,51 @@ struct OtagApp: App {
             // are the app, and a palette is a faster way to what they
             // already have.
             CommandGroup(after: .newItem) {
-                Button("Command Palette…") { palette = true }
+                Button(Strings.t("menu.palette")) { palette = true }
                     .keyboardShortcut("k", modifiers: .command)
             }
             CommandGroup(replacing: .help) {
-                Button("Show the Welcome Screen") { onboarded = false }
+                Button(Strings.t("menu.welcome")) { onboarded = false }
             }
-            CommandMenu("Session") {
-                Button("Allow What Is Waiting") { answerFirst(.allow) }
+            CommandMenu(Strings.t("menu.session")) {
+                Button(Strings.t("menu.allowWaiting")) { answerFirst(.allow) }
                     .keyboardShortcut("y", modifiers: [.command, .shift])
                     .disabled(store.asks.isEmpty)
-                Button("Deny What Is Waiting") { answerFirst(.deny) }
+                Button(Strings.t("menu.denyWaiting")) { answerFirst(.deny) }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(store.asks.isEmpty)
                 Divider()
                 // Splitting means another session beside this one, and a
                 // pane is the daemon's to create: the only honest way to get
                 // one is to say what should run in it.
-                Button("Split Right…") { pending = PendingSession(axis: .horizontal) }
+                Button(Strings.t("menu.splitRight")) {
+                    pending = PendingSession(axis: .horizontal)
+                }
                     .keyboardShortcut("d", modifiers: .command)
-                Button("Split Down…") { pending = PendingSession(axis: .vertical) }
+                Button(Strings.t("menu.splitDown")) {
+                    pending = PendingSession(axis: .vertical)
+                }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                 Divider()
-                Button("Close Session") { closeFocused() }
+                Button(Strings.t("menu.closeSession")) { closeFocused() }
                     .keyboardShortcut("w", modifiers: .command)
                     .disabled(workbench.focus == nil)
-                Button("Focus Next Session") { workbench.stepFocus(by: 1) }
+                Button(Strings.t("menu.focusNext")) { workbench.stepFocus(by: 1) }
                     .keyboardShortcut("]", modifiers: .command)
                     .disabled(workbench.panes.count < 2)
-                Button("Focus Previous Session") { workbench.stepFocus(by: -1) }
+                Button(Strings.t("menu.focusPrevious")) { workbench.stepFocus(by: -1) }
                     .keyboardShortcut("[", modifiers: .command)
                     .disabled(workbench.panes.count < 2)
                 Divider()
                 Button(handOffTitle) { handOff() }
                     .disabled(focusedPane?.agent == nil)
-                Button("Morning Report…") { store.askForMorningReport() }
+                Button(Strings.t("menu.report")) { store.askForMorningReport() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
             // ⌘1…⌘9 go to the first nine sessions in the sidebar's order.
             // The sidebar shows each row's number, so the shortcut teaches
             // itself rather than needing a list to memorise.
-            CommandMenu("Go") {
+            CommandMenu(Strings.t("menu.go")) {
                 ForEach(1 ... 9, id: \.self) { number in
                     Button(sessionName(number)) { go(to: number) }
                         .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
@@ -158,9 +162,9 @@ struct OtagApp: App {
 
     private var handOffTitle: String {
         switch focusedPane?.agent {
-        case .claude: return "Switch to Codex"
-        case .codex: return "Switch to Claude"
-        case nil: return "Switch Agent"
+        case .claude: return Strings.t("switch.handoff.codex")
+        case .codex: return Strings.t("switch.handoff.claude")
+        case nil: return Strings.t("switch.handoff.none")
         }
     }
 
@@ -195,7 +199,7 @@ struct OtagApp: App {
         let ordered = store.ordered
         guard ordered.indices.contains(number - 1),
               let pane = store.pane(ordered[number - 1])
-        else { return "Session \(number)" }
+        else { return Strings.t("menu.go.nth", number) }
         return names.name(of: pane)
     }
 }
@@ -211,6 +215,9 @@ struct MainView: View {
 
     /// What the window is asking about one session, when it is asking.
     @State private var prompt: SessionPrompt?
+    /// Which toolbar popover is open.
+    @State private var guarding = false
+    @State private var switching = false
 
     var body: some View {
         NavigationSplitView {
@@ -236,26 +243,10 @@ struct MainView: View {
                     return true
                 }
             } else {
-                PanesView(
-                    store: store,
-                    names: names,
-                    workbench: workbench,
-                    ask: { pane, kind in prompt = SessionPrompt(pane: pane, kind: kind) }
-                )
+                PanesView(store: store, names: names, workbench: workbench)
             }
         }
-        .toolbar {
-            // The only thing on the toolbar. Everything else about a session
-            // is above the session.
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    pending = PendingSession(axis: nil)
-                } label: {
-                    Label("New session", systemImage: "plus")
-                }
-                .help("Start a session (⌘N)")
-            }
-        }
+        .toolbar { toolbar }
         .sheet(item: $pending) { request in
             NewSessionSheet(
                 socket: store.socket,
@@ -324,6 +315,86 @@ struct MainView: View {
         .onChange(of: workbench.focus) { _, _ in workbench.save() }
     }
 
+    /// Five buttons, one job each, in one style.
+    ///
+    /// Arrange acts at once; the guard, switching and the language open
+    /// something; `+` starts a session. A button that would do nothing is
+    /// disabled rather than hidden, because a toolbar that changes shape is
+    /// a toolbar nobody learns.
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarIcon(
+                symbol: workbench.isArranged ? "rectangle" : "rectangle.split.2x2",
+                label: Strings.t(workbench.isArranged
+                    ? "toolbar.arrange.undo" : "toolbar.arrange"),
+                enabled: workbench.isArranged || inThisProject.count > 1,
+                action: arrange
+            )
+        }
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarPopoverIcon(
+                symbol: anyGuarded ? "shield.fill" : "shield",
+                label: Strings.t("toolbar.guard"),
+                tinted: anyGuarded,
+                shown: $guarding
+            ) {
+                GuardPopover(store: store, names: names, workbench: workbench)
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarPopoverIcon(
+                symbol: "arrow.left.arrow.right",
+                label: Strings.t("toolbar.switch"),
+                enabled: focused?.agent != nil,
+                shown: $switching
+            ) {
+                if let pane = focused {
+                    SwitchAgentPopover(actions: actions(for: pane))
+                }
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            LanguageMenu()
+        }
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarIcon(symbol: "plus", label: Strings.t("toolbar.new")) {
+                pending = PendingSession(axis: nil)
+            }
+        }
+    }
+
+    /// The sessions of the project the selected session belongs to, most
+    /// recently used first.
+    ///
+    /// Arrange lays out a *project*, not the whole daemon: four sessions in
+    /// one checkout is the case it is for.
+    private var inThisProject: [PaneInfo] {
+        guard let project = focused?.workspace else { return [] }
+        let recent = workbench.recentlyUsed
+        return store.panes
+            .filter { $0.workspace == project }
+            .sorted { one, two in
+                // Most recently used first; the ones the window has never
+                // shown keep the daemon's order behind them.
+                let first = recent.firstIndex(of: one.id) ?? Int.max
+                let second = recent.firstIndex(of: two.id) ?? Int.max
+                return first == second ? one.id < two.id : first < second
+            }
+    }
+
+    private func arrange() {
+        workbench.arrange(inThisProject.map(\.id), keeping: workbench.focus)
+    }
+
+    private var anyGuarded: Bool {
+        store.panes.contains { $0.guardPlan != nil }
+    }
+
+    private func actions(for pane: PaneInfo) -> SessionActions {
+        SessionActions(store: store, workbench: workbench, names: names, pane: pane)
+    }
+
     /// The welcome screen is shown until it has been gone through once.
     private var onboarding: Binding<Bool> {
         Binding(
@@ -342,7 +413,7 @@ struct MainView: View {
         var items: [PaletteItem] = store.panes.map { pane in
             PaletteItem(
                 title: names.name(of: pane),
-                detail: "\(pane.workspace) · \(pane.status.precise)",
+                detail: "\(pane.workspace) · \(pane.status.localizedPrecise)",
                 symbol: pane.agent == nil ? "terminal" : "sparkles"
             ) {
                 workbench.select(pane: pane.id)
@@ -350,8 +421,8 @@ struct MainView: View {
         }
 
         items.append(PaletteItem(
-            title: "New session",
-            detail: "a project, an agent and a first prompt",
+            title: Strings.t("palette.new"),
+            detail: Strings.t("palette.new.detail"),
             shortcut: "⌘N",
             symbol: "plus"
         ) { pending = PendingSession(axis: nil) })
@@ -372,23 +443,23 @@ struct MainView: View {
             }
             if pane.agent != nil {
                 items.append(PaletteItem(
-                    title: "Lighter model…",
+                    title: Strings.t("palette.switch"),
                     detail: actions.name,
-                    symbol: "arrow.down.right.circle"
-                ) { prompt = SessionPrompt(pane: pane.id, kind: .model) })
+                    symbol: "arrow.left.arrow.right"
+                ) { switching = true })
                 items.append(PaletteItem(
-                    title: "Night shift…",
+                    title: Strings.t("menu.nightshift"),
                     detail: actions.name,
                     symbol: "moon.stars"
                 ) { prompt = SessionPrompt(pane: pane.id, kind: .nightShift) })
             }
             items.append(PaletteItem(
-                title: "Rename…",
+                title: Strings.t("menu.rename"),
                 detail: actions.name,
                 symbol: "pencil"
             ) { prompt = SessionPrompt(pane: pane.id, kind: .rename) })
             items.append(PaletteItem(
-                title: "Close",
+                title: Strings.t("menu.close"),
                 detail: actions.name,
                 shortcut: "⌘W",
                 symbol: "xmark"
@@ -396,20 +467,20 @@ struct MainView: View {
         }
 
         items.append(PaletteItem(
-            title: "Morning report…",
-            detail: "what otag did overnight",
+            title: Strings.t("palette.report"),
+            detail: Strings.t("palette.report.detail"),
             shortcut: "⇧⌘R",
             symbol: "sunrise"
         ) { store.askForMorningReport() })
 
         for ask in store.asks {
             items.append(PaletteItem(
-                title: "Allow: \(ask.summary)",
+                title: Strings.t("menubar.allow", ask.summary),
                 detail: ask.agent?.label ?? "",
                 symbol: "checkmark.circle"
             ) { store.answer(ask, with: .allow) })
             items.append(PaletteItem(
-                title: "Deny: \(ask.summary)",
+                title: Strings.t("menubar.deny", ask.summary),
                 detail: ask.agent?.label ?? "",
                 symbol: "xmark.circle"
             ) { store.answer(ask, with: .deny) })

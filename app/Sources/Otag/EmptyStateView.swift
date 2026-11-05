@@ -18,39 +18,28 @@ struct EmptyStateView: View {
             case .connecting:
                 Card {
                     ProgressView()
-                    Text("Connecting to the otag daemon…")
+                    Text(Strings.t("daemon.connectingTo"))
                         .foregroundStyle(.secondary)
                 }
 
             case .connected:
                 Card {
-                    Text("Start a session")
+                    Text(Strings.t("empty.title"))
                         .font(.title2.weight(.semibold))
 
                     Button {
                         newSession()
                     } label: {
-                        Label("New session", systemImage: "plus")
+                        Label(Strings.t("empty.new"), systemImage: "plus")
                     }
                     .primaryActionStyle(prominent: true)
                     .controlSize(.large)
                     .padding(.bottom, 4)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        line(
-                            "sidebar.left",
-                            "Your sessions are listed on the left. Click one to see it."
-                        )
-                        line(
-                            "arrow.left.arrow.right",
-                            "**Switch to Codex** hands the work to the other agent, "
-                                + "with a package it can read."
-                        )
-                        line(
-                            "square.split.2x1",
-                            "Drag a session from the list onto the side of this area "
-                                + "to put two side by side."
-                        )
+                        line("sidebar.left", Strings.t("empty.sidebar"))
+                        line("arrow.left.arrow.right", Strings.t("empty.switch"))
+                        line("rectangle.split.2x2", Strings.t("empty.arrange"))
                     }
                     .frame(maxWidth: 340, alignment: .leading)
                 }
@@ -60,7 +49,7 @@ struct EmptyStateView: View {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 30, weight: .light))
                         .foregroundStyle(.tertiary)
-                    Text("Not connected")
+                    Text(Strings.t("daemon.notConnected"))
                         .font(.title3)
                     Text(message)
                         .foregroundStyle(.secondary)

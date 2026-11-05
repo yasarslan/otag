@@ -1,3 +1,4 @@
+import OtagKit
 import SwiftUI
 
 /// What otag says about an answer it could not deliver.
@@ -64,6 +65,6 @@ private struct DismissButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .accessibilityLabel("Dismiss")
+        .accessibilityLabel(Strings.t("notice.dismiss"))
     }
 }

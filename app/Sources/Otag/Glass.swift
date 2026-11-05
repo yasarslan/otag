@@ -113,10 +113,6 @@ extension Optional where Wrapped == AgentKind {
         }
     }
 
-    /// What to call it in a line of text.
-    var name: String {
-        self?.label ?? "shell"
-    }
 }
 
 /// The small rounded square in front of a session's name.
@@ -140,14 +136,14 @@ struct StatusPill: View {
     let status: PaneStatus
 
     var body: some View {
-        Text(status.badge.label)
+        Text(Strings.t(status.badge.key))
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(colour)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(colour.opacity(0.14), in: Capsule())
-            .help(status.needsTheLongerWord ? status.precise : status.badge.label)
-            .accessibilityLabel(status.precise)
+            .help(status.localizedPrecise)
+            .accessibilityLabel(status.localizedPrecise)
     }
 
     private var colour: Color {

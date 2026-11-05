@@ -70,6 +70,17 @@ cp "$app_binary" "$bundle/Contents/MacOS/Otag"
 # different version than the protocol it was built against.
 cp "$daemon_binary" "$bundle/Contents/Resources/otag"
 
+# SwiftPM puts a target's resources in a bundle of their own beside the
+# binary, and `Bundle.module` looks for it next to the executable. Without
+# this the app ships with no strings at all and every label in the window
+# shows its own key.
+bin_path="$(swift build --package-path app --configuration "$configuration" --show-bin-path)"
+for resources in "$bin_path"/*.bundle; do
+    [ -e "$resources" ] || continue
+    echo "==> copying $(basename "$resources")"
+    cp -R "$resources" "$bundle/Contents/MacOS/"
+done
+
 echo "==> drawing the icon"
 if swift "$root/scripts/make-icon.swift" "$bundle/Contents/Resources/AppIcon.icns" \
     > /dev/null 2>&1; then
@@ -118,6 +129,12 @@ PLIST
 printf 'APPL????' > "$bundle/Contents/PkgInfo"
 
 echo "==> signing (ad-hoc)"
+# Nested bundles are signed first: signing the app seals what is inside it,
+# so an unsigned resource bundle in there makes the outer signature invalid.
+for nested in "$bundle"/Contents/MacOS/*.bundle; do
+    [ -e "$nested" ] || continue
+    codesign --force --sign - --timestamp=none "$nested" > /dev/null 2>&1
+done
 codesign --force --sign - --timestamp=none "$bundle" > /dev/null
 
 echo

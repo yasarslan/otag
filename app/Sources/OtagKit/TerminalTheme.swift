@@ -129,9 +129,13 @@ public enum TerminalThemeChoice: String, Sendable, CaseIterable, Identifiable {
     public var id: String { rawValue }
 
     /// What Settings calls it.
+    ///
+    /// A theme's own name is not translated — "Midnight" is its name, like
+    /// "Claude" — but "follow the system" is a sentence, so that one is.
+    @MainActor
     public var label: String {
         switch self {
-        case .system: return "Follow the system"
+        case .system: return Strings.t("settings.theme.system")
         case .glassLight: return TerminalTheme.glassLight.name
         case .glassDark: return TerminalTheme.glassDark.name
         case .midnight: return TerminalTheme.midnight.name

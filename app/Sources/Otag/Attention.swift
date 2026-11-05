@@ -39,12 +39,12 @@ final class Attention: NSObject, UNUserNotificationCenterDelegate {
                 actions: [
                     UNNotificationAction(
                         identifier: Self.allowAction,
-                        title: "Allow",
+                        title: Strings.t("ask.allow"),
                         options: []
                     ),
                     UNNotificationAction(
                         identifier: Self.denyAction,
-                        title: "Deny",
+                        title: Strings.t("ask.deny"),
                         options: []
                     ),
                 ],
@@ -80,7 +80,7 @@ final class Attention: NSObject, UNUserNotificationCenterDelegate {
 
         let content = UNMutableNotificationContent()
         let project = store.pane(ask.pane)?.workspace ?? ""
-        content.title = ask.agent?.label ?? "A session"
+        content.title = ask.agent?.label ?? Strings.t("notification.session")
         content.subtitle = project
         content.body = ask.summary
         content.categoryIdentifier = Self.category
@@ -142,15 +142,21 @@ struct MenuBarView: View {
 
     var body: some View {
         if store.waiting > 0 {
-            Text(store.waiting == 1 ? "1 session needs you" : "\(store.waiting) sessions need you")
+            Text(store.waiting == 1
+                ? Strings.t("menubar.waiting.one")
+                : Strings.t("menubar.waiting.many", store.waiting))
             Divider()
             ForEach(store.asks) { ask in
-                Button("Allow: \(short(ask.summary))") { store.answer(ask, with: .allow) }
-                Button("Deny: \(short(ask.summary))") { store.answer(ask, with: .deny) }
+                Button(Strings.t("menubar.allow", short(ask.summary))) {
+                    store.answer(ask, with: .allow)
+                }
+                Button(Strings.t("menubar.deny", short(ask.summary))) {
+                    store.answer(ask, with: .deny)
+                }
                 Divider()
             }
         } else {
-            Text("Nothing is waiting")
+            Text(Strings.t("menubar.quiet"))
             Divider()
         }
 
@@ -158,7 +164,7 @@ struct MenuBarView: View {
             Text(line(row))
         }
         Button(
-            store.refreshingUsage ? "Refreshing Usage…" : "Refresh Usage",
+            Strings.t(store.refreshingUsage ? "menubar.refreshing" : "menubar.refresh"),
             systemImage: "arrow.clockwise"
         ) {
             store.refreshUsage()
@@ -166,7 +172,7 @@ struct MenuBarView: View {
         .disabled(store.refreshingUsage)
         Divider()
 
-        Button("Open Otag") {
+        Button(Strings.t("menubar.open")) {
             NSApp.activate(ignoringOtherApps: true)
             // The window may have been closed rather than hidden.
             for window in NSApp.windows where window.canBecomeMain {
@@ -174,7 +180,7 @@ struct MenuBarView: View {
                 break
             }
         }
-        Button("Quit Otag") { NSApp.terminate(nil) }
+        Button(Strings.t("menubar.quit")) { NSApp.terminate(nil) }
     }
 
     /// One window, as a line of the menu: the same line every other client
@@ -185,7 +191,7 @@ struct MenuBarView: View {
         guard let resets = Readable.resetClock(row.resetsAt) else {
             return "\(what)   \(used)"
         }
-        return "\(what)   \(used)   resets \(resets)"
+        return "\(what)   \(used)   " + Strings.t("limits.resets", resets)
     }
 
     /// A question, short enough for a menu.

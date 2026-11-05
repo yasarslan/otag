@@ -116,19 +116,20 @@ struct WorkbenchTests {
         #expect(workbench.panes == [1])
     }
 
-    @Test("three sessions fit, and a fourth replaces the one left longest")
-    func threeAtMost() {
+    @Test("four sessions fit, and a fifth replaces the one left longest")
+    func fourAtMost() {
         let workbench = Workbench()
         workbench.select(pane: 1)
         workbench.place(pane: 2, on: .trailing)
         workbench.place(pane: 3, on: .trailing)
-        #expect(workbench.panes == [1, 2, 3])
-        #expect(workbench.refusal == nil, "three is allowed and says nothing")
+        workbench.place(pane: 4, on: .bottom)
+        #expect(workbench.panes.count == 4)
+        #expect(workbench.refusal == nil, "four is allowed and says nothing")
 
-        workbench.place(pane: 4, on: .trailing)
+        workbench.place(pane: 5, on: .trailing)
         #expect(workbench.panes.count == Workbench.maximumPanes)
         #expect(!workbench.panes.contains(1), "the one nobody had looked at went")
-        #expect(workbench.panes.contains(4))
+        #expect(workbench.panes.contains(5))
         #expect(workbench.refusal != nil, "and the window is told why")
     }
 
@@ -138,10 +139,11 @@ struct WorkbenchTests {
         workbench.select(pane: 1)
         workbench.place(pane: 2, on: .trailing)
         workbench.place(pane: 3, on: .trailing)
+        workbench.place(pane: 4, on: .bottom)
 
         // Back to the first one, which makes the second the stalest.
         workbench.focus(pane: 1)
-        workbench.place(pane: 4, on: .bottom)
+        workbench.place(pane: 5, on: .trailing)
 
         #expect(workbench.panes.contains(1), "the one just looked at stayed")
         #expect(!workbench.panes.contains(2))

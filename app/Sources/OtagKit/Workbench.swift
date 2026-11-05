@@ -233,13 +233,21 @@ public final class Workbench {
 
     /// How many sessions may share the window.
     ///
-    /// Three is where a terminal stops being readable on one screen, and a
-    /// limit the user can feel beats a layout that keeps dividing.
-    public static let maximumPanes = 3
+    /// Four, which is the 2×2 that Arrange lays out. Past that a terminal is
+    /// too small to work in, and a limit the user can feel beats a layout
+    /// that keeps dividing.
+    public static let maximumPanes = Arrangement.most
 
     /// The panes in the order they were last given the keyboard, oldest
-    /// first. The one at the front is the one a fourth session replaces.
+    /// first. The one at the front is the one a fifth session replaces.
     private var leastRecentlyFocused: [PaneID] = []
+
+    /// What the window was showing before Arrange, so pressing it again can
+    /// put that back.
+    ///
+    /// Non-nil exactly while the window is arranged, which is what the
+    /// toolbar button reads to know which way it will go.
+    public private(set) var beforeArranging: PaneID?
 
     /// The last thing that could not be done, for the window to say once.
     public var refusal: String?
@@ -256,6 +264,60 @@ public final class Workbench {
         panes.contains(pane)
     }
 
+    /// Whether the window is showing an arrangement rather than a session
+    /// somebody chose.
+    public var isArranged: Bool {
+        beforeArranging != nil
+    }
+
+    /// The sessions the window is showing, most recently used first.
+    ///
+    /// What Arrange lays out, and what decides which session a sixth one
+    /// replaces. One order, used for both, so "recently used" means one
+    /// thing in otag.
+    public var recentlyUsed: [PaneID] {
+        let showing = Set(panes)
+        var order = leastRecentlyFocused.filter(showing.contains).reversed().map { $0 }
+        // A pane that has somehow never been focused still has to be in the
+        // list, or Arrange would quietly drop it.
+        order.append(contentsOf: panes.filter { !order.contains($0) })
+        return order
+    }
+
+    /// Lay `wanted` out evenly, or put back what was showing before.
+    ///
+    /// `wanted` is in the order the caller wants them drawn — most recently
+    /// used first. Pressing Arrange again is what `keeping` is for: the
+    /// session to go back to.
+    public func arrange(_ wanted: [PaneID], keeping: PaneID?) {
+        if isArranged {
+            // Back to one session: the one that was showing before, if it is
+            // still running, and otherwise whatever has the keyboard.
+            let back = beforeArranging.flatMap { pane in
+                wanted.contains(pane) ? pane : nil
+            } ?? keeping ?? focus
+            beforeArranging = nil
+            guard let back else { return }
+            // Set directly rather than through `select`, which leaves a
+            // session that is already on screen exactly where it is — true
+            // when the user picks one in the sidebar, wrong here, where the
+            // whole point is to stop showing the others.
+            root = .leaf(back)
+            leastRecentlyFocused = []
+            focus(pane: back)
+            return
+        }
+
+        guard let tree = Arrangement.of(wanted) else { return }
+        let was = keeping ?? focus
+        root = tree
+        // Everything on screen counts as used, newest first, so the order
+        // survives going back and forth.
+        leastRecentlyFocused = tree.panes.reversed()
+        beforeArranging = was
+        focus(pane: was.flatMap { tree.panes.contains($0) ? $0 : nil } ?? tree.panes[0])
+    }
+
     /// Show `pane` on its own, replacing whatever was showing.
     ///
     /// What selecting a session in the sidebar means. A session already
@@ -269,6 +331,7 @@ public final class Workbench {
         }
         root = .leaf(pane)
         leastRecentlyFocused = []
+        beforeArranging = nil
         focus(pane: pane)
     }
 
@@ -294,6 +357,7 @@ public final class Workbench {
         var node = existing
         guard node.split(beside: beside, with: pane, axis: axis) else { return }
         root = node
+        beforeArranging = nil
         focus(pane: pane)
     }
 
@@ -315,6 +379,7 @@ public final class Workbench {
             return
         }
         root = kept.splitting(off: edge, with: pane)
+        beforeArranging = nil
         focus(pane: pane)
     }
 
@@ -332,6 +397,7 @@ public final class Workbench {
         if root == nil {
             focus = nil
             leastRecentlyFocused = []
+            beforeArranging = nil
         }
     }
 
@@ -369,8 +435,7 @@ public final class Workbench {
         guard let evicted = leastRecentlyFocused.first ?? panes.first else { return false }
         guard evicted != pane else { return false }
         close(pane: evicted)
-        refusal = "otag shows up to \(Self.maximumPanes) sessions at once, "
-            + "so the one you had not looked at for longest was closed. It is still running."
+        refusal = Strings.t("window.tooMany", Self.maximumPanes)
         return true
     }
 

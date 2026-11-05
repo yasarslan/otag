@@ -3,12 +3,13 @@ import SwiftUI
 
 /// One button in the toolbar.
 ///
-/// All five are the same size, the same style and the same shape, because a
+/// All five share the same style and shape, because a
 /// toolbar whose buttons differ is a toolbar you read every time instead of
 /// learning once. Each one carries its full sentence twice: as a tooltip for
 /// the mouse and as an accessibility label for everything else.
 struct ToolbarIcon: View {
     let symbol: String
+    let title: String
     /// The whole sentence, not the symbol's name.
     let label: String
     var enabled = true
@@ -16,8 +17,13 @@ struct ToolbarIcon: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .frame(width: 18, height: 18)
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .frame(width: 18, height: 18)
+                Text(title)
+                    .foregroundStyle(.primary)
+            }
+            .fixedSize()
         }
         .chromeButtonStyle()
         .controlSize(.regular)
@@ -33,6 +39,7 @@ struct ToolbarIcon: View {
 /// popover, and that the popover is anchored to it rather than to the window.
 struct ToolbarPopoverIcon<Content: View>: View {
     let symbol: String
+    let title: String
     let label: String
     var tinted = false
     var enabled = true
@@ -41,9 +48,14 @@ struct ToolbarPopoverIcon<Content: View>: View {
 
     var body: some View {
         Button { shown = true } label: {
-            Image(systemName: symbol)
-                .frame(width: 18, height: 18)
-                .foregroundStyle(tinted ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .frame(width: 18, height: 18)
+                    .foregroundStyle(tinted ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                Text(title)
+                    .foregroundStyle(.primary)
+            }
+            .fixedSize()
         }
         .chromeButtonStyle()
         .controlSize(.regular)

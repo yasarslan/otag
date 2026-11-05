@@ -5,6 +5,10 @@
    invariant on every build. An agent's own terminal output is
    never translated and never appears here. */
 
+"toolbar.arrange.title" = "Asettele";
+"toolbar.guard.title" = "Vahti";
+"toolbar.switch.title" = "Vaihda";
+"toolbar.new.title" = "Uusi";
 "toolbar.arrange" = "Järjestä tämän projektin istunnot";
 "toolbar.arrange.undo" = "Näytä vain valittu istunto";
 "toolbar.guard" = "Rajavahti";

@@ -326,6 +326,7 @@ struct MainView: View {
         ToolbarItem(placement: .primaryAction) {
             ToolbarIcon(
                 symbol: workbench.isArranged ? "rectangle" : "rectangle.split.2x2",
+                title: Strings.t("toolbar.arrange.title"),
                 label: Strings.t(workbench.isArranged
                     ? "toolbar.arrange.undo" : "toolbar.arrange"),
                 enabled: workbench.isArranged || inThisProject.count > 1,
@@ -335,6 +336,7 @@ struct MainView: View {
         ToolbarItem(placement: .primaryAction) {
             ToolbarPopoverIcon(
                 symbol: anyGuarded ? "shield.fill" : "shield",
+                title: Strings.t("toolbar.guard.title"),
                 label: Strings.t("toolbar.guard"),
                 tinted: anyGuarded,
                 shown: $guarding
@@ -345,6 +347,7 @@ struct MainView: View {
         ToolbarItem(placement: .primaryAction) {
             ToolbarPopoverIcon(
                 symbol: "arrow.left.arrow.right",
+                title: Strings.t("toolbar.switch.title"),
                 label: Strings.t("toolbar.switch"),
                 enabled: focused?.agent != nil,
                 shown: $switching
@@ -358,7 +361,11 @@ struct MainView: View {
             LanguageMenu()
         }
         ToolbarItem(placement: .primaryAction) {
-            ToolbarIcon(symbol: "plus", label: Strings.t("toolbar.new")) {
+            ToolbarIcon(
+                symbol: "plus",
+                title: Strings.t("toolbar.new.title"),
+                label: Strings.t("toolbar.new")
+            ) {
                 pending = PendingSession(axis: nil)
             }
         }

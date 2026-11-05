@@ -5,6 +5,10 @@
    invariant on every build. An agent's own terminal output is
    never translated and never appears here. */
 
+"toolbar.arrange.title" = "Arrange";
+"toolbar.guard.title" = "Guard";
+"toolbar.switch.title" = "Switch";
+"toolbar.new.title" = "New";
 "toolbar.arrange" = "Arrange the sessions in this project";
 "toolbar.arrange.undo" = "Show only the selected session";
 "toolbar.guard" = "Limit guard";

@@ -5,9 +5,8 @@ import SwiftUI
 /// How much of each agent's limits is gone, at the foot of the sidebar.
 ///
 /// One compact card: a line per window, saying what the agent last reported
-/// and when that window resets, plus whether otag is talking to the daemon at
-/// all. The whole card is a button; everything that used to be an inspector
-/// panel on the other side of the window is behind it.
+/// and when that window resets. The whole card is a button; everything that
+/// used to be an inspector panel on the other side of the window is behind it.
 struct LimitsCard: View {
     let store: SessionStore
     /// The session with the keyboard, whose context is worth a bar in the
@@ -39,8 +38,6 @@ struct LimitsCard: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                Connection(store: store)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
@@ -96,52 +93,6 @@ private struct CompactUsageRow: View {
         case .calm: return .secondary
         case .amber: return .orange
         case .red: return .red
-        }
-    }
-}
-
-/// Whether the app is talking to the daemon.
-///
-/// One dot and a few words, at the bottom of the card: the one thing about
-/// otag a user cannot otherwise see.
-private struct Connection: View {
-    let store: SessionStore
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(colour)
-                .frame(width: 6, height: 6)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 1)
-        .help(store.socket.path)
-    }
-
-    private var colour: Color {
-        switch store.state {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .failed: return .red
-        }
-    }
-
-    private var label: String {
-        switch store.state {
-        case .connected:
-            if let version = store.daemonVersion {
-                return Strings.t("daemon.version", version)
-            }
-            return Strings.t("daemon.connected")
-        case .connecting:
-            return Strings.t("daemon.connecting")
-        case let .failed(message):
-            return message
         }
     }
 }

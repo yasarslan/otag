@@ -5,6 +5,10 @@
    invariant on every build. An agent's own terminal output is
    never translated and never appears here. */
 
+"toolbar.arrange.title" = "Düzen";
+"toolbar.guard.title" = "Bekçi";
+"toolbar.switch.title" = "Değiştir";
+"toolbar.new.title" = "Yeni";
 "toolbar.arrange" = "Bu projedeki oturumları yerleştir";
 "toolbar.arrange.undo" = "Yalnızca seçili oturumu göster";
 "toolbar.guard" = "Limit koruması";

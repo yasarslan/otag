@@ -32,9 +32,10 @@ agent to another when one of them cannot carry on.
 - **A desktop notification** the moment an agent starts waiting for you —
   once per agent, not once a second.
 - **A native macOS app** on top of the same daemon: one list of sessions, up
-  to three of them side by side, Allow and Deny on the row that asked, the
-  usage forecast, three terminal themes, and a night shift that works
-  through a queue of prompts while you sleep. See [the app](#the-macos-app).
+  to four of them laid out evenly, Allow and Deny on the row that asked, a
+  guard for the usage limits, three terminal themes, three languages, and a
+  night shift that works through a queue of prompts while you sleep. See
+  [the app](#the-macos-app).
 
 Supported agents: Claude Code and Codex CLI. otag reads the files they
 already write; it never uploads anything, and it never reads credentials.
@@ -108,26 +109,41 @@ There is one thing to learn: **sessions**. The sidebar lists them, and the
 main area shows the one you picked, or two or three side by side.
 
 - **The sidebar is the only navigator.** Sessions grouped by project, each
-  with a colour for its agent, a name taken from its first prompt, and one
-  word for what it is doing: Working, Needs you, Done or Idle. Click a
-  session to see it, `⌘1`–`⌘9` to jump to one, right-click to rename it. A
-  session nobody has asked anything yet is "Claude 1", "Codex 2" and so on,
-  so two sessions never read the same.
+  with a colour for its agent, a name taken from its first prompt, an
+  optional nickname for the job it is doing, and one word for what it is
+  doing: Working, Needs you, Done or Idle. Click a session to see it,
+  `⌘1`–`⌘9` to jump to one, right-click to rename or nickname it. A session
+  nobody has asked anything yet is "Claude 1", "Codex 2" and so on, so two
+  sessions never read the same.
+- **A toolbar of five buttons**, one job each: **Arrange**, **Limit guard**,
+  **Switch agent**, **Language** and **New session**.
 - **A question opens the row that asked it.** When an agent wants
   permission, its own row expands with the question and **Allow** / **Deny**
   (`⇧⌘Y` / `⇧⌘N`); the same two buttons are on the notification and in the
   menu bar. otag types only the keys the agent's own prompt offers, then
   checks the prompt is gone — an answer it cannot confirm says so rather than
   pretending.
-- **One bar above a session**: its agent, project and status on the left,
-  then a single primary button — **Switch to Codex** / **Switch to Claude**,
-  which hands the work over with a package the other agent can read, and
-  stands out once the current one is nearly out of room — and a single `⋯`
-  menu for everything else: split, a lighter model, the night shift, rename,
-  the morning report, close.
-- **Sessions side by side.** Drag one out of the sidebar onto the left, the
-  right or the bottom of the main area, or use `⋯ > Split with…`, `⌘D` or
-  `⇧⌘D`. Up to three at once. Dividers drag, `⌘[` and `⌘]` move the keyboard,
+- **One bar above a session**, and it is only a label:
+  `nickname · name · project · status`, with a close button. Everything you
+  can do to a session is a toolbar button or a right click, not a menu
+  hidden above it.
+- **Arrange** lays out the sessions of one project evenly — one fills the
+  window, two are halves, three is one half beside two stacked quarters,
+  four is a 2×2 grid, and more than four shows the four you used last.
+  Press it again to go back to the single session you had.
+- **Limit guard** watches an agent's limits and does what you chose when
+  they run out: wait for you, type a resume prompt once the window resets, or
+  hand the work to the other agent — falling back to waiting when that agent
+  is out of room too. The daemon owns it, so it keeps working with the window
+  closed. It stops a session **after its current turn**: neither agent can be
+  suspended, and otag will not interrupt work in progress or answer an agent
+  for you.
+- **Switch agent** is the handoff and the model list in one popover: hand the
+  work to the other agent with a package it can read, or change the model and
+  keep the conversation.
+- **Sessions side by side.** Press **Arrange**, drag one out of the sidebar
+  onto the left, the right or the bottom of the main area, or use the right
+  click's `Split with…`, `⌘D` or `⇧⌘D`. Up to four at once. Dividers drag, `⌘[` and `⌘]` move the keyboard,
   `⌘W` closes a session, and the arrangement is still there after a restart.
 - **Limits in one card** at the foot of the sidebar: what each agent last
   reported and when it resets. Click it for the detail — a timeline of every
@@ -145,6 +161,8 @@ main area shows the one you picked, or two or three side by side.
   Every pane also answers an agent's "what colour are you?" query honestly,
   and is started with `COLORFGBG` set to match, so an agent on its own auto
   theme follows otag's with nothing configured.
+- **English, Turkish and Finnish**, from the toolbar or Settings, applied at
+  once with no restart. An agent's own terminal output is never translated.
 - `⌘K` is every session and command by name, and the menu bar item shows the
   limits and who is waiting even with the window closed.
 

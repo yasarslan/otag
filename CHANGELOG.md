@@ -18,8 +18,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after its folder repeated that folder's name and left out the separators
   between the three things it says; it now reads `name · project · status`,
   with the project left out when it is already what the session is called.
+- `Otag.app` shipped with **no strings at all**: SwiftPM puts a target's
+  resources in a bundle beside the binary, and `scripts/bundle-app.sh` never
+  copied it, so every label in a bundled build would have shown its own key.
+  Nested bundles are now copied and signed before the app itself, so the
+  outer signature verifies.
 
 ### Added
+
+- **A toolbar of five buttons**, one job each: Arrange, Limit guard, Switch
+  agent, Language, New session. One size, one style, each with its whole
+  sentence as a tooltip and as an accessibility label; a button that would do
+  nothing is disabled rather than hidden.
+- **Arrange** lays out the sessions of one project evenly: one fills the
+  window, two are halves, three is one half beside two stacked quarters (three
+  columns of a terminal are too narrow to read), four is a 2×2 grid, and more
+  than four shows the four most recently used. Press it again for the single
+  session you had. The window now shows up to four sessions rather than three.
+- **Nicknames.** A word for the job a session is doing — "backend", "tests" —
+  shown under its name in the sidebar and edited in the row itself. The daemon
+  keeps it, so it survives a restart and every client sees the same one.
+- **Limit guard.** Watch a session's limits and choose what happens when they
+  run out: wait, type a resume prompt once the window resets, or hand the work
+  to the other agent — which falls back to waiting when that agent is over the
+  same threshold. Several sessions can be guarded at once, each with its own
+  threshold. The daemon owns it, so it keeps working with every window closed.
+  It stops a session **after its current turn**: neither agent can be
+  suspended — a hook can only deny a tool call, which would lie to the agent,
+  and an interrupt throws away the turn — so otag never interrupts work in
+  progress and never answers an agent for you. A shield on the row and the
+  header says which sessions are guarded and which have been stopped.
+- **Switch agent** is one popover with both honest answers: hand the work to
+  the other agent with its package, or change the model and keep the
+  conversation. The model lists are what each tool accepts rather than a
+  remembered list — Claude Code's documented `--model` aliases, and for Codex
+  the list its own client keeps in `~/.codex/models_cache.json` — with a
+  free-text field so neither list can go stale and strand a model.
+- **English, Turkish and Finnish**, from the toolbar or Settings, applied at
+  once with no restart. Every user-visible string is in one place and nothing
+  else in the app holds one; dates and numbers are formatted for the chosen
+  language. An agent's own terminal output is never translated. A test checks
+  that no key is missing from any language, that placeholders match so a
+  translation cannot crash a format, and that every key the app asks for
+  exists.
+- `set_nickname` and `guard` on the socket, and `nickname` and `guard` on
+  every pane the daemon reports.
 
 - **Otag.app**, a native macOS window onto the same daemon: it starts the
   daemon if none is running and lists every session, grouped by project, with
@@ -55,11 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   therefore told the truth from its first line. A pane already running is
   left alone, because a process's environment cannot be changed from
   outside it.
-- One bar above a session, with exactly two controls: a primary button that
-  hands the work to the other agent — **Switch to Codex** / **Switch to
-  Claude**, emphasised once the current agent is nearly out of room — and one
-  `⋯` menu for split, a lighter model, the night shift, rename, the morning
-  report and close. A right click in the sidebar offers the same list.
+- One bar above a session, and it is only a label:
+  `nickname · name · project · status`, with a close button and nothing else.
+  Everything you can do to a session is a toolbar button or a right click.
 - A new-session sheet (`Cmd-N`): a project folder, Claude Code / Codex /
   shell, an optional model, an optional first prompt, and an optional git
   worktree of the session's own so that two agents cannot collide in one

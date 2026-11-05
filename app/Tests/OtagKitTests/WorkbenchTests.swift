@@ -23,6 +23,56 @@ struct WorkbenchTests {
         #expect(workbench.focus == 2)
     }
 
+    @Test("selecting any session always ends up showing that session")
+    func selectingAlwaysShowsIt() {
+        // The bug this pins: picking a session in the sidebar left the main
+        // area showing a different one. Whatever the window was showing
+        // first, the session selected has to be both showing and focused
+        // afterwards — there is no state in which selecting does nothing.
+        let starts: [(String, (Workbench) -> Void)] = [
+            ("nothing showing", { _ in }),
+            ("another session showing", { $0.select(pane: 9) }),
+            ("a split it is not in", { bench in
+                bench.select(pane: 9)
+                bench.place(pane: 8, on: .trailing)
+            }),
+            ("a split it is in", { bench in
+                bench.select(pane: 9)
+                bench.place(pane: 7, on: .trailing)
+            }),
+            ("three sessions", { bench in
+                bench.select(pane: 9)
+                bench.place(pane: 8, on: .trailing)
+                bench.place(pane: 7, on: .bottom)
+            }),
+        ]
+
+        for (what, arrange) in starts {
+            let workbench = Workbench()
+            arrange(workbench)
+            workbench.select(pane: 7)
+
+            #expect(workbench.isOpen(7), "with \(what), session 7 is not showing")
+            #expect(workbench.focus == 7, "with \(what), session 7 does not have the keyboard")
+        }
+    }
+
+    @Test("a leaf's identity follows the session in it")
+    func identityFollowsTheSession() {
+        // What the view keys its terminal on. A terminal holds one session's
+        // byte stream, so a view reused across a change of session goes on
+        // showing the old one: the identity has to change with the session
+        // for the old view to be taken down and a new one put up.
+        #expect(PaneNode.leaf(1).id != PaneNode.leaf(2).id)
+        #expect(PaneNode.leaf(1).id == PaneNode.leaf(1).id)
+
+        let before = PaneNode.split(axis: .horizontal, children: [.leaf(1), .leaf(2)],
+                                    fractions: [0.5, 0.5])
+        let after = PaneNode.split(axis: .horizontal, children: [.leaf(1), .leaf(3)],
+                                   fractions: [0.5, 0.5])
+        #expect(before.id != after.id, "a split that swapped a session is not the same split")
+    }
+
     @Test("selecting a session already side by side only moves the keyboard")
     func selectingOneAlreadyShowing() {
         let workbench = Workbench()

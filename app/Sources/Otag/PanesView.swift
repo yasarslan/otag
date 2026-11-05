@@ -41,7 +41,17 @@ private struct PaneTree: View {
     var body: some View {
         switch node {
         case let .leaf(pane):
+            // Keyed by the session it is showing, and this is load-bearing.
+            // A terminal is an `NSViewRepresentable` whose coordinator holds
+            // one pane's byte stream, built once in `makeCoordinator`. When
+            // the showing session changed from one leaf to another, SwiftUI
+            // saw the same view in the same place, reused that coordinator,
+            // and the window went on showing the *old* session's output —
+            // selecting a session in the sidebar appeared to do nothing.
+            // The identity makes the old view go and a new one arrive, which
+            // is what attaching to a different pane actually is.
             PaneCell(pane: pane, store: store, names: names, workbench: workbench, ask: ask)
+                .id(pane)
 
         case let .split(axis, children, fractions):
             GeometryReader { geometry in

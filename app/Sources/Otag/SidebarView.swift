@@ -12,6 +12,7 @@ struct SidebarView: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
+    let browsers: BrowserSessions
     @Binding var selection: PaneID?
     /// Ask the window something about one session.
     let ask: (PaneID, SessionPrompt.Kind) -> Void
@@ -33,12 +34,25 @@ struct SidebarView: View {
                     ProjectHeader(name: workspace.name)
                 }
             }
+            if !browsers.sessions.isEmpty {
+                Section(Strings.t("browser.title")) {
+                    ForEach(browsers.sessions) { browser in
+                        Label(browser.url.absoluteString, systemImage: "globe")
+                            .lineLimit(1)
+                            .tag(browser.id)
+                            .draggable(DraggedSession(pane: browser.id))
+                            .contextMenu {
+                                Button(Strings.t("menu.closeSession")) { browsers.close(browser.id) }
+                            }
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .chromeBackground()
         .overlay {
-            if store.workspaces.isEmpty {
+            if store.workspaces.isEmpty && browsers.sessions.isEmpty {
                 EmptySidebar(state: store.state)
             }
         }

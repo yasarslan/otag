@@ -13,6 +13,8 @@ struct NewSessionSheet: View {
     /// The project to offer: the one the user is looking at, or the newest
     /// session's. Nothing when otag is running nothing at all.
     let suggestedProject: String?
+    /// Start an app-owned browser in the chosen project.
+    let startBrowser: (String) -> Void
     /// Called with the pane the daemon started. What the session is called
     /// comes from the daemon, which records the first prompt itself.
     let started: (PaneID) -> Void
@@ -26,7 +28,9 @@ struct NewSessionSheet: View {
     @AppStorage(Preference.lastAgent) private var lastAgent = AgentKind.claude.rawValue
 
     @State private var folder: URL?
-    @State private var agent: AgentKind?
+    @State private var kind = ""
+    private var agent: AgentKind? { AgentKind(rawValue: kind) }
+    private var browser: Bool { kind == "browser" }
     @State private var chosen = false
     @State private var worktree = false
     @State private var model = ""
@@ -55,10 +59,11 @@ struct NewSessionSheet: View {
                         }
                     }
 
-                    Picker(Strings.t("new.runs"), selection: $agent) {
-                        Text(Strings.t("new.runs.claude")).tag(AgentKind?.some(.claude))
-                        Text(Strings.t("new.runs.codex")).tag(AgentKind?.some(.codex))
-                        Text(Strings.t("new.runs.shell")).tag(AgentKind?.none)
+                    Picker(Strings.t("new.runs"), selection: $kind) {
+                        Text(Strings.t("new.runs.claude")).tag(AgentKind.claude.rawValue)
+                        Text(Strings.t("new.runs.codex")).tag(AgentKind.codex.rawValue)
+                        Text(Strings.t("new.runs.shell")).tag("")
+                        Text(Strings.t("browser.title")).tag("browser")
                     }
 
                     Toggle(isOn: $worktree) {
@@ -69,7 +74,7 @@ struct NewSessionSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .disabled(folder == nil)
+                    .disabled(folder == nil || browser)
                 }
 
                 Section {
@@ -109,7 +114,7 @@ struct NewSessionSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(Strings.t(starting ? "new.starting" : "new.start")) { start() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(folder == nil || starting)
+                    .disabled((folder == nil && !browser) || starting)
             }
             .padding(16)
         }
@@ -127,7 +132,7 @@ struct NewSessionSheet: View {
         if let suggestedProject, !suggestedProject.isEmpty {
             folder = URL(fileURLWithPath: suggestedProject, isDirectory: true)
         }
-        agent = AgentKind(rawValue: lastAgent)
+        kind = lastAgent
     }
 
     /// Ask for the project folder.
@@ -146,6 +151,11 @@ struct NewSessionSheet: View {
 
     /// Tell the daemon to start it, and hand the pane back.
     private func start() {
+        if browser {
+            startBrowser(folder?.path ?? "")
+            dismiss()
+            return
+        }
         guard let folder else { return }
         starting = true
         problem = nil

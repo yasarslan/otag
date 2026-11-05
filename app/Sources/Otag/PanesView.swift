@@ -11,15 +11,17 @@ struct PanesView: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
+    let browsers: BrowserSessions
+    let webViews: BrowserWebViews
 
     var body: some View {
         Group {
             if let root = workbench.root {
-                PaneTree(node: root, store: store, names: names, workbench: workbench)
+                PaneTree(node: root, store: store, names: names, workbench: workbench, browsers: browsers, webViews: webViews)
                     // Drag a session out of the sidebar and onto a side to
                     // put it there. Nothing is drawn until something is over
                     // them.
-                    .overlay { DropEdges(workbench: workbench, store: store) }
+                    .overlay { DropEdges(workbench: workbench, store: store, browsers: browsers) }
             }
         }
     }
@@ -34,6 +36,8 @@ private struct PaneTree: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
+    let browsers: BrowserSessions
+    let webViews: BrowserWebViews
 
     var body: some View {
         switch node {
@@ -47,7 +51,7 @@ private struct PaneTree: View {
             // selecting a session in the sidebar appeared to do nothing.
             // The identity makes the old view go and a new one arrive, which
             // is what attaching to a different pane actually is.
-            PaneCell(pane: pane, store: store, names: names, workbench: workbench)
+            PaneCell(pane: pane, store: store, names: names, workbench: workbench, browsers: browsers, webViews: webViews)
                 .id(pane)
 
         case let .split(axis, children, fractions):
@@ -61,7 +65,9 @@ private struct PaneTree: View {
                         node: child,
                         store: store,
                         names: names,
-                        workbench: workbench
+                        workbench: workbench,
+                        browsers: browsers,
+                        webViews: webViews
                     )
                     .frame(
                         width: axis == .horizontal ? usable * share(fractions, index) : nil,
@@ -136,6 +142,8 @@ private struct PaneCell: View {
     let store: SessionStore
     let names: SessionNames
     let workbench: Workbench
+    let browsers: BrowserSessions
+    let webViews: BrowserWebViews
 
     @AppStorage(Preference.dimIdle) private var dimIdle = true
     /// Why this pane cannot be followed any more, once that has happened.
@@ -143,19 +151,26 @@ private struct PaneCell: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let info = store.pane(pane) {
-                SessionHeaderBar(
-                    actions: SessionActions(
-                        store: store,
-                        workbench: workbench,
-                        names: names,
-                        pane: info
-                    ),
-                    focused: workbench.focus == pane,
-                    sharing: workbench.panes.count > 1
-                )
+            if let browser = browsers.session(pane) {
+                BrowserPaneView(page: webViews.page(for: browser, sessions: browsers)) {
+                    browsers.close(pane)
+                    workbench.close(pane: pane)
+                }
+            } else {
+                if let info = store.pane(pane) {
+                    SessionHeaderBar(
+                        actions: SessionActions(
+                            store: store,
+                            workbench: workbench,
+                            names: names,
+                            pane: info
+                        ),
+                        focused: workbench.focus == pane,
+                        sharing: workbench.panes.count > 1
+                    )
+                }
+                terminal
             }
-            terminal
         }
         .onTapGesture { workbench.focus(pane: pane) }
         // A session doing nothing, with the keyboard somewhere else, fades
@@ -192,7 +207,7 @@ private struct PaneCell: View {
 
     /// Whether this pane should be drawn dimmer.
     private var dimmed: Bool {
-        guard dimIdle, workbench.panes.count > 1, workbench.focus != pane else { return false }
+        guard browsers.session(pane) == nil, dimIdle, workbench.panes.count > 1, workbench.focus != pane else { return false }
         let status = store.pane(pane)?.status ?? .idle
         return status == .idle || status == .done
     }

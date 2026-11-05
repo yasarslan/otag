@@ -13,6 +13,7 @@ import SwiftUI
 struct DropEdges: View {
     let workbench: Workbench
     let store: SessionStore
+    let browsers: BrowserSessions
 
     /// How much of the area each band claims.
     private static let band: Double = 0.22
@@ -69,7 +70,7 @@ struct DropEdges: View {
         targeted = nil
         // Only a session the daemon is actually running: a stale identifier
         // would put an empty terminal on screen.
-        guard let session = items.first, store.pane(session.pane) != nil else { return false }
+        guard let session = items.first, (store.pane(session.pane) != nil || browsers.session(session.pane) != nil) else { return false }
         workbench.place(pane: session.pane, on: edge)
         return true
     }

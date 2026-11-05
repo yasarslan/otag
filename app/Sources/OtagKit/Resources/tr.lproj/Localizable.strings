@@ -246,3 +246,11 @@
 "menu.go.nth" = "Oturum %d";
 "menu.report" = "Sabah Raporu…";
 "window.tooMany" = "otag aynı anda en fazla %d oturum gösterir; bu yüzden en uzun süre bakmadığınız oturum kapatıldı. Hâlâ çalışıyor.";
+
+"browser.title" = "Tarayıcı";
+"browser.back" = "Geri";
+"browser.forward" = "İleri";
+"browser.reload" = "Yenile";
+"browser.address" = "Adres";
+"browser.external" = "Varsayılan tarayıcıda aç";
+"browser.invalidAddress" = "Geçerli bir web adresi girin.";

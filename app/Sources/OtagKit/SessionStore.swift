@@ -41,6 +41,7 @@ public enum ConnectionState: Equatable, Sendable {
 public final class SessionStore {
     /// Every pane the daemon is running.
     public private(set) var panes: [PaneInfo] = []
+    public private(set) var hasLoadedPanes = false
     /// How much of the agents' limits is gone.
     public private(set) var usage = UsageReport()
     /// What the agents are waiting for the user to answer.
@@ -412,6 +413,7 @@ public final class SessionStore {
             apply(event)
         case let .panes(panes):
             self.panes = panes
+            hasLoadedPanes = true
         case let .usage(report):
             took(report)
         case let .inbox(asks):
@@ -475,6 +477,7 @@ public final class SessionStore {
         switch event {
         case let .panes(panes):
             self.panes = panes
+            hasLoadedPanes = true
         case let .usage(report):
             took(report)
         case let .asked(ask):

@@ -25,6 +25,8 @@ struct OtagApp: App {
     @State private var store = SessionStore()
     @State private var workbench = Workbench()
     @State private var names = SessionNames()
+    @State private var browsers = BrowserSessions()
+    @State private var webViews = BrowserWebViews()
     @State private var pending: PendingSession?
     @State private var attention = Attention()
     @State private var palette = false
@@ -38,6 +40,8 @@ struct OtagApp: App {
                 store: store,
                 workbench: workbench,
                 names: names,
+                browsers: browsers,
+                webViews: webViews,
                 pending: $pending,
                 palette: $palette,
                 onboarded: $onboarded
@@ -131,7 +135,7 @@ struct OtagApp: App {
                 ForEach(1 ... 9, id: \.self) { number in
                     Button(sessionName(number)) { go(to: number) }
                         .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
-                        .disabled(store.ordered.count < number)
+                        .disabled(orderedSessions.count < number)
                 }
             }
         }
@@ -182,24 +186,34 @@ struct OtagApp: App {
 
     private func closeFocused() {
         guard let pane = workbench.focus else { return }
+        if browsers.session(pane) != nil {
+            browsers.close(pane)
+            workbench.close(pane: pane)
+            return
+        }
         store.send(.detachPane(pane: pane))
         workbench.close(pane: pane)
     }
 
     /// Show the nth session in the sidebar's order.
     private func go(to number: Int) {
-        let ordered = store.ordered
+        let ordered = orderedSessions
         guard ordered.indices.contains(number - 1) else { return }
         workbench.select(pane: ordered[number - 1])
+    }
+
+    private var orderedSessions: [PaneID] {
+        store.ordered + browsers.sessions.map(\.id)
     }
 
     /// What `⌘n` would go to, so the menu reads as sessions rather than
     /// numbers.
     private func sessionName(_ number: Int) -> String {
-        let ordered = store.ordered
-        guard ordered.indices.contains(number - 1),
-              let pane = store.pane(ordered[number - 1])
-        else { return Strings.t("menu.go.nth", number) }
+        let ordered = orderedSessions
+        guard ordered.indices.contains(number - 1) else { return Strings.t("menu.go.nth", number) }
+        let id = ordered[number - 1]
+        if let browser = browsers.session(id) { return browser.url.host ?? Strings.t("browser.title") }
+        guard let pane = store.pane(id) else { return Strings.t("menu.go.nth", number) }
         return names.name(of: pane)
     }
 }
@@ -209,6 +223,8 @@ struct MainView: View {
     let store: SessionStore
     let workbench: Workbench
     let names: SessionNames
+    let browsers: BrowserSessions
+    let webViews: BrowserWebViews
     @Binding var pending: PendingSession?
     @Binding var palette: Bool
     @Binding var onboarded: Bool
@@ -225,6 +241,7 @@ struct MainView: View {
                 store: store,
                 names: names,
                 workbench: workbench,
+                browsers: browsers,
                 selection: selection,
                 ask: { pane, kind in prompt = SessionPrompt(pane: pane, kind: kind) }
             )
@@ -238,19 +255,24 @@ struct MainView: View {
                 // opens it: there are no edges to aim at yet.
                 .dropDestination(for: DraggedSession.self) { items, _ in
                     guard let dropped = items.first,
-                          store.pane(dropped.pane) != nil else { return false }
+                          (store.pane(dropped.pane) != nil || browsers.session(dropped.pane) != nil) else { return false }
                     workbench.select(pane: dropped.pane)
                     return true
                 }
             } else {
-                PanesView(store: store, names: names, workbench: workbench)
+                PanesView(store: store, names: names, workbench: workbench, browsers: browsers, webViews: webViews)
             }
         }
         .toolbar { toolbar }
         .sheet(item: $pending) { request in
             NewSessionSheet(
                 socket: store.socket,
-                suggestedProject: store.suggestedProject(near: workbench.focus)
+                suggestedProject: store.suggestedProject(near: workbench.focus),
+                startBrowser: { path in
+                    let project = store.panes.first { $0.cwd == path }?.workspace
+                        ?? (path.isEmpty ? "" : URL(fileURLWithPath: path).lastPathComponent)
+                    place(pane: browsers.create(project: project), axis: request.axis)
+                }
             ) { pane in
                 place(pane: pane, axis: request.axis)
             }
@@ -299,16 +321,29 @@ struct MainView: View {
             // The first word from the daemon is the first chance to put back
             // the arrangement the window was left in: until the sessions are
             // known, a saved layout cannot be checked against them.
-            workbench.restore(alive: panes.map(\.id))
+            workbench.restore(alive: panes.map(\.id) + browsers.sessions.map(\.id))
 
             // A pane the daemon has let go of cannot stay on screen.
-            let alive = Set(panes.map(\.id))
+            let alive = Set(panes.map(\.id) + browsers.sessions.map(\.id))
             for pane in workbench.panes where !alive.contains(pane) {
                 workbench.close(pane: pane)
             }
             // The daemon's list is what the session numbering counts along,
             // and what a rename of a session that is over is pruned against.
             names.took(panes)
+            workbench.save()
+        }
+        .onChange(of: store.hasLoadedPanes) { _, loaded in
+            if loaded {
+                workbench.restore(alive: store.panes.map(\.id) + browsers.sessions.map(\.id))
+            }
+        }
+        .onChange(of: browsers.sessions.map(\.id)) { _, ids in
+            let alive = Set(ids)
+            webViews.retain(alive)
+            for pane in workbench.panes where store.pane(pane) == nil && !alive.contains(pane) {
+                workbench.close(pane: pane)
+            }
             workbench.save()
         }
         .onChange(of: workbench.root) { _, _ in workbench.save() }
@@ -329,7 +364,7 @@ struct MainView: View {
                 title: Strings.t("toolbar.arrange.title"),
                 label: Strings.t(workbench.isArranged
                     ? "toolbar.arrange.undo" : "toolbar.arrange"),
-                enabled: workbench.isArranged || inThisProject.count > 1,
+                enabled: workbench.isArranged || arrangementIDs.count > 1,
                 action: arrange
             )
         }
@@ -361,13 +396,21 @@ struct MainView: View {
             LanguageMenu()
         }
         ToolbarItem(placement: .primaryAction) {
-            ToolbarIcon(
-                symbol: "plus",
-                title: Strings.t("toolbar.new.title"),
-                label: Strings.t("toolbar.new")
-            ) {
-                pending = PendingSession(axis: nil)
+            Menu {
+                Button(Strings.t("menu.newSession")) { pending = PendingSession(axis: nil) }
+                Button(Strings.t("browser.title")) { newBrowser() }
+            } label: {
+                Label(Strings.t("toolbar.new.title"), systemImage: "plus")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.primary)
             }
+            .menuStyle(.button)
+            .labelStyle(.titleAndIcon)
+            .menuIndicator(.hidden)
+            .chromeButtonStyle()
+            .controlSize(.regular)
+            .fixedSize()
+            .help(Strings.t("toolbar.new"))
         }
     }
 
@@ -377,7 +420,7 @@ struct MainView: View {
     /// Arrange lays out a *project*, not the whole daemon: four sessions in
     /// one checkout is the case it is for.
     private var inThisProject: [PaneInfo] {
-        guard let project = focused?.workspace else { return [] }
+        guard let project = focused?.workspace ?? workbench.focus.flatMap(browsers.session)?.project else { return [] }
         let recent = workbench.recentlyUsed
         return store.panes
             .filter { $0.workspace == project }
@@ -390,8 +433,22 @@ struct MainView: View {
             }
     }
 
+    private var arrangementIDs: [PaneID] {
+        let project = focused?.workspace ?? workbench.focus.flatMap(browsers.session)?.project ?? ""
+        let ids = inThisProject.map(\.id) + browsers.sessions.filter { $0.project == project }.map(\.id)
+        let recent = workbench.recentlyUsed
+        return ids.sorted {
+            (recent.firstIndex(of: $0) ?? Int.max) < (recent.firstIndex(of: $1) ?? Int.max)
+        }
+    }
+
+    private func newBrowser() {
+        let project = focused?.workspace ?? workbench.focus.flatMap(browsers.session)?.project ?? ""
+        place(pane: browsers.create(project: project), axis: nil)
+    }
+
     private func arrange() {
-        workbench.arrange(inThisProject.map(\.id), keeping: workbench.focus)
+        workbench.arrange(arrangementIDs, keeping: workbench.focus)
     }
 
     private var anyGuarded: Bool {

@@ -246,3 +246,11 @@
 "menu.go.nth" = "Istunto %d";
 "menu.report" = "Aamuraportti…";
 "window.tooMany" = "otag näyttää enintään %d istuntoa kerralla, joten se, jota et ollut katsonut pisimpään, suljettiin. Se on silti käynnissä.";
+
+"browser.title" = "Selain";
+"browser.back" = "Takaisin";
+"browser.forward" = "Eteenpäin";
+"browser.reload" = "Lataa uudelleen";
+"browser.address" = "Osoite";
+"browser.external" = "Avaa oletusselaimessa";
+"browser.invalidAddress" = "Anna kelvollinen verkko-osoite.";

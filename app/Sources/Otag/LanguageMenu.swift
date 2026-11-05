@@ -22,14 +22,12 @@ struct LanguageMenu: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "globe")
-                    .frame(width: 18, height: 18)
-                Text(Strings.t("toolbar.language"))
-            }
-            .foregroundStyle(.primary)
+            Label(Strings.t("toolbar.language"), systemImage: "globe")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.primary)
         }
         .menuStyle(.button)
+        .labelStyle(.titleAndIcon)
         .chromeButtonStyle()
         .controlSize(.regular)
         .menuIndicator(.hidden)

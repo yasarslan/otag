@@ -1,3 +1,5 @@
+<img src="app/Resources/icon/otag-1024.png" alt="otag logo" width="128" height="128">
+
 # otag
 
 A multiplexer for AI coding agents, with a terminal client and a native

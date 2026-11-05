@@ -164,7 +164,7 @@ struct SessionActionsTests {
         let (actions, _, _, names, suite) = parts(pane: pane)
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-        #expect(actions.name == "otag", "the folder, until it is named")
+        #expect(actions.name == "Claude", "its agent, until it is asked something or named")
 
         actions.rename(to: "the parser")
         #expect(names.name(of: pane) == "the parser")

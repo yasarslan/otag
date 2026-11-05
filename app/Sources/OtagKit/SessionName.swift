@@ -3,9 +3,10 @@ import Observation
 
 /// What a session is called.
 ///
-/// Not "claude" and "claude" and "claude". A session is a piece of work, and
-/// the thing a person remembers about it is what they asked it to do — so
-/// that is its name, taken from its first prompt and editable afterwards.
+/// Not "claude" and "claude" and "claude", and not the folder three times
+/// over: every session in one project was named after that project, which is
+/// the same as having no names at all. A session is a piece of work, and the
+/// thing a person remembers about it is what they asked it to do.
 ///
 /// The rules below are deliberately dull. A name is a label in a list, not a
 /// summary: cutting a prompt down to its first clause is the whole trick, and
@@ -41,41 +42,61 @@ public enum SessionName {
 
     /// A name for a session, from everything otag knows about it.
     ///
-    /// The order is what a person would expect: what they called it, what
-    /// they asked it, where it is working, and only then what is running in
-    /// it.
+    /// Three sources, in this order: what the user called it, what they
+    /// first asked it, and — when the daemon has neither — what is running
+    /// in it with a number, so that three Codex sessions in one folder are
+    /// "Codex 1", "Codex 2" and "Codex 3" rather than the folder's name
+    /// three times.
+    ///
+    /// The folder is deliberately *not* a source. It is in the sidebar's
+    /// section header and in the session's own header bar already, and using
+    /// it as a name is what made every session in a project look identical.
     public static func of(
         pane: PaneInfo,
         chosen: String? = nil,
-        fromFirstPrompt generated: String? = nil
+        ordinal: Int? = nil
     ) -> String {
         if let chosen, !chosen.trimmingCharacters(in: .whitespaces).isEmpty {
             return chosen
         }
-        if let generated, !generated.isEmpty {
-            return generated
+        if let prompt = pane.firstPrompt, let name = from(prompt: prompt) {
+            return name
         }
-        if let folder = folderName(of: pane) {
-            return folder
-        }
-        if !pane.workspace.isEmpty {
-            return pane.workspace
-        }
-        return pane.agent?.label ?? "shell"
+        return fallback(for: pane, ordinal: ordinal)
     }
 
-    /// The folder a session is working in, by name.
-    static func folderName(of pane: PaneInfo) -> String? {
-        guard let cwd = pane.cwd, !cwd.isEmpty else { return nil }
-        let name = URL(fileURLWithPath: cwd, isDirectory: true).lastPathComponent
-        return name.isEmpty || name == "/" ? nil : name
+    /// What a session with nothing asked of it yet is called: the agent, and
+    /// which one of them it is.
+    public static func fallback(for pane: PaneInfo, ordinal: Int?) -> String {
+        let what = pane.agent?.label ?? "Shell"
+        guard let ordinal else { return what }
+        return "\(what) \(ordinal)"
+    }
+
+    /// Which one of its agent's sessions this is, counting in the order the
+    /// daemon lists them.
+    ///
+    /// One-based, so the first Codex session is "Codex 1". Counting only
+    /// within an agent is what makes the numbers stable while the other
+    /// agent's sessions come and go.
+    public static func ordinals(of panes: [PaneInfo]) -> [PaneID: Int] {
+        var counts: [String: Int] = [:]
+        var ordinals: [PaneID: Int] = [:]
+        for pane in panes {
+            let key = pane.agent?.rawValue ?? ""
+            let next = (counts[key] ?? 0) + 1
+            counts[key] = next
+            ordinals[pane.id] = next
+        }
+        return ordinals
     }
 
     /// The first line of a prompt that is a sentence rather than scaffolding.
     ///
     /// A fenced code block, a line that is only a path, and a line that is
     /// only punctuation are all skipped: they are what the prompt is *about*,
-    /// not what it asks for.
+    /// not what it asks for. The daemon already drops a whole prompt that is
+    /// injected context; this is the rest of the tidying.
     private static func firstUsefulLine(of prompt: String) -> String? {
         var fenced = false
         for raw in prompt.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -103,10 +124,8 @@ public enum SessionName {
         // A trailing `.rs`, `.md`, `.toml`: a short run of letters after a
         // dot, with something in front of it.
         guard let dot = line.lastIndex(of: "."), dot != line.startIndex else { return false }
-        let extension_ = line[line.index(after: dot)...]
-        return !extension_.isEmpty
-            && extension_.count <= 5
-            && extension_.allSatisfy(\.isLetter)
+        let suffix = line[line.index(after: dot)...]
+        return !suffix.isEmpty && suffix.count <= 5 && suffix.allSatisfy(\.isLetter)
     }
 
     /// The line with its empty opening removed, as words.
@@ -179,40 +198,42 @@ public enum SessionName {
     }
 }
 
-/// The names the user has given, and the ones otag made from first prompts.
+/// The names the user has given their sessions.
 ///
-/// Kept by the app rather than the daemon: a name is a label on a window,
-/// and the daemon's business is what is running. Written to `UserDefaults`
-/// so a restart does not forget them, and pruned to the sessions the daemon
-/// still reports so the file does not grow forever.
-///
-/// **Known gap**: otag can only generate a name from a prompt it sent itself,
-/// which means from the new-session sheet. A session started from the
-/// terminal client is named after its folder until it is renamed. Naming
-/// those too needs the daemon to report a session's first prompt.
+/// Only the renames: a session's own name comes from the first prompt, which
+/// the daemon reports, so there is nothing for the app to remember about it.
+/// Kept in `UserDefaults` so a restart does not forget a rename, and pruned
+/// to the sessions the daemon still reports so the file does not grow
+/// forever.
 @MainActor
 @Observable
 public final class SessionNames {
     /// Where the names are kept.
     public static let chosenKey = "sessionNames"
-    public static let generatedKey = "sessionNamesFromPrompts"
 
     /// What the user called each session.
     private var chosen: [PaneID: String] = [:]
-    /// What otag made from each session's first prompt.
-    private var generated: [PaneID: String] = [:]
+    /// Which one of its agent's sessions each pane is, from the last report.
+    private var ordinals: [PaneID: Int] = [:]
 
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         chosen = Self.read(Self.chosenKey, from: defaults)
-        generated = Self.read(Self.generatedKey, from: defaults)
+    }
+
+    /// Take in the daemon's list, which is what the numbering counts along.
+    ///
+    /// Also forgets the renames of sessions the daemon no longer runs.
+    public func took(_ panes: [PaneInfo]) {
+        ordinals = SessionName.ordinals(of: panes)
+        prune(to: panes.map(\.id))
     }
 
     /// What this session is called.
     public func name(of pane: PaneInfo) -> String {
-        SessionName.of(pane: pane, chosen: chosen[pane.id], fromFirstPrompt: generated[pane.id])
+        SessionName.of(pane: pane, chosen: chosen[pane.id], ordinal: ordinals[pane.id])
     }
 
     /// Whether the user has named this session themselves.
@@ -234,28 +255,16 @@ public final class SessionNames {
         write()
     }
 
-    /// Remember what a session was first asked, as its name.
-    ///
-    /// Only the first prompt counts, and only when the user has not named
-    /// the session themselves.
-    public func remember(firstPrompt prompt: String, for pane: PaneID) {
-        guard generated[pane] == nil, let name = SessionName.from(prompt: prompt) else { return }
-        generated[pane] = name
-        write()
-    }
-
     /// Forget the sessions the daemon no longer runs.
     public func prune(to alive: [PaneID]) {
         let running = Set(alive)
-        let before = chosen.count + generated.count
+        let before = chosen.count
         chosen = chosen.filter { running.contains($0.key) }
-        generated = generated.filter { running.contains($0.key) }
-        if chosen.count + generated.count != before { write() }
+        if chosen.count != before { write() }
     }
 
     private func write() {
         defaults.set(Self.encode(chosen), forKey: Self.chosenKey)
-        defaults.set(Self.encode(generated), forKey: Self.generatedKey)
     }
 
     /// `PaneID` is a number, and `UserDefaults` wants string keys.

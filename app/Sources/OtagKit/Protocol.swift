@@ -124,6 +124,13 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
     public var agent: AgentKind?
     public var status: PaneStatus = .idle
     public var session: String?
+    /// The first thing the user asked this session, when the daemon knows.
+    ///
+    /// What the session is called. It comes from the prompt otag started it
+    /// with, or from the agent's own transcript for a session otag did not
+    /// start, and the daemon clips it so a pasted essay cannot arrive as a
+    /// name.
+    public var firstPrompt: String?
     public var tokens: Tokens = Tokens()
     /// How large the model's context is, when otag knows. Without it a
     /// context meter has no denominator and only the count is shown.
@@ -134,6 +141,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, size, workspace, cwd, title, agent, status, session, tokens, exit
+        case firstPrompt = "first_prompt"
         case contextWindow = "context_window"
         case nightShift = "night_shift"
     }
@@ -153,6 +161,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         agent: AgentKind? = nil,
         status: PaneStatus = .idle,
         session: String? = nil,
+        firstPrompt: String? = nil,
         tokens: Tokens = Tokens(),
         contextWindow: UInt64? = nil,
         nightShift: NightShiftView? = nil,
@@ -166,6 +175,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         self.agent = agent
         self.status = status
         self.session = session
+        self.firstPrompt = firstPrompt
         self.tokens = tokens
         self.contextWindow = contextWindow
         self.nightShift = nightShift
@@ -184,6 +194,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
         agent = try? container.decodeIfPresent(AgentKind.self, forKey: .agent)
         status = (try? container.decodeIfPresent(PaneStatus.self, forKey: .status)) ?? .idle
         session = try container.decodeIfPresent(String.self, forKey: .session)
+        firstPrompt = try container.decodeIfPresent(String.self, forKey: .firstPrompt)
         tokens = try container.decodeIfPresent(Tokens.self, forKey: .tokens) ?? Tokens()
         contextWindow = try container.decodeIfPresent(UInt64.self, forKey: .contextWindow)
         nightShift = try container.decodeIfPresent(NightShiftView.self, forKey: .nightShift)
@@ -508,6 +519,7 @@ public enum Request: Sendable {
     case nightShift(pane: PaneID, plan: NightShiftPlan?)
     case morningReport
     case attachPane(pane: PaneID, size: PaneSize?)
+    case terminalAppearance(dark: Bool)
     case detachPane(pane: PaneID)
     case paneInput(pane: PaneID, bytes: Data)
     case paneResize(pane: PaneID, size: PaneSize)
@@ -583,6 +595,9 @@ extension Request: Encodable {
             try container.encode("attach_pane", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
             try container.encodeIfPresent(size, forKey: Key("size"))
+        case let .terminalAppearance(dark):
+            try container.encode("terminal_appearance", forKey: Key("type"))
+            try container.encode(dark, forKey: Key("dark"))
         case let .detachPane(pane):
             try container.encode("detach_pane", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))

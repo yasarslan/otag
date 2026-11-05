@@ -36,6 +36,36 @@ struct ProtocolTests {
         #expect(!without.contains("size"))
     }
 
+    @Test("the app tells the daemon which way round its terminal is")
+    func terminalAppearanceEncodes() throws {
+        // What makes `COLORFGBG` right in a pane the daemon starts next.
+        let dark = try line(.terminalAppearance(dark: true))
+        #expect(dark.contains(#""type":"terminal_appearance""#))
+        #expect(dark.contains(#""dark":true"#))
+        #expect(try line(.terminalAppearance(dark: false)).contains(#""dark":false"#))
+    }
+
+    @Test("a pane carries the first thing it was asked, when the daemon knows")
+    func firstPromptDecodes() throws {
+        let with = try response(#"""
+        {"type":"panes","panes":[{"id":1,"size":{"rows":24,"cols":80},        "first_prompt":"add a parser test"}]}
+        """#)
+        guard case let .panes(panes) = with else {
+            Issue.record("expected panes, got \(with)")
+            return
+        }
+        #expect(panes[0].firstPrompt == "add a parser test")
+
+        // A daemon that has not been asked anything, and an older daemon
+        // that does not send the field at all, both mean the same thing.
+        let without = try response(#"{"type":"panes","panes":[{"id":1}]}"#)
+        guard case let .panes(bare) = without else {
+            Issue.record("expected panes, got \(without)")
+            return
+        }
+        #expect(bare[0].firstPrompt == nil)
+    }
+
     @Test("input travels as base64, which is what the daemon reads")
     func inputEncodesAsBase64() throws {
         let encoded = try line(.paneInput(pane: 1, bytes: Data([0x1B, 0x5B, 0x41])))

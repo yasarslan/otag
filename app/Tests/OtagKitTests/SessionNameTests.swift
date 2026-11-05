@@ -106,44 +106,75 @@ struct SessionNameTests {
         #expect(SessionName.from(prompt: "```\ncode only\n```") == nil)
     }
 
-    @Test("a session falls back to its folder, then to what is running in it")
-    func theFallbackOrder() {
-        var pane = PaneInfo(id: 1, size: PaneSize(rows: 24, cols: 80))
-        pane.agent = .claude
+    @Test("a session with nothing asked of it is the agent and a number")
+    func theFallback() {
+        // Never the folder. Three sessions in one project used to be the
+        // folder's name three times over, which is the same as no names.
+        var pane = PaneInfo(id: 1, workspace: "api-gateway", agent: .claude)
         pane.cwd = "/Users/someone/work/api-gateway"
-        pane.workspace = "api-gateway"
 
-        #expect(SessionName.of(pane: pane) == "api-gateway", "the folder it works in")
+        #expect(SessionName.of(pane: pane, ordinal: 2) == "Claude 2")
+        #expect(SessionName.of(pane: pane, ordinal: nil) == "Claude")
 
-        pane.cwd = nil
-        #expect(SessionName.of(pane: pane) == "api-gateway", "then the project")
-
-        pane.workspace = ""
-        #expect(SessionName.of(pane: pane) == "Claude", "then the agent")
+        pane.agent = .codex
+        #expect(SessionName.of(pane: pane, ordinal: 1) == "Codex 1")
 
         pane.agent = nil
-        #expect(SessionName.of(pane: pane) == "shell")
+        #expect(SessionName.of(pane: pane, ordinal: 3) == "Shell 3")
+    }
+
+    @Test("the numbers count within an agent, in the daemon's order")
+    func numbering() {
+        let panes = [
+            PaneInfo(id: 1, agent: .claude),
+            PaneInfo(id: 2, agent: .codex),
+            PaneInfo(id: 3, agent: .claude),
+            PaneInfo(id: 4, agent: nil),
+            PaneInfo(id: 5, agent: .codex),
+        ]
+        let ordinals = SessionName.ordinals(of: panes)
+        #expect(ordinals[1] == 1)
+        #expect(ordinals[3] == 2, "the second Claude session, not the third session")
+        #expect(ordinals[2] == 1)
+        #expect(ordinals[5] == 2)
+        #expect(ordinals[4] == 1, "a shell is counted among the shells")
+    }
+
+    @Test("the first prompt the daemon reports is the name")
+    func theDaemonsPrompt() {
+        let pane = PaneInfo(
+            id: 1,
+            workspace: "api",
+            agent: .claude,
+            firstPrompt: "please fix the transcript parser"
+        )
+        #expect(SessionName.of(pane: pane, ordinal: 1) == "Fix the transcript parser")
+    }
+
+    @Test("a first prompt with no name in it falls through to the number")
+    func anUnusablePrompt() {
+        let pane = PaneInfo(id: 1, agent: .codex, firstPrompt: "```\ncode only\n```")
+        #expect(SessionName.of(pane: pane, ordinal: 2) == "Codex 2")
     }
 
     @Test("the user's own name wins over everything")
     func renameWins() {
-        var pane = PaneInfo(id: 1, size: PaneSize(rows: 24, cols: 80))
-        pane.agent = .codex
-        pane.cwd = "/work/api"
-
-        #expect(
-            SessionName.of(pane: pane, chosen: "the hard one", fromFirstPrompt: "Fix the parser")
-                == "the hard one"
+        let pane = PaneInfo(
+            id: 1,
+            workspace: "api",
+            agent: .codex,
+            firstPrompt: "fix the parser"
         )
+
+        #expect(SessionName.of(pane: pane, chosen: "the hard one", ordinal: 1) == "the hard one")
         #expect(
-            SessionName.of(pane: pane, chosen: "   ", fromFirstPrompt: "Fix the parser")
-                == "Fix the parser",
+            SessionName.of(pane: pane, chosen: "   ", ordinal: 1) == "Fix the parser",
             "a blank name is not a name"
         )
     }
 }
 
-/// The names, kept between runs.
+/// The names the user has given, kept between runs.
 @Suite("Remembering session names")
 @MainActor
 struct SessionNamesStoreTests {
@@ -154,33 +185,34 @@ struct SessionNamesStoreTests {
         return (SessionNames(defaults: defaults), defaults, suite)
     }
 
-    private func pane(_ id: PaneID, cwd: String = "/work/api") -> PaneInfo {
-        var pane = PaneInfo(id: id, size: PaneSize(rows: 24, cols: 80))
-        pane.agent = .claude
-        pane.cwd = cwd
-        return pane
+    private func pane(_ id: PaneID, prompt: String? = nil) -> PaneInfo {
+        PaneInfo(id: id, workspace: "api", cwd: "/work/api", agent: .claude, firstPrompt: prompt)
     }
 
-    @Test("a first prompt becomes the name, and later prompts do not")
-    func firstPromptOnly() {
+    @Test("the daemon's first prompt names a session, with no help from here")
+    func namesComeFromTheDaemon() {
         let (names, _, suite) = store()
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-        names.remember(firstPrompt: "add a parser test", for: 1)
-        #expect(names.name(of: pane(1)) == "Add a parser test")
-
-        names.remember(firstPrompt: "now do something else", for: 1)
-        #expect(names.name(of: pane(1)) == "Add a parser test", "only the first counts")
+        let asked = pane(1, prompt: "add a parser test")
+        names.took([asked])
+        #expect(names.name(of: asked) == "Add a parser test")
     }
 
-    @Test("a prompt with no name in it leaves the fallback alone")
-    func anEmptyPrompt() {
+    @Test("sessions in one folder are told apart by a number, not by the folder")
+    func sessionsInOneFolder() {
         let (names, _, suite) = store()
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-        names.remember(firstPrompt: "   ", for: 1)
-        #expect(names.name(of: pane(1)) == "api", "still the folder")
-        #expect(!names.isRenamed(1))
+        // What the bug looked like: three sessions in one project, all
+        // called after the project.
+        let panes = [pane(1), pane(2), pane(3)]
+        names.took(panes)
+
+        let shown = panes.map(names.name(of:))
+        #expect(shown == ["Claude 1", "Claude 2", "Claude 3"])
+        #expect(Set(shown).count == 3, "no two sessions may read the same")
+        #expect(!shown.contains("api"), "the folder is not a name")
     }
 
     @Test("renaming wins, and an empty rename puts the old name back")
@@ -188,26 +220,26 @@ struct SessionNamesStoreTests {
         let (names, _, suite) = store()
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-        names.remember(firstPrompt: "add a parser test", for: 1)
+        let asked = pane(1, prompt: "add a parser test")
+        names.took([asked])
         names.rename(1, to: "  the parser  ")
-        #expect(names.name(of: pane(1)) == "the parser")
+        #expect(names.name(of: asked) == "the parser")
         #expect(names.isRenamed(1))
 
         names.rename(1, to: "")
-        #expect(names.name(of: pane(1)) == "Add a parser test")
+        #expect(names.name(of: asked) == "Add a parser test")
         #expect(!names.isRenamed(1))
     }
 
-    @Test("names survive a restart")
+    @Test("renames survive a restart")
     func persistence() {
         let (names, defaults, suite) = store()
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-        names.remember(firstPrompt: "add a parser test", for: 1)
         names.rename(2, to: "the hard one")
 
         let reopened = SessionNames(defaults: defaults)
-        #expect(reopened.name(of: pane(1)) == "Add a parser test")
+        reopened.took([pane(2)])
         #expect(reopened.name(of: pane(2)) == "the hard one")
     }
 
@@ -218,7 +250,7 @@ struct SessionNamesStoreTests {
 
         names.rename(1, to: "one")
         names.rename(2, to: "two")
-        names.prune(to: [2])
+        names.took([pane(2)])
 
         #expect(!names.isRenamed(1))
         #expect(names.isRenamed(2))

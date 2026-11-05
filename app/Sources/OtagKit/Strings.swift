@@ -99,6 +99,9 @@ public final class Strings {
         didSet {
             guard language != oldValue else { return }
             defaults.set(language.rawValue, forKey: Self.key)
+            // The number and date helpers are called from wherever a value
+            // is drawn, so they are told rather than asked.
+            Readable.format(for: language.locale)
         }
     }
 
@@ -109,6 +112,7 @@ public final class Strings {
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         language = Language.stored(defaults.string(forKey: Self.key))
+        Readable.format(for: language.locale)
     }
 
     /// The locale dates and numbers are formatted for.

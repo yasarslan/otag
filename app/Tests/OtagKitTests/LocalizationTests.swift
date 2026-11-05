@@ -192,6 +192,35 @@ struct LocalizationTests {
         #expect(english != turkish, "the locale is not reaching the formatters")
     }
 
+    @Test("a reset time and a token count follow the chosen language")
+    func numbersFollowTheLanguage() {
+        // The point of carrying a locale through `Readable`: 1.2M is written
+        // with a comma in Turkish and in Finnish, and a clock is not
+        // written the same way in all three.
+        let english = Readable.tokens(1_200_000, locale: Language.english.locale)
+        let turkish = Readable.tokens(1_200_000, locale: Language.turkish.locale)
+        #expect(english == "1.2M")
+        #expect(turkish == "1,2M")
+
+        // And the helper with no locale given follows whatever the app is
+        // speaking, which is what every call site relies on.
+        Readable.format(for: Language.turkish.locale)
+        #expect(Readable.tokens(1_200_000) == "1,2M")
+        Readable.format(for: Language.english.locale)
+        #expect(Readable.tokens(1_200_000) == "1.2M")
+    }
+
+    @Test("telling Readable the language is safe from any thread")
+    func readableOffTheMainActor() async {
+        // It is called from wherever a number is drawn, so it must not
+        // assume it is on the main actor — an earlier version trapped.
+        await Task.detached {
+            _ = Readable.locale
+            _ = Readable.tokens(5_000)
+            _ = Readable.resetClock(1_767_000_000)
+        }.value
+    }
+
     /// Every key the Swift sources pass to `Strings.t`.
     private func keysUsedInSources() throws -> Set<String> {
         var found: Set<String> = []

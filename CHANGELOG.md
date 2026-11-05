@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Choosing a session in the app's sidebar now shows that session. It changed
+  which session had the keyboard but went on drawing the previous one's
+  terminal: a terminal view holds one session's byte stream, and when the
+  window replaced one session with another the view was reused rather than
+  rebuilt, so the stream stayed attached to the session that had gone.
+- A session's header no longer says the same thing twice. A session named
+  after its folder repeated that folder's name and left out the separators
+  between the three things it says; it now reads `name · project · status`,
+  with the project left out when it is already what the session is called.
+
 ### Added
 
 - **Otag.app**, a native macOS window onto the same daemon: it starts the
@@ -24,9 +36,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cmd-]` move the keyboard, `Cmd-W` closes a session, and `Cmd-1`–`Cmd-9`
   jump to the first nine. A fourth session closes the one you had not looked
   at for longest and says so.
-- Every session is called something you recognise: a name taken from its
-  first prompt, editable from `⋯ > Rename…` or a right click. A session
-  started outside otag is named after the folder it works in.
+- Every session is called something you recognise: a name taken from the
+  first thing it was asked, editable from `⋯ > Rename…` or a right click.
+  The daemon carries that prompt — from the one a client started the session
+  with, or from the agent's own transcript for a session otag did not start —
+  so a session started from the terminal client is named too. A session
+  nobody has asked anything yet is its agent and a number ("Claude 1",
+  "Codex 2"), never the folder: every session in one project used to be
+  named after that project, which is the same as having no names at all.
+- An agent writes its own injected context into its transcript as a message
+  from the user — every Codex session opens with an `<environment_context>`
+  block — so otag skips those and names a session after the first thing a
+  person actually typed.
+- `first_prompt` on every pane the daemon reports, and `terminal_appearance`
+  on the socket: a client says whether it draws its panes on dark or light
+  paper, and otag sets `COLORFGBG` in every pane it starts from then on. A
+  program that reads that variable rather than asking the terminal is
+  therefore told the truth from its first line. A pane already running is
+  left alone, because a process's environment cannot be changed from
+  outside it.
 - One bar above a session, with exactly two controls: a primary button that
   hands the work to the other agent — **Switch to Codex** / **Switch to
   Claude**, emphasised once the current agent is nearly out of room — and one

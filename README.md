@@ -110,8 +110,9 @@ main area shows the one you picked, or two or three side by side.
 - **The sidebar is the only navigator.** Sessions grouped by project, each
   with a colour for its agent, a name taken from its first prompt, and one
   word for what it is doing: Working, Needs you, Done or Idle. Click a
-  session to see it, `⌘1`–`⌘9` to jump to one, double-click or right-click to
-  rename it.
+  session to see it, `⌘1`–`⌘9` to jump to one, right-click to rename it. A
+  session nobody has asked anything yet is "Claude 1", "Codex 2" and so on,
+  so two sessions never read the same.
 - **A question opens the row that asked it.** When an agent wants
   permission, its own row expands with the question and **Allow** / **Deny**
   (`⇧⌘Y` / `⇧⌘N`); the same two buttons are on the notification and in the
@@ -142,7 +143,8 @@ main area shows the one you picked, or two or three side by side.
   your system appearance unless you choose. Each theme's colours are checked
   against its own background, so an agent's diffs and prompts stay readable.
   Every pane also answers an agent's "what colour are you?" query honestly,
-  so an agent on its own auto theme follows otag's with nothing configured.
+  and is started with `COLORFGBG` set to match, so an agent on its own auto
+  theme follows otag's with nothing configured.
 - `⌘K` is every session and command by name, and the menu bar item shows the
   limits and who is waiting even with the window closed.
 

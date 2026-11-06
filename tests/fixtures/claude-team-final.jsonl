@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"Inspect the sample task."}}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text","text":"Working commentary."}]}}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Goal: validate the sample.\nOTAG_RESULT: READY"}]}}
+{"type":"assistant","isSidechain":true,"message":{"stop_reason":"end_turn","content":[{"type":"text","text":"A different worker."}]}}

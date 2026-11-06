@@ -58,6 +58,9 @@ pub struct Member {
 /// A daemon-owned workflow, persisted with its session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Team {
+    /// Monotonic process/step revision, used to invalidate stale UI actions.
+    #[serde(default)]
+    pub revision: u64,
     /// Stable team identity, derived from its first pane.
     pub id: u64,
     /// Shared project directory.
@@ -81,6 +84,8 @@ pub struct Team {
 /// Small per-pane presentation of daemon-owned team state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
+    /// Revision the client must send with a step action.
+    pub revision: u64,
     /// Team identity.
     pub id: u64,
     /// Role order.
@@ -100,6 +105,7 @@ impl Team {
     pub fn membership(&self, pane: PaneId) -> Option<Membership> {
         let index = self.members.iter().position(|m| m.pane == pane)?;
         Some(Membership {
+            revision: self.revision,
             id: self.id,
             index,
             current: index == self.current && !self.finished,
@@ -162,6 +168,7 @@ mod tests {
             worktree: false,
         };
         let team = Team {
+            revision: 0,
             id: 1,
             project: "/project".into(),
             members: vec![Member {

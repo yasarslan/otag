@@ -370,6 +370,16 @@ struct MainView: View {
     /// a toolbar nobody learns.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            if let team = focused?.team {
+                Button {
+                    store.send(.teamMode(team: team.id, automatic: !team.automatic))
+                } label: {
+                    Label(Strings.t(team.automatic ? "team.auto" : "team.manual"), systemImage: team.automatic ? "play.circle" : "hand.tap")
+                }
+                .help(Strings.t("team.mode.help"))
+            }
+        }
         ToolbarItem(placement: .primaryAction) {
             ToolbarIcon(
                 symbol: workbench.isArranged ? "rectangle" : "rectangle.split.2x2",

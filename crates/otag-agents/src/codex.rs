@@ -278,6 +278,8 @@ struct Record {
 #[derive(Debug, Deserialize)]
 struct Payload {
     #[serde(default)]
+    last_agent_message: Option<String>,
+    #[serde(default)]
     r#type: Option<String>,
     #[serde(default)]
     id: Option<String>,
@@ -473,9 +475,22 @@ fn read_event(transcript: &mut Transcript, payload: &Payload) {
     // of them says whether it is still working. This is the only reliable
     // answer: it needs no hooks and nothing read off a screen.
     match payload.r#type.as_deref() {
-        Some("task_started") => transcript.turn = Some(TurnState::Working),
-        Some("task_complete") | Some("turn_aborted") => {
+        Some("task_started") => {
+            transcript.turn = Some(TurnState::Working);
+            transcript.final_message = None;
+            transcript.interrupted = false;
+        }
+        Some("task_complete") => {
             transcript.turn = Some(TurnState::Finished);
+            transcript.final_message = payload
+                .last_agent_message
+                .clone()
+                .or_else(|| transcript.last_message.clone());
+        }
+        Some("turn_aborted") => {
+            transcript.turn = Some(TurnState::Finished);
+            transcript.final_message = None;
+            transcript.interrupted = true;
         }
         _ => {}
     }

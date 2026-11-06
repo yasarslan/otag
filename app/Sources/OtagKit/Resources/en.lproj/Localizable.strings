@@ -266,3 +266,10 @@
 "team.add" = "+ Add role";
 "team.remove" = "Remove role";
 "team.shell.note" = "Shell roles are manual and can edit files.";
+"team.startStep" = "Start step";
+"team.next" = "Send to next step";
+"team.back" = "Send back to Coder";
+"team.waiting" = "Waiting for step / write turn";
+"team.auto" = "Auto";
+"team.manual" = "Manual";
+"team.mode.help" = "Switch team progression between Manual and Auto. Shell steps always require manual action.";

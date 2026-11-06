@@ -68,6 +68,21 @@ struct SessionHeaderBar: View {
 
             Spacer(minLength: Chrome.gap)
 
+            if let team = actions.pane.team {
+                if team.current {
+                    if team.waiting {
+                        Button(Strings.t("team.startStep")) { advance(team) }
+                    } else if team.manual || actions.pane.status == .idle || actions.pane.status == .done {
+                        Button(Strings.t("team.next")) { advance(team) }
+                        if team.index == 2 {
+                            Button(Strings.t("team.back")) { advance(team, back: true) }
+                        }
+                    }
+                } else {
+                    Text(Strings.t("team.waiting")).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             Button(action: actions.close) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .semibold))
@@ -82,6 +97,10 @@ struct SessionHeaderBar: View {
         .chromeBackground()
         .overlay(alignment: .bottom) { Divider() }
         .help(actions.pane.agent.name)
+    }
+
+    private func advance(_ team: TeamMembership, back: Bool = false) {
+        actions.store.send(.teamAdvance(pane: actions.pane.id, revision: team.revision, back: back))
     }
 
     /// One piece of the header's line.

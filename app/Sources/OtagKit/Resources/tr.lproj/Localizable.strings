@@ -266,3 +266,10 @@
 "team.add" = "+ Rol ekle";
 "team.remove" = "Rolü kaldır";
 "team.shell.note" = "Shell rolleri manueldir ve dosyaları düzenleyebilir.";
+"team.startStep" = "Adımı başlat";
+"team.next" = "Sonraki adıma gönder";
+"team.back" = "Kodlamaya geri gönder";
+"team.waiting" = "Adım / yazma sırası bekleniyor";
+"team.auto" = "Otomatik";
+"team.manual" = "Manuel";
+"team.mode.help" = "Takım ilerlemesini Manuel ve Otomatik arasında değiştir. Shell adımları her zaman manuel işlem gerektirir.";

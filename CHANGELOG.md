@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Team step transfer saves confirmed final answers under the project’s
+  `.otag/team/` directory, supports returning reviews to Coder, and offers
+  Manual/Auto progression with conservative completion checks and guard stops.
+
 - Solo and Team session modes, with ordered roles, per-role agents, extra
   roles, sidebar grouping, automatic arrangement, and durable daemon-owned
   team state. Shell team roles are editable and manual.

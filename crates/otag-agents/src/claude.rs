@@ -276,6 +276,8 @@ fn session_id_from_path(path: &Path) -> Option<String> {
 /// One line of a session file, as far as otag reads it.
 #[derive(Debug, Deserialize)]
 struct Record {
+    #[serde(default, rename = "isSidechain")]
+    sidechain: bool,
     #[serde(default)]
     r#type: Option<String>,
     #[serde(default)]
@@ -291,6 +293,8 @@ struct Record {
 /// What an agent or a user said.
 #[derive(Debug, Deserialize)]
 struct Message {
+    #[serde(default)]
+    stop_reason: Option<String>,
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
@@ -373,6 +377,9 @@ pub fn parse_transcript(text: &str, session_id: Option<String>) -> Transcript {
         let Ok(record) = serde_json::from_str::<Record>(line) else {
             continue;
         };
+        if record.sidechain {
+            continue;
+        }
         if transcript.session_id.is_none() {
             transcript.session_id = record.session_id;
         }
@@ -391,10 +398,31 @@ pub fn parse_transcript(text: &str, session_id: Option<String>) -> Transcript {
                 if let Some(Content::Text(text)) = message.content
                     && !text.trim().is_empty()
                 {
+                    transcript.final_message = None;
+                    transcript.turn = Some(crate::TurnState::Working);
                     transcript.prompts.push(text);
                 }
             }
             Some("assistant") => {
+                transcript.final_message = None;
+                transcript.turn = Some(if message.stop_reason.as_deref() == Some("end_turn") {
+                    crate::TurnState::Finished
+                } else {
+                    crate::TurnState::Working
+                });
+                if message.stop_reason.as_deref() == Some("end_turn")
+                    && let Some(Content::Blocks(blocks)) = &message.content
+                {
+                    let text = blocks
+                        .iter()
+                        .filter(|b| b.r#type.as_deref() == Some("text"))
+                        .filter_map(|b| b.text.as_deref())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.trim().is_empty() {
+                        transcript.final_message = Some(text);
+                    }
+                }
                 transcript.turns += 1;
                 if let Some(model) = message.model {
                     transcript.model = Some(model);

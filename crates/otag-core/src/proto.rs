@@ -245,6 +245,23 @@ pub enum Request {
         /// Ordered role configuration.
         roles: Vec<crate::team::Role>,
     },
+    /// Advance or resume the selected role, with stale-action protection.
+    TeamAdvance {
+        /// Current role pane.
+        pane: PaneId,
+        /// Revision displayed by the client.
+        revision: u64,
+        /// Send a review with problems back to the coding step.
+        #[serde(default)]
+        back: bool,
+    },
+    /// Change a team's progression policy.
+    TeamMode {
+        /// Team identifier.
+        team: u64,
+        /// Auto when true; Manual otherwise.
+        automatic: bool,
+    },
     /// Be told about everything that happens in the session, without asking
     /// again: statuses, usage, questions and handoffs.
     ///

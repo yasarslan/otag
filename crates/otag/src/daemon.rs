@@ -157,6 +157,10 @@ async fn serve(socket: &Path, state: &Path, parent: Option<i32>) -> Result<()> {
         inbox,
         handoffs,
     };
+    let teaming = tokio::spawn(crate::team::keep_working(
+        Arc::clone(&session),
+        Arc::clone(&guards),
+    ));
     let socket_identity = std::fs::metadata(socket).context("cannot inspect the bound socket")?;
     let result = server
         .run_until(daemon, async {
@@ -167,6 +171,7 @@ async fn serve(socket: &Path, state: &Path, parent: Option<i32>) -> Result<()> {
         })
         .await;
     guarding.abort();
+    teaming.abort();
     watching.abort();
     notifying.abort();
     collecting.abort();
@@ -365,6 +370,14 @@ impl Handler for Daemon {
             ),
             Request::StartTeam { cwd, roles } => {
                 Some(crate::team::create(&self.session, &cwd, roles).await)
+            }
+            Request::TeamAdvance {
+                pane,
+                revision,
+                back,
+            } => Some(crate::team::advance(&self.session, pane, revision, back).await),
+            Request::TeamMode { team, automatic } => {
+                Some(crate::team::mode(&self.session, team, automatic).await)
             }
             Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
             Request::DetachPane { pane } => {

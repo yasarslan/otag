@@ -360,6 +360,7 @@ impl Pane {
 /// Everything one daemon owns.
 #[derive(Debug)]
 pub struct Session {
+    team_operations: tokio::sync::Mutex<()>,
     /// What every new pane runs, and the environment it runs in.
     template: PaneSpec,
     /// Bumped on every structural change, so clients know to ask for a view.
@@ -513,6 +514,10 @@ impl State {
 }
 
 impl Session {
+    /// Serialize workflow transitions, including process and filesystem I/O.
+    pub async fn team_operation(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.team_operations.lock().await
+    }
     /// Durable team state, copied without holding a lock across I/O.
     pub fn teams(&self) -> Vec<crate::team::Team> {
         self.state
@@ -536,6 +541,11 @@ impl Session {
         command: &[String],
         title: &str,
     ) -> Result<()> {
+        let previous = self.pane(id).ok_or(Error::PaneGone { id: Some(id) })?;
+        let history = previous
+            .history(snapshot::HISTORY_LINES)
+            .await
+            .unwrap_or_default();
         let pid = self.lock()?.panes.get(&id).and_then(|p| p.pid);
         if let Some(pid) = pid {
             tokio::task::spawn_blocking(move || crate::process::terminate(&[pid as i32]))
@@ -561,7 +571,7 @@ impl Session {
                     command,
                     title,
                     nickname: &nickname,
-                    restored: &[],
+                    restored: &history,
                 },
             )?;
             state.panes.insert(id, pane)
@@ -576,6 +586,7 @@ impl Session {
     #[must_use]
     pub fn new(template: PaneSpec) -> Arc<Self> {
         Arc::new(Self {
+            team_operations: tokio::sync::Mutex::new(()),
             template,
             changes: watch::Sender::new(0),
             content_changes: watch::Sender::new(0),

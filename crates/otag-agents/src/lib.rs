@@ -237,6 +237,10 @@ pub struct Transcript {
     pub prompts: Vec<String>,
     /// The last thing the agent said.
     pub last_message: Option<String>,
+    /// Final answer confirmed by a completed turn, excluding commentary.
+    pub final_message: Option<String>,
+    /// An interrupted turn must never trigger automatic progression.
+    pub interrupted: bool,
     /// Files it wrote to, in the order it first touched them.
     pub files_touched: Vec<PathBuf>,
     /// Shell commands it ran, oldest first.

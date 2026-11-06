@@ -613,6 +613,8 @@ public struct GuardView: Codable, Sendable, Hashable {
 
 /// A command the app sends the daemon.
 public enum Request: Sendable {
+    case teamAdvance(pane: PaneID, revision: UInt64, back: Bool)
+    case teamMode(team: UInt64, automatic: Bool)
     case startTeam(cwd: String, roles: [TeamRole])
     case ping
     case version
@@ -651,6 +653,15 @@ extension Request: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Key.self)
         switch self {
+        case let .teamAdvance(pane, revision, back):
+            try container.encode("team_advance", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            try container.encode(revision, forKey: Key("revision"))
+            try container.encode(back, forKey: Key("back"))
+        case let .teamMode(team, automatic):
+            try container.encode("team_mode", forKey: Key("type"))
+            try container.encode(team, forKey: Key("team"))
+            try container.encode(automatic, forKey: Key("automatic"))
         case let .startTeam(cwd, roles):
             try container.encode("start_team", forKey: Key("type"))
             try container.encode(cwd, forKey: Key("cwd"))

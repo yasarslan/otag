@@ -1,0 +1,3 @@
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"sample-turn"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Working commentary."}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"sample-turn","last_agent_message":"Tests passed.\nOTAG_RESULT: READY"}}

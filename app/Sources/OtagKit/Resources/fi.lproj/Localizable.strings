@@ -266,3 +266,10 @@
 "team.add" = "+ Lisää rooli";
 "team.remove" = "Poista rooli";
 "team.shell.note" = "Shell-roolit etenevät käsin ja voivat muokata tiedostoja.";
+"team.startStep" = "Aloita vaihe";
+"team.next" = "Lähetä seuraavaan vaiheeseen";
+"team.back" = "Palauta koodaajalle";
+"team.waiting" = "Odottaa vaihetta / kirjoitusvuoroa";
+"team.auto" = "Automaattinen";
+"team.manual" = "Manuaalinen";
+"team.mode.help" = "Vaihda tiimin eteneminen käsin tai automaattisesti. Shell-vaiheet vaativat aina käyttäjän toiminnon.";

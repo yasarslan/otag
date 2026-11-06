@@ -18,6 +18,7 @@ public struct TeamRole: Codable, Equatable, Sendable {
 
 /// The daemon's presentation of one role in its team.
 public struct TeamMembership: Codable, Hashable, Sendable {
+    public var revision: UInt64
     public var id: UInt64
     public var index: Int
     public var current: Bool

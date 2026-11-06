@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Language selection is available in Settings only; the toolbar keeps the
+  session and provider controls together.
+
 - Integration fixtures use a short temporary root so default socket paths
   fit within the operating system's Unix-domain socket length limit.
 
@@ -60,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   team state. Shell team roles are editable and manual.
 
 - **A toolbar of five buttons**, one job each: Arrange, Limit guard, Switch
-  agent, Language, New session. One size, one style, each with its whole
+  agent, API LLM, New session. One size, one style, each with its whole
   sentence as a tooltip and as an accessibility label; a button that would do
   nothing is disabled rather than hidden.
 - **Arrange** lays out the sessions of one project evenly: one fills the

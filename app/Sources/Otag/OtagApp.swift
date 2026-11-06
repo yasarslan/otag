@@ -364,10 +364,10 @@ struct MainView: View {
         .onChange(of: workbench.focus) { _, _ in workbench.save() }
     }
 
-    /// Five buttons, one job each, in one style.
+    /// Toolbar actions, one job each, in one style.
     ///
-    /// Arrange acts at once; the guard, switching and the language open
-    /// something; `+` starts a session. A button that would do nothing is
+    /// Arrange acts at once; the guard, switching and API configuration open
+    /// a popover; `+` starts a session. A button that would do nothing is
     /// disabled rather than hidden, because a toolbar that changes shape is
     /// a toolbar nobody learns.
     @ToolbarContentBuilder
@@ -415,9 +415,6 @@ struct MainView: View {
                     SwitchAgentPopover(actions: actions(for: pane))
                 }
             }
-        }
-        ToolbarItem(placement: .primaryAction) {
-            LanguageMenu()
         }
         ToolbarItem(placement: .primaryAction) {
             ToolbarPopoverIcon(symbol: "key", title: Strings.t("api.title"), label: Strings.t("api.title"), shown: $apiProviderShown) {

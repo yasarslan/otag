@@ -93,6 +93,7 @@ pub fn configure(command: &mut Command, home: &Path, socket: &Path) {
         .env("XDG_RUNTIME_DIR", home.join("run"))
         .env("OTAG_EXIT_WITH_PARENT", std::process::id().to_string())
         .env("OTAG_NO_NOTIFY", "1")
+        .env("OTAG_DISABLE_API_PROVIDER", "1")
         .env_remove("OTAG_LOG");
 }
 
@@ -104,6 +105,7 @@ pub fn configure_pty(command: &mut portable_pty::CommandBuilder, home: &Path, so
     command.env("XDG_RUNTIME_DIR", home.join("run"));
     command.env("OTAG_EXIT_WITH_PARENT", std::process::id().to_string());
     command.env("OTAG_NO_NOTIFY", "1");
+    command.env("OTAG_DISABLE_API_PROVIDER", "1");
 }
 
 pub fn stop_child(child: &mut std::process::Child) {

@@ -387,6 +387,11 @@ impl Handler for Daemon {
                 step,
                 expected,
             } => Some(crate::team::undo_confirm(&self.session, team, step, expected).await),
+            Request::ApiProvider {
+                provider,
+                model,
+                refresh,
+            } => Some(self.api_provider(&provider, model, refresh).await),
             Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
             Request::DetachPane { pane } => {
                 self.attachments.remove(outbox.id(), pane);
@@ -495,6 +500,43 @@ struct StartSession {
 }
 
 impl Daemon {
+    async fn api_provider(&self, provider: &str, model: Option<String>, refresh: bool) -> Response {
+        use otag_agents::provider as api;
+        if provider != AgentKind::Deepseek.name() {
+            return Response::error("This API provider is not supported yet.");
+        }
+        if let Some(model) = model {
+            if !api::MODELS.contains(&model.as_str()) {
+                return Response::error("Choose a supported model in API LLM.");
+            }
+            self.session
+                .set_agent_model(AgentKind::Deepseek, model)
+                .await;
+        }
+        let configured = tokio::task::spawn_blocking(api::configured)
+            .await
+            .unwrap_or(false);
+        let result = if refresh && configured {
+            Some(tokio::task::spawn_blocking(api::balance).await)
+        } else {
+            None
+        };
+        let connected = result.as_ref().map(|r| matches!(r, Ok(Ok(_))));
+        let balance = result.and_then(|r| r.ok()).and_then(|r| r.ok()).flatten();
+        Response::ApiProvider {
+            provider: provider.into(),
+            model: self
+                .session
+                .agent_model(AgentKind::Deepseek)
+                .unwrap_or_else(|| api::DEFAULT_MODEL.into()),
+            configured,
+            connected,
+            balance,
+            models: api::MODELS.iter().map(|s| (*s).into()).collect(),
+            keychain_service: api::SERVICE.into(),
+            keychain_account: api::ACCOUNT.into(),
+        }
+    }
     /// Every pane, with what the night shift and the guard are doing for it.
     fn panes(&self) -> Vec<otag_core::proto::PaneInfo> {
         let mut panes = events::panes_of(&self.session);
@@ -536,11 +578,15 @@ impl Daemon {
             }
         }
 
+        let configured_model = asked
+            .agent
+            .and_then(|agent| self.session.agent_model(agent));
         let (command, title) = match asked.agent {
             Some(agent) => (
-                agent
-                    .adapter()
-                    .start_command(asked.prompt.as_deref(), asked.model.as_deref()),
+                agent.adapter().start_command(
+                    asked.prompt.as_deref(),
+                    asked.model.as_deref().or(configured_model.as_deref()),
+                ),
                 agent.name().to_owned(),
             ),
             // No agent is a shell, and a prompt without an agent has nothing
@@ -554,6 +600,7 @@ impl Daemon {
             .await
         {
             Ok(pane) => {
+                self.session.set_agent(pane, asked.agent).await;
                 // What the client asked for is what the session is for, so
                 // it is its name from the first moment rather than once the
                 // agent has written its transcript.
@@ -642,9 +689,33 @@ impl Daemon {
             .iter()
             .any(|t| t.members.iter().any(|m| m.pane == pane))
         {
-            return Response::error(
-                "Use team step controls for managed roles. A separate handoff would bypass the team's permissions and write turn.",
-            );
+            let current = self
+                .session
+                .teams()
+                .iter()
+                .flat_map(|t| &t.members)
+                .find(|m| m.pane == pane)
+                .and_then(|m| m.role.agent);
+            let (target, model) = match handoff {
+                ProtoHandoff::Agent { to } => (
+                    to.unwrap_or_else(|| {
+                        otag_features::guard::other_than(current.unwrap_or(AgentKind::Claude))
+                    }),
+                    None,
+                ),
+                ProtoHandoff::Model { model: Some(model) } => {
+                    (current.unwrap_or(AgentKind::Claude), Some(model))
+                }
+                _ => return Response::error("Choose an agent or model for this team role."),
+            };
+            return match crate::team::switch_agent(&self.session, pane, target, model).await {
+                Ok(()) => Response::HandoffDone {
+                    pane,
+                    package: None,
+                    summary: "Team role agent updated.".into(),
+                },
+                Err(message) => Response::error(message),
+            };
         }
         let mode = match handoff {
             ProtoHandoff::Agent { to } => handoff::Mode::SwitchAgent { to },
@@ -800,11 +871,19 @@ impl Daemon {
         // The status line is the only place Claude Code says how much of the
         // account's limits is gone. Everything else otag shows about usage is
         // counted, and says so.
-        if self.usage.record_limits(
-            AgentKind::Claude,
-            &line.limits(),
-            line.session_id.as_deref(),
-        ) {
+        let source = pane
+            .and_then(|id| {
+                self.session
+                    .agent_panes()
+                    .into_iter()
+                    .find(|p| p.id == id)
+                    .and_then(|p| p.agent)
+            })
+            .unwrap_or(AgentKind::Claude);
+        if self
+            .usage
+            .record_limits(source, &line.limits(), line.session_id.as_deref())
+        {
             usage::publish(&self.session, &self.usage).await;
         }
     }
@@ -831,7 +910,14 @@ impl Daemon {
             path: transcript.unwrap_or_default(),
             cwd,
         };
-        let resume = AgentKind::Claude.adapter().resume_command(&reference);
+        let agent = self
+            .session
+            .agent_panes()
+            .into_iter()
+            .find(|p| p.id == pane)
+            .and_then(|p| p.agent)
+            .unwrap_or(AgentKind::Claude);
+        let resume = agent.adapter().resume_command(&reference);
         self.session.set_restore_command(pane, resume).await;
     }
 

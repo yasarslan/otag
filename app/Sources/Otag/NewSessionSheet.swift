@@ -13,6 +13,7 @@ struct NewSessionSheet: View {
     /// The project to offer: the one the user is looking at, or the newest
     /// session's. Nothing when otag is running nothing at all.
     let suggestedProject: String?
+    let provider: APIProviderInfo
     /// Start an app-owned browser in the chosen project.
     let startBrowser: (String) -> Void
     /// Called with the pane the daemon started. What the session is called
@@ -39,6 +40,7 @@ struct NewSessionSheet: View {
     @State private var problem: String?
     @State private var starting = false
     @State private var team = false
+    @State private var createdTeam: UInt64?
     @State private var roles: [TeamRole] = []
 
     var body: some View {
@@ -70,6 +72,8 @@ struct NewSessionSheet: View {
                     Picker(Strings.t("new.runs"), selection: $kind) {
                         Text(Strings.t("new.runs.claude")).tag(AgentKind.claude.rawValue)
                         Text(Strings.t("new.runs.codex")).tag(AgentKind.codex.rawValue)
+                        Text(AgentKind.deepseek.label).tag(AgentKind.deepseek.rawValue)
+                            .disabled(!provider.configured)
                         Text(Strings.t("new.runs.shell")).tag("")
                         Text(Strings.t("browser.title")).tag("browser")
                     }
@@ -95,6 +99,8 @@ struct NewSessionSheet: View {
                                 Picker(Strings.t("new.runs"), selection: $roles[index].agent) {
                                     Text(Strings.t("new.runs.claude")).tag(AgentKind?.some(.claude))
                                     Text(Strings.t("new.runs.codex")).tag(AgentKind?.some(.codex))
+                                    Text(AgentKind.deepseek.label).tag(AgentKind?.some(.deepseek))
+                                        .disabled(!provider.configured)
                                     Text(Strings.t("new.runs.shell")).tag(AgentKind?.none)
                                 }
                                 if roles[index].agent == nil {
@@ -131,6 +137,9 @@ struct NewSessionSheet: View {
                     }
                 }
                 }
+                if !provider.configured {
+                    Text(Strings.t("api.needKey")).font(.caption).foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
 
@@ -149,7 +158,9 @@ struct NewSessionSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(Strings.t(starting ? "new.starting" : "new.start")) { start() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled((folder == nil && !browser) || starting)
+                    .disabled((folder == nil && (!browser || team)) || starting
+                        || (!team && agent == .deepseek && !provider.configured)
+                        || (team && roles.contains { $0.agent == .deepseek } && !provider.configured))
             }
             .padding(16)
         }
@@ -222,6 +233,7 @@ struct NewSessionSheet: View {
                     switch response {
                     case let .sessionStarted(pane, _, _):
                         if team {
+                            createdTeam = pane
                             try connection.send(.listPanes)
                             continue
                         }
@@ -229,9 +241,9 @@ struct NewSessionSheet: View {
                         dismiss()
                         return
                     case let .panes(panes) where team:
-                        let created = panes.filter { $0.cwd == folder.path && $0.team != nil }
-                        let newest = created.compactMap { $0.team?.id }.max()
-                        teamStarted(created.filter { $0.team?.id == newest }.sorted { ($0.team?.index ?? 0) < ($1.team?.index ?? 0) }.map(\.id))
+                        if let createdTeam {
+                            teamStarted(TeamMembership.members(of: createdTeam, in: panes).map(\.id))
+                        }
                         dismiss()
                         return
                     case let .error(message):

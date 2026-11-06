@@ -109,6 +109,7 @@ extension Optional where Wrapped == AgentKind {
         switch self {
         case .claude: return Color(red: 0.851, green: 0.467, blue: 0.341)
         case .codex: return Color(red: 0.063, green: 0.639, blue: 0.498)
+        case .deepseek: return Color(red: 0.38, green: 0.49, blue: 0.73)
         case nil: return .secondary
         }
     }

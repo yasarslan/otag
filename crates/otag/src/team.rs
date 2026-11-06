@@ -29,22 +29,20 @@ pub async fn create(session: &Arc<Session>, project: &Path, roles: Vec<Role>) ->
         _ => return Response::error("Choose an existing project folder."),
     };
     let mut members = Vec::new();
-    if session
-        .teams()
-        .iter()
-        .any(|t| t.project == project && !t.finished)
-    {
-        return Response::error(
-            "This project already has an active team. Finish its workflow before starting another.",
-        );
-    }
     for (index, mut role) in roles.into_iter().enumerate() {
         role.name = role.name.trim().to_owned();
         role.can_edit = role.editable();
         let cwd = if role.worktree {
             match crate::git::add_worktree(&project, &format!("team-{}-{index}", stamp())).await {
                 Ok(path) => path,
-                Err(message) => return Response::error(message),
+                Err(message) => {
+                    session
+                        .discard_new_panes(
+                            &members.iter().map(|m: &Member| m.pane).collect::<Vec<_>>(),
+                        )
+                        .await;
+                    return Response::error(message);
+                }
             }
         } else {
             project.clone()
@@ -58,6 +56,9 @@ pub async fn create(session: &Arc<Session>, project: &Path, roles: Vec<Role>) ->
                 members.push(Member { role, pane, cwd });
             }
             Err(_) => {
+                session
+                    .discard_new_panes(&members.iter().map(|m: &Member| m.pane).collect::<Vec<_>>())
+                    .await;
                 return Response::error(
                     "Could not create a team session. Check that the project is accessible.",
                 );
@@ -88,6 +89,22 @@ pub async fn create(session: &Arc<Session>, project: &Path, roles: Vec<Role>) ->
     teams.push(team);
     session.set_teams(teams).await;
     if let Err(message) = activate(session, pane.get()).await {
+        let created = session
+            .teams()
+            .iter()
+            .find(|t| t.id == pane.get())
+            .map(|t| t.members.iter().map(|m| m.pane).collect::<Vec<_>>())
+            .unwrap_or_default();
+        session
+            .set_teams(
+                session
+                    .teams()
+                    .into_iter()
+                    .filter(|t| t.id != pane.get())
+                    .collect(),
+            )
+            .await;
+        session.discard_new_panes(&created).await;
         return Response::error(message);
     }
     Response::SessionStarted {
@@ -163,6 +180,7 @@ pub async fn activate(session: &Arc<Session>, id: u64) -> Result<(), String> {
         if let Ok(output) = std::fs::read_to_string(
             team.project
                 .join(".otag/team")
+                .join(team.id.to_string())
                 .join(output_name(index, &previous.role.name)),
         ) {
             prompt.push_str(&format!(
@@ -181,7 +199,13 @@ pub async fn activate(session: &Arc<Session>, id: u64) -> Result<(), String> {
         .role
         .agent
         .map(|agent| {
-            otag_agents::team::command(agent, &member.cwd, &prompt, !member.role.editable())
+            otag_agents::team::command_on_model(
+                agent,
+                &member.cwd,
+                &prompt,
+                !member.role.editable(),
+                session.agent_model(agent).as_deref(),
+            )
         })
         .unwrap_or_default();
     session
@@ -191,6 +215,7 @@ pub async fn activate(session: &Arc<Session>, id: u64) -> Result<(), String> {
             "Could not start this role. Check the agent installation and permissions.".to_owned()
         })?;
     session.set_first_prompt(member.pane, &prompt).await;
+    session.set_agent(member.pane, member.role.agent).await;
     team.running = true;
     team.queued = false;
     team.write_root = member.role.editable().then_some(root.clone());
@@ -204,6 +229,97 @@ pub async fn activate(session: &Arc<Session>, id: u64) -> Result<(), String> {
     });
     team.revision = step;
     session.set_teams(teams).await;
+    Ok(())
+}
+
+/// Switch a managed role through its permission policy and checkout write queue.
+pub async fn switch_agent(
+    session: &Arc<Session>,
+    pane: otag_core::pane::PaneId,
+    target: otag_agents::AgentKind,
+    model: Option<String>,
+) -> Result<(), String> {
+    let _operation = session.team_operation().await;
+    let mut teams = session.teams();
+    let team = teams
+        .iter_mut()
+        .find(|t| t.members.iter().any(|m| m.pane == pane))
+        .ok_or("This team no longer exists.")?;
+    let index = team
+        .members
+        .iter()
+        .position(|m| m.pane == pane)
+        .ok_or("This role no longer exists.")?;
+    if team.members[index].role.agent == Some(target)
+        && (model.is_none() || model.as_ref() == session.agent_model(target).as_ref())
+    {
+        return Err("This role already uses the selected agent and model.".into());
+    }
+    let read_only = matches!(index, 0 | 2) || !team.members[index].role.can_edit;
+    if read_only {
+        git_work(move || otag_agents::team::check_read_only(target)).await?;
+    }
+    if target == otag_agents::AgentKind::Deepseek {
+        if !git_work(|| Ok(otag_agents::provider::configured())).await? {
+            return Err("Configure an API key in API LLM before selecting this agent.".into());
+        }
+        if model
+            .as_deref()
+            .is_some_and(|m| !otag_agents::provider::MODELS.contains(&m))
+        {
+            return Err("Choose a supported API model in API LLM.".into());
+        }
+    }
+    let active = team.current == index && team.running;
+    if active {
+        let status = session
+            .summaries()
+            .into_iter()
+            .find(|p| p.id == pane)
+            .map(|p| p.status);
+        if team.members[index].role.agent.is_some()
+            && !matches!(
+                status,
+                Some(otag_agents::PaneStatus::Idle | otag_agents::PaneStatus::Done)
+            )
+        {
+            return Err("Wait until this role is idle or done before switching its agent.".into());
+        }
+        if let Ok(transcript) = final_answer(session, pane).await
+            && let Some(text) = transcript.final_message
+        {
+            save_output(
+                &team.project,
+                team.id,
+                &output_name(index, &team.members[index].role.name),
+                &text,
+            )?;
+        }
+        session
+            .restart_role(pane, &waiting_command(), &team.members[index].role.name)
+            .await
+            .map_err(|_| "Could not stop the previous agent. No replacement was started.")?;
+        if let Some(step) = team.steps.last_mut() {
+            let cwd = step.cwd.clone();
+            step.ended = Some(git_work(move || crate::checkpoint::tree(&cwd)).await?);
+        }
+    }
+    team.members[index].role.agent = Some(target);
+    team.members[index].role.can_edit = !read_only;
+    if team.current == index {
+        team.running = false;
+        team.queued = false;
+        team.write_root = None;
+    }
+    team.revision = team.revision.saturating_add(1);
+    let id = team.id;
+    session.set_teams(teams).await;
+    if let Some(model) = model {
+        session.set_agent_model(target, model).await;
+    }
+    if active {
+        activate(session, id).await?;
+    }
     Ok(())
 }
 
@@ -299,9 +415,10 @@ fn output_name(index: usize, name: &str) -> String {
     }
 }
 
-fn save_output(project: &Path, name: &str, text: &str) -> Result<(), String> {
-    let directory = project.join(".otag/team");
-    for path in [project.join(".otag"), directory.clone()] {
+fn save_output(project: &Path, team: u64, name: &str, text: &str) -> Result<(), String> {
+    let parent = project.join(".otag/team");
+    let directory = parent.join(team.to_string());
+    for path in [project.join(".otag"), parent, directory.clone()] {
         if path
             .symlink_metadata()
             .is_ok_and(|m| m.file_type().is_symlink())
@@ -385,6 +502,7 @@ async fn advance_locked(
         }
         save_output(
             &team.project,
+            team.id,
             &output_name(team.current, &member.role.name),
             text,
         )?;
@@ -547,7 +665,7 @@ async fn undo_locked(
             continue;
         };
         let cwd = member.cwd.clone();
-        if git_work(move || crate::checkpoint::root(&cwd)).await? == step.cwd {
+        if team.id == id || git_work(move || crate::checkpoint::root(&cwd)).await? == step.cwd {
             session
                 .restart_role(member.pane, &waiting_command(), &member.role.name)
                 .await
@@ -615,9 +733,9 @@ mod tests {
         let project = tempfile::tempdir().expect("project");
         let name = output_name(3, "../../Extra");
         assert!(!name.contains('/'));
-        save_output(project.path(), &name, "Final answer").expect("save");
+        save_output(project.path(), 1, &name, "Final answer").expect("save");
         assert_eq!(
-            std::fs::read_to_string(project.path().join(".otag/team").join(name)).expect("read"),
+            std::fs::read_to_string(project.path().join(".otag/team/1").join(name)).expect("read"),
             "Final answer"
         );
     }

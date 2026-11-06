@@ -27,9 +27,20 @@ struct SwitchAgentPopover: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
-                Button(handOff) { actions.handOff() }
-                    .primaryActionStyle(prominent: actions.isRunningOut)
-                    .disabled(!actions.canHandOff)
+                ForEach([AgentKind.claude, .codex, .deepseek], id: \.rawValue) { target in
+                    if actions.pane.agent != target {
+                        Button(Strings.t("api.switch") + " " + target.label) {
+                            actions.store.handOff(pane: actions.pane.id, handoff: .agent(to: target))
+                        }
+                        .disabled(!actions.canHandOff || (target == .deepseek && !actions.store.apiProvider.configured))
+                    }
+                }
+                if !actions.store.apiProvider.configured {
+                    Text(Strings.t("api.needKey")).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Text(reason)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -69,7 +80,7 @@ struct SwitchAgentPopover: View {
     private var handOff: String {
         switch actions.pane.agent {
         case .claude: return Strings.t("switch.handoff.codex")
-        case .codex: return Strings.t("switch.handoff.claude")
+        case .codex, .deepseek: return Strings.t("switch.handoff.claude")
         case nil: return Strings.t("switch.handoff.none")
         }
     }
@@ -120,6 +131,7 @@ enum AgentModels {
         switch agent {
         case .claude: return claude
         case .codex: return codex()
+        case .deepseek: return []
         case nil: return []
         }
     }

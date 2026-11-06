@@ -167,7 +167,7 @@ struct OtagApp: App {
     private var handOffTitle: String {
         switch focusedPane?.agent {
         case .claude: return Strings.t("switch.handoff.codex")
-        case .codex: return Strings.t("switch.handoff.claude")
+        case .codex, .deepseek: return Strings.t("switch.handoff.claude")
         case nil: return Strings.t("switch.handoff.none")
         }
     }
@@ -236,6 +236,7 @@ struct MainView: View {
     /// Which toolbar popover is open.
     @State private var guarding = false
     @State private var switching = false
+    @State private var apiProviderShown = false
 
     var body: some View {
         NavigationSplitView {
@@ -278,6 +279,7 @@ struct MainView: View {
             NewSessionSheet(
                 socket: store.socket,
                 suggestedProject: store.suggestedProject(near: workbench.focus),
+                provider: store.apiProvider,
                 startBrowser: { path in
                     let project = store.panes.first { $0.cwd == path }?.workspace
                         ?? (path.isEmpty ? "" : URL(fileURLWithPath: path).lastPathComponent)
@@ -416,6 +418,11 @@ struct MainView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             LanguageMenu()
+        }
+        ToolbarItem(placement: .primaryAction) {
+            ToolbarPopoverIcon(symbol: "key", title: Strings.t("api.title"), label: Strings.t("api.title"), shown: $apiProviderShown) {
+                APIProviderPopover(store: store)
+            }
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {

@@ -144,7 +144,7 @@ public struct SessionActions {
     public var handOffTitle: String {
         switch pane.agent {
         case .claude: return "Switch to Codex"
-        case .codex: return "Switch to Claude"
+        case .codex, .deepseek: return "Switch to Claude"
         case nil: return "Switch agent"
         }
     }

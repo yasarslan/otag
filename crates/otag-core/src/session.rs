@@ -372,6 +372,7 @@ pub struct Session {
 
 #[derive(Debug)]
 struct State {
+    agent_models: BTreeMap<AgentKind, String>,
     teams: Vec<crate::team::Team>,
     workspaces: Vec<Workspace>,
     active: usize,
@@ -514,6 +515,17 @@ impl State {
 }
 
 impl Session {
+    /// Selected non-secret model for an agent/provider.
+    pub fn agent_model(&self, agent: AgentKind) -> Option<String> {
+        self.state.lock().ok()?.agent_models.get(&agent).cloned()
+    }
+    /// Persist a model preference without accepting credentials.
+    pub async fn set_agent_model(self: &Arc<Self>, agent: AgentKind, model: String) {
+        if let Ok(mut state) = self.lock() {
+            state.agent_models.insert(agent, model);
+        }
+        self.commit(true).await;
+    }
     /// Serialize workflow transitions, including process and filesystem I/O.
     pub async fn team_operation(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.team_operations.lock().await
@@ -553,6 +565,15 @@ impl Session {
             state.teams = teams;
         }
         self.commit(true).await;
+    }
+    /// Remove unpublished placeholder panes after an incomplete team creation.
+    pub async fn discard_new_panes(self: &Arc<Self>, ids: &[PaneId]) {
+        for id in ids {
+            if let Some(handle) = self.pane(*id) {
+                let _ = handle.send(PaneCommand::Stop).await;
+                self.close_pane(&handle, None).await;
+            }
+        }
     }
 
     /// Restart a managed role in its stable pane after stopping its old process tree.
@@ -612,6 +633,7 @@ impl Session {
             changes: watch::Sender::new(0),
             content_changes: watch::Sender::new(0),
             state: Mutex::new(State {
+                agent_models: BTreeMap::new(),
                 teams: Vec::new(),
                 workspaces: Vec::new(),
                 active: 0,
@@ -1350,7 +1372,7 @@ impl Session {
             if pane.command == command {
                 return false;
             }
-            pane.command = command.clone();
+            pane.command = otag_agents::provider::preserve_model(&pane.command, command.clone());
             true
         });
         // Nothing a client can see changed, but the next snapshot differs.
@@ -1377,6 +1399,7 @@ impl Session {
         };
 
         Snapshot {
+            agent_models: state.agent_models.clone(),
             teams: state.teams.clone(),
             version: snapshot::VERSION,
             size: state.size,
@@ -1470,6 +1493,7 @@ impl Session {
                 );
                 return Ok(());
             }
+            state.agent_models = snapshot.agent_models.clone();
             if snapshot.is_empty() {
                 return Ok(());
             }

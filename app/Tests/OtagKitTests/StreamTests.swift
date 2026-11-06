@@ -243,6 +243,7 @@ final class Daemonless {
             "SHELL": "/bin/sh",
             "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
             "OTAG_NO_NOTIFY": "1",
+            "OTAG_DISABLE_API_PROVIDER": "1",
             "OTAG_STATE_DIR": home.appendingPathComponent("state").path,
             "XDG_STATE_HOME": home.appendingPathComponent("xdg-state").path,
             "XDG_RUNTIME_DIR": home.appendingPathComponent("run").path,

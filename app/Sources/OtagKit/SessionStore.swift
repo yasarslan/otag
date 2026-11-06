@@ -42,6 +42,13 @@ public final class SessionStore {
     /// Every pane the daemon is running.
     public private(set) var panes: [PaneInfo] = []
     public private(set) var hasLoadedPanes = false
+    public private(set) var apiProvider = APIProviderInfo()
+    /// Apply a provider reply obtained on a one-shot configuration connection.
+    public func acceptProvider(_ info: APIProviderInfo) {
+        var info = info
+        if info.connected == nil && info.configured { info.balance = apiProvider.balance }
+        apiProvider = info
+    }
     /// How much of the agents' limits is gone.
     public private(set) var usage = UsageReport()
     /// What the agents are waiting for the user to answer.
@@ -284,6 +291,7 @@ public final class SessionStore {
         refreshingUsage = true
         send(.usage)
         send(.usageHistory)
+        send(.apiProvider(model: nil, refresh: true))
 
         guard case .connected = state else {
             // The request could not be written, so no answer is coming and
@@ -404,6 +412,7 @@ public final class SessionStore {
                 self.connection = connection
                 try connection.send(.subscribe)
                 try connection.send(.version)
+                try connection.send(.apiProvider(model: nil, refresh: false))
                 // The daemon keeps its readings across restarts, so the
                 // timeline can be drawn at once rather than after an hour of
                 // watching.
@@ -437,6 +446,8 @@ public final class SessionStore {
     /// messages a real daemon sends; nothing outside the module calls it.
     func apply(_ response: Response) {
         switch response {
+        case let .apiProvider(info):
+            acceptProvider(info)
         case let .event(event):
             apply(event)
         case let .panes(panes):

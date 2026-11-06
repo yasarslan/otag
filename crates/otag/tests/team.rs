@@ -81,7 +81,7 @@ fn shells_are_manual_steps_and_stale_advances_cannot_skip_roles() {
     std::fs::create_dir(&nested).expect("nested project");
     let second = request(
         &home,
-        json!({"type":"start_team","cwd":nested,"roles":[
+        json!({"type":"start_team","cwd":project,"roles":[
             {"name":"Second plan","agent":null},{"name":"Second coder","agent":null},{"name":"Second review","agent":null}
         ]}),
     );

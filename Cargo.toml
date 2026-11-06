@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-width = "0.2"
 zstd = "0.13"
 vt100 = "0.18"
+ureq = { version = "3.5.1", default-features = false, features = ["rustls"] }
 
 [profile.release]
 strip = "debuginfo"

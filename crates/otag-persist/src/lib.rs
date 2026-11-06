@@ -405,6 +405,7 @@ mod tests {
         assert!(layout.split(pane(1), Direction::TopBottom, pane(2)));
 
         Snapshot {
+            agent_models: std::collections::BTreeMap::new(),
             teams: Vec::new(),
             version: otag_core::snapshot::VERSION,
             size: PaneSize::new(30, 100),

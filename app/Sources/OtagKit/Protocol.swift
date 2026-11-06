@@ -77,12 +77,14 @@ public enum PaneStatus: String, Codable, Comparable, Sendable, CaseIterable {
 public enum AgentKind: String, Codable, Sendable {
     case claude
     case codex
+    case deepseek
 
     /// What the agent is called in the interface.
     public var label: String {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
+        case .deepseek: return "DeepSeek"
         }
     }
 }
@@ -613,6 +615,7 @@ public struct GuardView: Codable, Sendable, Hashable {
 
 /// A command the app sends the daemon.
 public enum Request: Sendable {
+    case apiProvider(model: String?, refresh: Bool)
     case teamUndoPreview(pane: PaneID, step: UInt64)
     case teamUndoConfirm(team: UInt64, step: UInt64, expected: String)
     case teamAdvance(pane: PaneID, revision: UInt64, back: Bool)
@@ -655,6 +658,11 @@ extension Request: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Key.self)
         switch self {
+        case let .apiProvider(model, refresh):
+            try container.encode("api_provider", forKey: Key("type"))
+            try container.encode(AgentKind.deepseek.rawValue, forKey: Key("provider"))
+            try container.encodeIfPresent(model, forKey: Key("model"))
+            try container.encode(refresh, forKey: Key("refresh"))
         case let .teamUndoPreview(pane, step):
             try container.encode("team_undo_preview", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
@@ -818,6 +826,7 @@ extension Event: Decodable {
 
 /// The daemon's answer, or something it pushed.
 public enum Response: Sendable {
+    case apiProvider(APIProviderInfo)
     case teamUndoPreview(TeamUndoPreview)
     case pong
     case ok
@@ -850,6 +859,7 @@ extension Response: Decodable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: Key.self)
         let kind = (try? container.decode(String.self, forKey: .type)) ?? ""
+        if kind == "api_provider" { self = .apiProvider(try APIProviderInfo(from: decoder)); return }
         if kind == "team_undo_preview" {
             self = .teamUndoPreview(try container.decode(TeamUndoPreview.self, forKey: .preview))
             return

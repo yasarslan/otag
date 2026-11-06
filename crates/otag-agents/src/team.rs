@@ -4,7 +4,7 @@ use crate::AgentKind;
 
 /// Fail closed when the installed executable predates the verified policy.
 pub fn check_read_only(agent: AgentKind) -> Result<(), String> {
-    if agent != AgentKind::Claude {
+    if !matches!(agent, AgentKind::Claude | AgentKind::Deepseek) {
         return Ok(());
     }
     let output = std::process::Command::new("claude")
@@ -28,8 +28,26 @@ use std::path::Path;
 
 /// Build a managed role's start command without changing account settings.
 pub fn command(agent: AgentKind, cwd: &Path, prompt: &str, read_only: bool) -> Vec<String> {
-    let mut command = agent.adapter().start_command(Some(prompt), None);
+    command_on_model(agent, cwd, prompt, read_only, None)
+}
+
+/// Build the same enforced role policy with an explicit, non-secret model choice.
+pub fn command_on_model(
+    agent: AgentKind,
+    cwd: &Path,
+    prompt: &str,
+    read_only: bool,
+    model: Option<&str>,
+) -> Vec<String> {
+    if agent == AgentKind::Deepseek {
+        return crate::provider::wrap(
+            command_on_model(AgentKind::Claude, cwd, prompt, read_only, model),
+            model,
+        );
+    }
+    let mut command = agent.adapter().start_command(None, model);
     if !read_only {
+        command.push(prompt.into());
         return command;
     }
     let options: Vec<String> = match agent {
@@ -39,6 +57,7 @@ pub fn command(agent: AgentKind, cwd: &Path, prompt: &str, read_only: bool) -> V
             "--ask-for-approval".into(),
             "never".into(),
         ],
+        AgentKind::Deepseek => Vec::new(),
         AgentKind::Claude => {
             let settings = serde_json::json!({
                 "permissions": { "deny": ["Edit", "Write", "NotebookEdit", "Agent", "Task"], "allow": ["Bash"] },
@@ -64,7 +83,8 @@ pub fn command(agent: AgentKind, cwd: &Path, prompt: &str, read_only: bool) -> V
     // Put options before the positional prompt, including variadic tool options.
     let mut options = options;
     options.push("--".into());
-    command.splice(1..1, options);
+    command.extend(options);
+    command.push(prompt.into());
     command
 }
 

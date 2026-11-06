@@ -136,6 +136,8 @@ pub struct UndoPreview {
 /// Small per-pane presentation of daemon-owned team state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
+    /// Display name of the shared project, including roles in other worktrees.
+    pub project: String,
     /// Most recent checkpoint belonging to this role.
     pub undo_step: Option<u64>,
     /// This role attempted to edit while read-only.
@@ -161,6 +163,11 @@ impl Team {
     pub fn membership(&self, pane: PaneId) -> Option<Membership> {
         let index = self.members.iter().position(|m| m.pane == pane)?;
         Some(Membership {
+            project: self
+                .project
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             undo_step: self
                 .steps
                 .iter()

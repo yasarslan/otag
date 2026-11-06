@@ -18,6 +18,7 @@ public struct TeamRole: Codable, Equatable, Sendable {
 
 /// The daemon's presentation of one role in its team.
 public struct TeamMembership: Codable, Hashable, Sendable {
+    public var project: String
     public var undoStep: UInt64?
     public var violation: Bool
     public var revision: UInt64
@@ -28,12 +29,13 @@ public struct TeamMembership: Codable, Hashable, Sendable {
     public var automatic: Bool
     public var manual: Bool
     enum CodingKeys: String, CodingKey {
-        case id, index, current, waiting, automatic, manual, revision, violation
+        case id, index, current, waiting, automatic, manual, revision, violation, project
         case undoStep = "undo_step"
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UInt64.self, forKey: .id)
+        project = try c.decodeIfPresent(String.self, forKey: .project) ?? ""
         index = try c.decodeIfPresent(Int.self, forKey: .index) ?? 0
         revision = try c.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
         current = try c.decodeIfPresent(Bool.self, forKey: .current) ?? false
@@ -42,6 +44,11 @@ public struct TeamMembership: Codable, Hashable, Sendable {
         manual = try c.decodeIfPresent(Bool.self, forKey: .manual) ?? false
         violation = try c.decodeIfPresent(Bool.self, forKey: .violation) ?? false
         undoStep = try c.decodeIfPresent(UInt64.self, forKey: .undoStep)
+    }
+
+    /// Group by daemon team identity across separate checkout directories.
+    public static func members(of team: UInt64, in panes: [PaneInfo]) -> [PaneInfo] {
+        panes.filter { $0.team?.id == team }.sorted { ($0.team?.index ?? 0) < ($1.team?.index ?? 0) }
     }
 }
 

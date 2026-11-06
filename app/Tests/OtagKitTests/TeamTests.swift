@@ -30,4 +30,13 @@ struct TeamTests {
         #expect(!value.automatic)
         #expect(value.undoStep == nil)
     }
+    @Test func worktreeRolesRemainInOneOrderedTeam() throws {
+        let data = Data("""
+        [{"id":3,"cwd":"/project/worktree","workspace":"worktree","team":{"id":1,"index":1}},
+         {"id":1,"cwd":"/project","workspace":"project","team":{"id":1,"index":0}},
+         {"id":2,"cwd":"/other","workspace":"other"}]
+        """.utf8)
+        let panes = try JSONDecoder().decode([PaneInfo].self, from: data)
+        #expect(TeamMembership.members(of: 1, in: panes).map(\.id) == [1, 3])
+    }
 }

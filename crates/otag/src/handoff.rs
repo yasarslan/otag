@@ -194,9 +194,10 @@ pub async fn run(session: &Arc<Session>, pane: PaneId, mode: Mode) -> Result<Don
                 tracing::debug!(%error, "cannot add otag's directory to .git/info/exclude");
             }
 
-            let command = to
-                .adapter()
-                .start_command(Some(&Package::prompt(&path)), None);
+            let command = to.adapter().start_command(
+                Some(&Package::prompt(&path)),
+                session.agent_model(to).as_deref(),
+            );
             let started = split(session, pane, &command, to).await?;
 
             Ok(Done {
@@ -237,6 +238,7 @@ async fn split(
     let label = match agent {
         AgentKind::Claude => "Claude",
         AgentKind::Codex => "Codex",
+        AgentKind::Deepseek => "DeepSeek",
     };
     session
         .split_running(beside, Direction::LeftRight, command, label)
@@ -432,6 +434,7 @@ mod tests {
             let expected = match from {
                 AgentKind::Claude => "Fix parser tests (Codex)",
                 AgentKind::Codex => "Fix parser tests (Claude)",
+                AgentKind::Deepseek => "Fix parser tests (Claude)",
             };
             assert_eq!(started.first_prompt.as_deref(), Some(expected));
             assert_eq!(started.nickname, "backend");

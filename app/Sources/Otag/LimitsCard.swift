@@ -20,6 +20,13 @@ struct LimitsCard: View {
             open = true
         } label: {
             VStack(alignment: .leading, spacing: 5) {
+                if store.apiProvider.configured {
+                    HStack {
+                        Text(Strings.t("api.balance"))
+                        Spacer(minLength: 4)
+                        Text(store.apiProvider.balance ?? "-").monospacedDigit()
+                    }.font(.caption2).foregroundStyle(.secondary)
+                }
                 if store.usage.rows.isEmpty, store.usage.counted.isEmpty {
                     Text(Strings.t("limits.title"))
                         .font(.caption.weight(.medium))

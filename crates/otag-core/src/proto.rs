@@ -30,6 +30,10 @@ use otag_agents::{AgentKind, PaneStatus, Tokens};
 use otag_features::inbox::{Ask, AskId};
 use otag_features::usage::Report;
 
+fn default_api_provider() -> String {
+    AgentKind::Deepseek.name().to_owned()
+}
+
 /// A command sent from a client to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -262,6 +266,18 @@ pub enum Request {
         /// Auto when true; Manual otherwise.
         automatic: bool,
     },
+    /// Configure a provider model or refresh its connection and balance. Contains no key.
+    ApiProvider {
+        /// Provider identifier; allows future provider implementations.
+        #[serde(default = "default_api_provider")]
+        provider: String,
+        /// Non-secret model selection.
+        #[serde(default)]
+        model: Option<String>,
+        /// Perform an authenticated balance/connection request when true.
+        #[serde(default)]
+        refresh: bool,
+    },
     /// Preview the files affected by a role's checkpoint.
     TeamUndoPreview {
         /// Role pane owning the step.
@@ -368,6 +384,25 @@ pub enum Handoff {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    /// Provider metadata and sanitized balance; never authentication data.
+    ApiProvider {
+        /// Stable provider identifier.
+        provider: String,
+        /// Selected model.
+        model: String,
+        /// Whether Keychain contains a credential.
+        configured: bool,
+        /// Connection result when requested.
+        connected: Option<bool>,
+        /// Whitelisted currency/amount pairs, or unavailable.
+        balance: Option<String>,
+        /// Models verified by the provider adapter.
+        models: Vec<String>,
+        /// Native credential-store metadata, never a credential value.
+        keychain_service: String,
+        /// Native credential-store account metadata.
+        keychain_account: String,
+    },
     /// Exact file list and token for an undo confirmation.
     TeamUndoPreview {
         /// Daemon-owned preview; no paths are accepted from the client.

@@ -19,6 +19,8 @@ mod logging;
 mod nightshift;
 mod notify;
 mod persist;
+#[cfg(test)]
+mod provider_tests;
 mod team;
 mod usage;
 

@@ -25,7 +25,11 @@ allow = [
     "CC0-1.0",
 ]
 confidence-threshold = 0.93
-exceptions = []
+exceptions = [
+    # Certificate data only; the permissive data license text is distributed
+    # with the app. The general code license policy is unchanged.
+    { name = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"

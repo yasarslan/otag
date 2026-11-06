@@ -55,15 +55,38 @@ impl Pty {
         spec: &PaneSpec,
         size: PaneSize,
     ) -> Result<(Self, mpsc::Receiver<PtyEvent>)> {
+        let prepared = otag_agents::provider::Prepared::resolve(spec.argv()).map_err(|source| {
+            Error::pty(
+                "cannot configure this session; check API LLM and Keychain",
+                source,
+            )
+        })?;
+        Self::spawn_prepared(id, spec, size, prepared)
+    }
+
+    /// Spawn with transient launch data which never enters the saved pane specification.
+    pub fn spawn_prepared(
+        id: PaneId,
+        spec: &PaneSpec,
+        size: PaneSize,
+        mut prepared: otag_agents::provider::Prepared,
+    ) -> Result<(Self, mpsc::Receiver<PtyEvent>)> {
+        let private = prepared.is_private();
         let pair = portable_pty::native_pty_system()
             .openpty(pty_size(size))
             .map_err(|source| Error::pty("cannot open a pseudo-terminal for a new pane", source))?;
 
-        let command = build_command(id, spec)?;
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|source| Error::pty(spawn_failure_context(spec), source))?;
+        let command = build_prepared(id, spec, &prepared)?;
+        let child = pair.slave.spawn_command(command).map_err(|source| {
+            if private {
+                Error::pty(
+                    "cannot start the configured agent; check its installation",
+                    std::io::Error::other("process launch failed"),
+                )
+            } else {
+                Error::pty(spawn_failure_context(spec), source)
+            }
+        })?;
         // The master only sees end-of-file once every handle on the other
         // side is closed, so this one must go now that the child has it.
         drop(pair.slave);
@@ -83,7 +106,7 @@ impl Pty {
 
         let (events_tx, events_rx) = mpsc::channel(OUTPUT_QUEUE);
         let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
-        spawn_reader(id, reader, child, events_tx);
+        spawn_reader(id, reader, child, events_tx, prepared.take_filter());
         spawn_writer(id, writer, input_rx);
 
         Ok((
@@ -183,9 +206,13 @@ const fn pty_size(size: PaneSize) -> PtySize {
     }
 }
 
-/// Build the command for a pane, including the environment every pane gets.
-fn build_command(id: PaneId, spec: &PaneSpec) -> Result<CommandBuilder> {
-    let mut command = match spec.argv() {
+/// Build the command for a pane, including its transient launch environment.
+fn build_prepared(
+    id: PaneId,
+    spec: &PaneSpec,
+    prepared: &otag_agents::provider::Prepared,
+) -> Result<CommandBuilder> {
+    let mut command = match prepared.command() {
         [] => CommandBuilder::new_default_prog(),
         [program, arguments @ ..] => {
             let mut command = CommandBuilder::new(program);
@@ -201,6 +228,12 @@ fn build_command(id: PaneId, spec: &PaneSpec) -> Result<CommandBuilder> {
     command.env(crate::pane::PANE_ID_ENV, id.to_string());
 
     for (key, value) in spec.env() {
+        command.env(key, value);
+    }
+    for key in prepared.removed() {
+        command.env_remove(key);
+    }
+    for (key, value) in prepared.environment() {
         command.env(key, value);
     }
 
@@ -240,6 +273,7 @@ fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     events: mpsc::Sender<PtyEvent>,
+    mut filter: otag_agents::provider::OutputFilter,
 ) {
     let name = format!("otag-pane-{id}-out");
     if let Err(error) = std::thread::Builder::new().name(name).spawn(move || {
@@ -250,7 +284,7 @@ fn spawn_reader(
                 Ok(0) => break,
                 Ok(count) => {
                     if events
-                        .blocking_send(PtyEvent::Output(buffer[..count].to_vec()))
+                        .blocking_send(PtyEvent::Output(filter.feed(&buffer[..count])))
                         .is_err()
                     {
                         // Nobody is listening any more; the pane is gone.
@@ -270,6 +304,10 @@ fn spawn_reader(
             }
         }
 
+        let final_bytes = filter.finish();
+        if !final_bytes.is_empty() {
+            let _ = events.blocking_send(PtyEvent::Output(final_bytes));
+        }
         let exit = match child.wait() {
             Ok(status) => PaneExit {
                 code: status.signal().is_none().then(|| status.exit_code()),

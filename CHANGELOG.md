@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- API LLM configuration stores user keys in macOS Keychain and supports a
+  distinct DeepSeek agent, model selection, connection testing, switching,
+  and documented balance refresh. Credentials are resolved only at launch
+  or authenticated API access; terminal output is scrubbed before history.
+
 - Team editors share a checkout write turn, with waiting roles and optional
   separate worktrees. Read-only roles use verified agent permission controls;
   tool-event edit attempts appear on the session and stop Auto progression.

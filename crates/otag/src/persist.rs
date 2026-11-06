@@ -134,7 +134,7 @@ pub async fn restore(session: &Arc<Session>, snapshots: &Snapshots) {
     let Some(snapshot) = snapshots.load().await else {
         return;
     };
-    if snapshot.is_empty() || !snapshot.is_readable() {
+    if !snapshot.is_readable() {
         return;
     }
 

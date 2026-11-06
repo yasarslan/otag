@@ -69,6 +69,7 @@ cp "$app_binary" "$bundle/Contents/MacOS/Otag"
 # The daemon travels with the app: a bundle must never talk to a daemon of a
 # different version than the protocol it was built against.
 cp "$daemon_binary" "$bundle/Contents/Resources/otag"
+cp -R "$root/licenses" "$bundle/Contents/Resources/Licenses"
 
 # SwiftPM puts a target's resources in a bundle of their own beside the
 # binary, and `Bundle.module` looks for it next to the executable. Without

@@ -24,3 +24,26 @@ async fn read_only_edit_events_are_visible_and_disable_automatic_progression() {
             .violation
     );
 }
+
+#[tokio::test]
+async fn provider_model_preferences_restore_even_without_sessions() {
+    let session = Session::new(PaneSpec::shell());
+    session
+        .set_agent_model(
+            otag_agents::AgentKind::Deepseek,
+            otag_agents::provider::DEFAULT_MODEL.into(),
+        )
+        .await;
+    let restored = Session::new(PaneSpec::shell());
+    restored
+        .restore(&session.snapshot(), &|_| Vec::new())
+        .await
+        .expect("restore");
+    assert_eq!(
+        restored
+            .agent_model(otag_agents::AgentKind::Deepseek)
+            .as_deref(),
+        Some(otag_agents::provider::DEFAULT_MODEL)
+    );
+    assert!(restored.is_empty());
+}

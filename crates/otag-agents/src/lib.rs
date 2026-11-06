@@ -16,6 +16,7 @@ pub mod approval;
 pub mod claude;
 pub mod codex;
 pub mod hooks;
+pub mod provider;
 pub mod settings;
 pub mod team;
 
@@ -34,11 +35,13 @@ pub enum AgentKind {
     Claude,
     /// Codex CLI.
     Codex,
+    /// API-backed compatible agent with session-local credentials.
+    Deepseek,
 }
 
 impl AgentKind {
     /// Every agent otag has an adapter for.
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
+    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::Deepseek];
 
     /// The name otag shows and accepts on the command line.
     #[must_use]
@@ -46,6 +49,7 @@ impl AgentKind {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Deepseek => "deepseek",
         }
     }
 
@@ -56,6 +60,7 @@ impl AgentKind {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "Codex",
+            Self::Deepseek => "DeepSeek",
         }
     }
 
@@ -78,6 +83,7 @@ impl AgentKind {
         match self {
             Self::Claude => &claude::Claude,
             Self::Codex => &codex::Codex,
+            Self::Deepseek => &provider::Deepseek,
         }
     }
 }
@@ -435,6 +441,9 @@ pub fn asking_line(screen: &str, markers: &[&str]) -> Option<String> {
 /// The adapter for a process, if it is an agent otag knows.
 #[must_use]
 pub fn adapter_for_process(exe: &str, argv: &[String]) -> Option<&'static dyn AgentAdapter> {
+    if provider::Deepseek.matches_process(exe, argv) {
+        return Some(&provider::Deepseek);
+    }
     AgentKind::ALL
         .into_iter()
         .map(AgentKind::adapter)

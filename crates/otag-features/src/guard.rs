@@ -203,7 +203,7 @@ pub fn somewhere_to_go(plan: &Plan, usage: &Report, from: AgentKind) -> Option<A
 pub const fn other_than(agent: AgentKind) -> AgentKind {
     match agent {
         AgentKind::Claude => AgentKind::Codex,
-        AgentKind::Codex => AgentKind::Claude,
+        AgentKind::Codex | AgentKind::Deepseek => AgentKind::Claude,
     }
 }
 

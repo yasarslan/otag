@@ -178,7 +178,7 @@ public enum AgentTheme {
             do {
                 let backup: String?
                 switch change.agent {
-                case .claude:
+                case .claude, .deepseek:
                     backup = try writeClaude(
                         theme: unquoted(change.to),
                         file: claudeSettings(home: home)

@@ -30,6 +30,9 @@ pub const HISTORY_LINES: usize = 2_000;
 /// A whole session, as it was when the snapshot was taken.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Non-secret model choices. Credentials never belong in a snapshot.
+    #[serde(default)]
+    pub agent_models: std::collections::BTreeMap<otag_agents::AgentKind, String>,
     /// Durable workflows, absent from older snapshots.
     #[serde(default)]
     pub teams: Vec<crate::team::Team>,
@@ -59,6 +62,7 @@ const fn yes() -> bool {
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
+            agent_models: std::collections::BTreeMap::new(),
             teams: Vec::new(),
             version: VERSION,
             size: PaneSize::DEFAULT,
@@ -158,6 +162,7 @@ mod tests {
         assert!(layout.split(PaneId::FIRST, Direction::LeftRight, PaneId::FIRST.next()));
 
         Snapshot {
+            agent_models: std::collections::BTreeMap::new(),
             teams: Vec::new(),
             version: VERSION,
             size: PaneSize::new(30, 100),

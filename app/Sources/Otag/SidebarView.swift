@@ -25,20 +25,23 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(store.workspaces) { workspace in
+            ForEach(store.workspaces.filter { $0.panes.contains { $0.team == nil } }) { workspace in
                 Section {
                     ForEach(workspace.panes.filter { $0.team == nil }) { pane in
                         row(for: pane)
                     }
-                    ForEach(Array(Set(workspace.panes.compactMap { $0.team?.id })).sorted(), id: \.self) { team in
-                        DisclosureGroup(Strings.t("team.title") + " \(team)") {
-                            ForEach(workspace.panes.filter { $0.team?.id == team }.sorted { ($0.team?.index ?? 0) < ($1.team?.index ?? 0) }) { pane in
-                                row(for: pane)
-                            }
-                        }
-                    }
                 } header: {
                     ProjectHeader(name: workspace.name)
+                }
+            }
+            ForEach(Array(Set(store.panes.compactMap { $0.team?.id })).sorted(), id: \.self) { team in
+                let members = TeamMembership.members(of: team, in: store.panes)
+                Section {
+                    DisclosureGroup(Strings.t("team.title") + " \(team)") {
+                        ForEach(members) { pane in row(for: pane) }
+                    }
+                } header: {
+                    ProjectHeader(name: members.first?.team?.project ?? members.first?.workspace ?? "")
                 }
             }
             if !browsers.sessions.isEmpty {

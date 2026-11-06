@@ -90,6 +90,7 @@ impl Handler for TestDaemon {
                     .summaries()
                     .into_iter()
                     .map(|pane| PaneInfo {
+                        team: None,
                         id: pane.id,
                         size: pane.size,
                         workspace: pane.workspace,

@@ -76,6 +76,7 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
         .summaries()
         .into_iter()
         .map(|pane| PaneInfo {
+            team: session.teams().iter().find_map(|t| t.membership(pane.id)),
             id: pane.id,
             size: pane.size,
             workspace: pane.workspace,

@@ -27,8 +27,15 @@ struct SidebarView: View {
         List(selection: $selection) {
             ForEach(store.workspaces) { workspace in
                 Section {
-                    ForEach(workspace.panes) { pane in
+                    ForEach(workspace.panes.filter { $0.team == nil }) { pane in
                         row(for: pane)
+                    }
+                    ForEach(Array(Set(workspace.panes.compactMap { $0.team?.id })).sorted(), id: \.self) { team in
+                        DisclosureGroup(Strings.t("team.title") + " \(team)") {
+                            ForEach(workspace.panes.filter { $0.team?.id == team }.sorted { ($0.team?.index ?? 0) < ($1.team?.index ?? 0) }) { pane in
+                                row(for: pane)
+                            }
+                        }
                     }
                 } header: {
                     ProjectHeader(name: workspace.name)

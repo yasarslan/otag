@@ -254,3 +254,15 @@
 "browser.address" = "Osoite";
 "browser.external" = "Avaa oletusselaimessa";
 "browser.invalidAddress" = "Anna kelvollinen verkko-osoite.";
+"team.mode" = "Istunnon tila";
+"team.solo" = "Yksittäinen";
+"team.title" = "Tiimi";
+"team.roles" = "Roolit";
+"team.role.name" = "Roolin nimi";
+"team.plan" = "Suunnitelma/Kehote";
+"team.coder" = "Koodaaja";
+"team.review" = "Katselmointi/Testaus";
+"team.canEdit" = "Saa muokata koodia";
+"team.add" = "+ Lisää rooli";
+"team.remove" = "Poista rooli";
+"team.shell.note" = "Shell-roolit etenevät käsin ja voivat muokata tiedostoja.";

@@ -124,6 +124,7 @@ public struct PaneExit: Codable, Hashable, Sendable {
 
 /// What the daemon reports about one pane.
 public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
+    public var team: TeamMembership? = nil
     public var id: PaneID
     public var size: PaneSize
     public var workspace: String = ""
@@ -158,7 +159,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, size, workspace, cwd, title, agent, status, session, tokens, exit
-        case nickname
+        case nickname, team
         case firstPrompt = "first_prompt"
         case contextWindow = "context_window"
         case nightShift = "night_shift"
@@ -207,6 +208,7 @@ public struct PaneInfo: Codable, Hashable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        team = try container.decodeIfPresent(TeamMembership.self, forKey: .team)
         id = try container.decode(PaneID.self, forKey: .id)
         size = try container.decodeIfPresent(PaneSize.self, forKey: .size)
             ?? PaneSize(rows: 24, cols: 80)
@@ -611,6 +613,7 @@ public struct GuardView: Codable, Sendable, Hashable {
 
 /// A command the app sends the daemon.
 public enum Request: Sendable {
+    case startTeam(cwd: String, roles: [TeamRole])
     case ping
     case version
     case listPanes
@@ -648,6 +651,10 @@ extension Request: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Key.self)
         switch self {
+        case let .startTeam(cwd, roles):
+            try container.encode("start_team", forKey: Key("type"))
+            try container.encode(cwd, forKey: Key("cwd"))
+            try container.encode(roles, forKey: Key("roles"))
         case .ping:
             try container.encode("ping", forKey: Key("type"))
         case .version:

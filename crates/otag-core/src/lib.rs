@@ -20,6 +20,7 @@ pub mod screen;
 pub mod server;
 pub mod session;
 pub mod snapshot;
+pub mod team;
 pub mod workspace;
 
 pub use error::{Error, Result};

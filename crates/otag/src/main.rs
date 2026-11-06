@@ -18,6 +18,7 @@ mod logging;
 mod nightshift;
 mod notify;
 mod persist;
+mod team;
 mod usage;
 
 use std::process::ExitCode;

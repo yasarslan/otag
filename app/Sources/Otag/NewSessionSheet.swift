@@ -18,6 +18,7 @@ struct NewSessionSheet: View {
     /// Called with the pane the daemon started. What the session is called
     /// comes from the daemon, which records the first prompt itself.
     let started: (PaneID) -> Void
+    let teamStarted: ([PaneID]) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -37,6 +38,8 @@ struct NewSessionSheet: View {
     @State private var prompt = ""
     @State private var problem: String?
     @State private var starting = false
+    @State private var team = false
+    @State private var roles: [TeamRole] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -47,6 +50,10 @@ struct NewSessionSheet: View {
                 .padding(.bottom, 12)
 
             Form {
+                Picker(Strings.t("team.mode"), selection: $team) {
+                    Text(Strings.t("team.solo")).tag(false)
+                    Text(Strings.t("team.title")).tag(true)
+                }.pickerStyle(.segmented)
                 Section {
                     LabeledContent(Strings.t("new.project")) {
                         HStack(spacing: 8) {
@@ -59,6 +66,7 @@ struct NewSessionSheet: View {
                         }
                     }
 
+                    if !team {
                     Picker(Strings.t("new.runs"), selection: $kind) {
                         Text(Strings.t("new.runs.claude")).tag(AgentKind.claude.rawValue)
                         Text(Strings.t("new.runs.codex")).tag(AgentKind.codex.rawValue)
@@ -75,8 +83,34 @@ struct NewSessionSheet: View {
                         }
                     }
                     .disabled(folder == nil || browser)
+                    }
                 }
 
+                if team {
+                    Section(Strings.t("team.roles")) {
+                        ForEach(roles.indices, id: \.self) { index in
+                            VStack(alignment: .leading) {
+                                if index < 3 { Text(roles[index].name) }
+                                else { TextField(Strings.t("team.role.name"), text: $roles[index].name) }
+                                Picker(Strings.t("new.runs"), selection: $roles[index].agent) {
+                                    Text(Strings.t("new.runs.claude")).tag(AgentKind?.some(.claude))
+                                    Text(Strings.t("new.runs.codex")).tag(AgentKind?.some(.codex))
+                                    Text(Strings.t("new.runs.shell")).tag(AgentKind?.none)
+                                }
+                                if roles[index].agent == nil {
+                                    Text(Strings.t("team.shell.note")).font(.caption).foregroundStyle(.secondary)
+                                } else if index > 2 {
+                                    Toggle(Strings.t("team.canEdit"), isOn: $roles[index].canEdit)
+                                }
+                                Toggle(Strings.t("new.worktree"), isOn: $roles[index].worktree)
+                                if index > 2 {
+                                    Button(Strings.t("team.remove")) { roles.remove(at: index) }
+                                }
+                            }
+                        }
+                        Button(Strings.t("team.add")) { roles.append(TeamRole(name: "")) }
+                    }
+                } else {
                 Section {
                     TextField(
                         Strings.t("new.model"),
@@ -95,6 +129,7 @@ struct NewSessionSheet: View {
                             }
                             .disabled(agent == nil)
                     }
+                }
                 }
             }
             .formStyle(.grouped)
@@ -133,6 +168,9 @@ struct NewSessionSheet: View {
             folder = URL(fileURLWithPath: suggestedProject, isDirectory: true)
         }
         kind = lastAgent
+        roles = [TeamRole(name: Strings.t("team.plan")),
+                 TeamRole(name: Strings.t("team.coder"), canEdit: true),
+                 TeamRole(name: Strings.t("team.review"))]
     }
 
     /// Ask for the project folder.
@@ -151,7 +189,7 @@ struct NewSessionSheet: View {
 
     /// Tell the daemon to start it, and hand the pane back.
     private func start() {
-        if browser {
+        if browser && !team {
             startBrowser(folder?.path ?? "")
             dismiss()
             return
@@ -178,12 +216,22 @@ struct NewSessionSheet: View {
                 // store's connection is busy carrying events.
                 let connection = try DaemonConnection(socket: socket)
                 defer { connection.close() }
-                try connection.send(.startSession(asked))
+                try connection.send(team ? .startTeam(cwd: folder.path, roles: roles) : .startSession(asked))
 
                 for await response in connection.responses {
                     switch response {
                     case let .sessionStarted(pane, _, _):
+                        if team {
+                            try connection.send(.listPanes)
+                            continue
+                        }
                         started(pane)
+                        dismiss()
+                        return
+                    case let .panes(panes) where team:
+                        let created = panes.filter { $0.cwd == folder.path && $0.team != nil }
+                        let newest = created.compactMap { $0.team?.id }.max()
+                        teamStarted(created.filter { $0.team?.id == newest }.sorted { ($0.team?.index ?? 0) < ($1.team?.index ?? 0) }.map(\.id))
                         dismiss()
                         return
                     case let .error(message):

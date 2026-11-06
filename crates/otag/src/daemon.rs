@@ -363,6 +363,9 @@ impl Handler for Daemon {
                 })
                 .await,
             ),
+            Request::StartTeam { cwd, roles } => {
+                Some(crate::team::create(&self.session, &cwd, roles).await)
+            }
             Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
             Request::DetachPane { pane } => {
                 self.attachments.remove(outbox.id(), pane);

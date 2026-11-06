@@ -254,3 +254,15 @@
 "browser.address" = "Address";
 "browser.external" = "Open in default browser";
 "browser.invalidAddress" = "Enter a valid web address.";
+"team.mode" = "Session mode";
+"team.solo" = "Solo";
+"team.title" = "Team";
+"team.roles" = "Roles";
+"team.role.name" = "Role name";
+"team.plan" = "Plan/Prompt";
+"team.coder" = "Coder";
+"team.review" = "Review/Test";
+"team.canEdit" = "Can edit code";
+"team.add" = "+ Add role";
+"team.remove" = "Remove role";
+"team.shell.note" = "Shell roles are manual and can edit files.";

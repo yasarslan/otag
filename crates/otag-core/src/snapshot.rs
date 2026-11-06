@@ -30,6 +30,9 @@ pub const HISTORY_LINES: usize = 2_000;
 /// A whole session, as it was when the snapshot was taken.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Durable workflows, absent from older snapshots.
+    #[serde(default)]
+    pub teams: Vec<crate::team::Team>,
     /// Version of the build that wrote it.
     pub version: u32,
     /// Size of the terminal the session was last laid out for.
@@ -56,6 +59,7 @@ const fn yes() -> bool {
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
+            teams: Vec::new(),
             version: VERSION,
             size: PaneSize::DEFAULT,
             sidebar: true,
@@ -154,6 +158,7 @@ mod tests {
         assert!(layout.split(PaneId::FIRST, Direction::LeftRight, PaneId::FIRST.next()));
 
         Snapshot {
+            teams: Vec::new(),
             version: VERSION,
             size: PaneSize::new(30, 100),
             sidebar: false,

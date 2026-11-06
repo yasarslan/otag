@@ -17,6 +17,7 @@ pub mod claude;
 pub mod codex;
 pub mod hooks;
 pub mod settings;
+pub mod team;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

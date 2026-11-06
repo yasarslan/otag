@@ -283,9 +283,11 @@ struct MainView: View {
                         ?? (path.isEmpty ? "" : URL(fileURLWithPath: path).lastPathComponent)
                     place(pane: browsers.create(project: project), axis: request.axis)
                 }
-            ) { pane in
+            , started: { pane in
                 place(pane: pane, axis: request.axis)
-            }
+            }, teamStarted: { panes in
+                workbench.arrange(panes, keeping: panes.first)
+            })
         }
         .sheet(item: $prompt) { asking in
             if let pane = store.pane(asking.pane) {

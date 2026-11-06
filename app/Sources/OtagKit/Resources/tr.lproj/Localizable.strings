@@ -254,3 +254,15 @@
 "browser.address" = "Adres";
 "browser.external" = "Varsayılan tarayıcıda aç";
 "browser.invalidAddress" = "Geçerli bir web adresi girin.";
+"team.mode" = "Oturum modu";
+"team.solo" = "Tekli";
+"team.title" = "Takım";
+"team.roles" = "Roller";
+"team.role.name" = "Rol adı";
+"team.plan" = "Plan/İstem";
+"team.coder" = "Kodlama";
+"team.review" = "İnceleme/Test";
+"team.canEdit" = "Kodu düzenleyebilir";
+"team.add" = "+ Rol ekle";
+"team.remove" = "Rolü kaldır";
+"team.shell.note" = "Shell rolleri manueldir ve dosyaları düzenleyebilir.";

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Integration fixtures use a short temporary root so default socket paths
+  fit within the operating system's Unix-domain socket length limit.
+
 - Test daemons use isolated sockets, state and home directories and are reaped
   on fixture teardown or parent loss. Custom sockets no longer open the real
   session database. Daemons lock their state directory, stop when their socket
@@ -37,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outer signature verifies.
 
 ### Added
+
+- Solo and Team session modes, with ordered roles, per-role agents, extra
+  roles, sidebar grouping, automatic arrangement, and durable daemon-owned
+  team state. Shell team roles are editable and manual.
 
 - **A toolbar of five buttons**, one job each: Arrange, Limit guard, Switch
   agent, Language, New session. One size, one style, each with its whole

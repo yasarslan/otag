@@ -238,6 +238,13 @@ pub enum Request {
         #[serde(default)]
         worktree: bool,
     },
+    /// Create a durable, ordered team in one project.
+    StartTeam {
+        /// Project shared by the roles.
+        cwd: PathBuf,
+        /// Ordered role configuration.
+        roles: Vec<crate::team::Role>,
+    },
     /// Be told about everything that happens in the session, without asking
     /// again: statuses, usage, questions and handoffs.
     ///
@@ -775,6 +782,9 @@ impl<'de> Deserialize<'de> for Bytes {
 /// What the daemon reports about one pane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInfo {
+    /// Workflow membership, absent for solo sessions.
+    #[serde(default)]
+    pub team: Option<crate::team::Membership>,
     /// Which pane this is.
     pub id: PaneId,
     /// Its current size.
@@ -1273,6 +1283,7 @@ mod tests {
             },
             Response::Panes {
                 panes: vec![PaneInfo {
+                    team: None,
                     id: PaneId::FIRST,
                     size: PaneSize::DEFAULT,
                     workspace: "app".to_owned(),
@@ -1292,6 +1303,7 @@ mod tests {
             },
             Response::Panes {
                 panes: vec![PaneInfo {
+                    team: None,
                     id: PaneId::FIRST,
                     size: PaneSize::DEFAULT,
                     workspace: "app".to_owned(),

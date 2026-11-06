@@ -184,10 +184,11 @@ private struct PaneCell: View {
             pane: pane,
             socket: store.socket,
             focused: workbench.focus == pane && workbench.panes.count > 1,
-            onEnded: { _ in workbench.close(pane: pane) },
+            onEnded: { _ in if store.pane(pane)?.team == nil { workbench.close(pane: pane) } },
             onGone: { message in gone = message },
             onFocus: { workbench.focus(pane: pane) }
         )
+        .id(store.pane(pane)?.team)
         .overlay {
             if let gone {
                 // The daemon is running and has no such pane: the session is

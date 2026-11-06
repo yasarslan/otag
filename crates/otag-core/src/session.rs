@@ -74,6 +74,8 @@ const RESTORED_DIVIDER: &str = "\x1b[2m\u{2500}\u{2500} restored \u{2500}\u{2500
 /// What a client can ask a pane to do.
 #[derive(Debug)]
 enum PaneCommand {
+    /// Stop this process before replacing it in the same pane.
+    Stop,
     /// Write these bytes to the program's input.
     Input(Vec<u8>),
     /// The pane is now this size.
@@ -369,6 +371,7 @@ pub struct Session {
 
 #[derive(Debug)]
 struct State {
+    teams: Vec<crate::team::Team>,
     workspaces: Vec<Workspace>,
     active: usize,
     panes: BTreeMap<PaneId, Pane>,
@@ -510,6 +513,65 @@ impl State {
 }
 
 impl Session {
+    /// Durable team state, copied without holding a lock across I/O.
+    pub fn teams(&self) -> Vec<crate::team::Team> {
+        self.state
+            .lock()
+            .map(|s| s.teams.clone())
+            .unwrap_or_default()
+    }
+
+    /// Publish a structural workflow change and persist it with the panes.
+    pub async fn set_teams(self: &Arc<Self>, teams: Vec<crate::team::Team>) {
+        if let Ok(mut state) = self.lock() {
+            state.teams = teams;
+        }
+        self.commit(true).await;
+    }
+
+    /// Restart a managed role in its stable pane after stopping its old process tree.
+    pub async fn restart_role(
+        self: &Arc<Self>,
+        id: PaneId,
+        command: &[String],
+        title: &str,
+    ) -> Result<()> {
+        let pid = self.lock()?.panes.get(&id).and_then(|p| p.pid);
+        if let Some(pid) = pid {
+            tokio::task::spawn_blocking(move || crate::process::terminate(&[pid as i32]))
+                .await
+                .map_err(|_| Error::PaneGone { id: Some(id) })?
+                .map_err(|_| Error::PaneGone { id: Some(id) })?;
+        }
+        let old = {
+            let mut state = self.lock()?;
+            let from = state
+                .panes
+                .get(&id)
+                .ok_or(Error::PaneGone { id: Some(id) })?;
+            let workspace = from.workspace;
+            let cwd = from.cwd.clone();
+            let nickname = from.nickname.clone();
+            let pane = self.start_pane_as(
+                &state,
+                &Starting {
+                    id,
+                    workspace,
+                    cwd: cwd.as_deref(),
+                    command,
+                    title,
+                    nickname: &nickname,
+                    restored: &[],
+                },
+            )?;
+            state.panes.insert(id, pane)
+        };
+        if let Some(old) = old {
+            let _ = old.handle.send(PaneCommand::Stop).await;
+        }
+        self.commit(true).await;
+        Ok(())
+    }
     /// A daemon with no panes, whose panes will run `template`.
     #[must_use]
     pub fn new(template: PaneSpec) -> Arc<Self> {
@@ -518,6 +580,7 @@ impl Session {
             changes: watch::Sender::new(0),
             content_changes: watch::Sender::new(0),
             state: Mutex::new(State {
+                teams: Vec::new(),
                 workspaces: Vec::new(),
                 active: 0,
                 panes: BTreeMap::new(),
@@ -1282,6 +1345,7 @@ impl Session {
         };
 
         Snapshot {
+            teams: state.teams.clone(),
             version: snapshot::VERSION,
             size: state.size,
             sidebar: state.sidebar,
@@ -1379,6 +1443,10 @@ impl Session {
             }
 
             state.size = snapshot.size;
+            state.teams = snapshot.teams.clone();
+            for team in &mut state.teams {
+                team.running = false;
+            }
             state.sidebar = snapshot.sidebar;
             restore_into(self, &mut state, snapshot, history);
             if state.workspaces.is_empty() {
@@ -1396,9 +1464,34 @@ impl Session {
 
     /// Take a pane out of the session, dropping a tab or a workspace that is
     /// left with nothing in it.
-    async fn close_pane(self: &Arc<Self>, id: PaneId, exit: Option<PaneExit>) {
+    async fn close_pane(self: &Arc<Self>, handle: &PaneHandle, exit: Option<PaneExit>) {
+        let id = handle.id();
         {
             let Ok(mut state) = self.lock() else { return };
+            if state
+                .panes
+                .get(&id)
+                .is_none_or(|p| !p.handle.commands.same_channel(&handle.commands))
+            {
+                return;
+            }
+            if state
+                .teams
+                .iter()
+                .any(|t| t.members.iter().any(|m| m.pane == id))
+            {
+                if let Some(pane) = state.panes.get_mut(&id) {
+                    pane.pid = None;
+                    pane.status = if exit.as_ref().is_some_and(PaneExit::success) {
+                        PaneStatus::Done
+                    } else {
+                        PaneStatus::Error
+                    };
+                }
+                drop(state);
+                self.changes.send_modify(|n| *n = n.wrapping_add(1));
+                return;
+            }
             let Some(pane) = state.panes.remove(&id) else {
                 return;
             };
@@ -1633,7 +1726,7 @@ impl Session {
                     .content_changes
                     .send_modify(|revision| *revision = revision.wrapping_add(1));
             };
-            session.close_pane(handle.id(), exit).await;
+            session.close_pane(&handle, exit).await;
         });
     }
 }
@@ -1738,6 +1831,7 @@ async fn run_pane(
             },
 
             command = commands.recv() => match command {
+                Some(PaneCommand::Stop) => { pty.kill(); return; }
                 Some(PaneCommand::Input(bytes)) => {
                     if let Err(error) = pty.write(bytes).await {
                         tracing::debug!(%error, pane = %id, "cannot write to a pane");
@@ -1821,9 +1915,16 @@ fn restore_into(
                 let cwd = record
                     .and_then(|record| record.cwd.clone())
                     .or_else(|| workspace.cwd.clone());
-                let command = record
+                let mut command = record
                     .map(|record| record.command.clone())
                     .unwrap_or_default();
+                if state
+                    .teams
+                    .iter()
+                    .any(|t| t.members.iter().any(|m| m.pane == pane))
+                {
+                    command = vec!["/bin/sleep".into(), "2147483647".into()];
+                }
                 let title = record
                     .map(|record| record.title.as_str())
                     .filter(|title| !title.is_empty())

@@ -17,7 +17,9 @@ impl TestHome {
         builder.prefix("otag-test-");
         let dir = match std::env::var_os("OTAG_TEST_RUN_DIR") {
             Some(root) => builder.tempdir_in(root)?,
-            None => builder.tempdir()?,
+            // Keep the longest default socket below the Unix-domain path
+            // limit even when the system's temporary directory is deeply nested.
+            None => builder.tempdir_in("/tmp")?,
         };
         Ok(Self(dir))
     }

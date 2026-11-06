@@ -380,10 +380,8 @@ fn auto_ready(text: &str) -> bool {
         .last()
         .is_some_and(|line| line.trim() == "OTAG_RESULT: READY")
         && !text.contains('?')
+        && !reported_failure(&lower)
         && ![
-            "failed",
-            "error:",
-            "test failure",
             "otag_result: question",
             "otag_result: problems",
             "usage limit",
@@ -391,6 +389,33 @@ fn auto_ready(text: &str) -> bool {
         ]
         .iter()
         .any(|word| lower.contains(word))
+}
+
+fn reported_failure(text: &str) -> bool {
+    let words: Vec<_> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    words.iter().enumerate().any(|(index, word)| {
+        if !matches!(
+            *word,
+            "failed" | "failure" | "failures" | "error" | "errors"
+        ) {
+            return false;
+        }
+        let previous = index.checked_sub(1).and_then(|i| words.get(i)).copied();
+        let before_previous = index.checked_sub(2).and_then(|i| words.get(i)).copied();
+        let next = words.get(index + 1).copied();
+        let zero = |word: Option<&str>| matches!(word, Some("0" | "no" | "zero" | "none"));
+        let shared_zero = matches!(previous, Some("or" | "and"))
+            && matches!(before_previous, Some("failures" | "errors"))
+            && zero(index.checked_sub(3).and_then(|i| words.get(i)).copied());
+        !(zero(previous)
+            || shared_zero
+            || next == Some("0")
+            || (previous == Some("tests") && zero(before_previous))
+            || (next == Some("tests") && words.get(index + 2) == Some(&"0")))
+    })
 }
 
 fn output_name(index: usize, name: &str) -> String {
@@ -717,6 +742,18 @@ mod tests {
     #[test]
     fn auto_requires_an_unambiguous_success() {
         assert!(auto_ready("Complete.\nOTAG_RESULT: READY"));
+        for summary in [
+            "126 passed; 0 failed",
+            "No tests failed",
+            "Failed tests: 0",
+            "No failures or errors",
+            "errors: 0",
+        ] {
+            assert!(
+                auto_ready(&format!("{summary}\nOTAG_RESULT: READY")),
+                "successful summary should advance"
+            );
+        }
         for output in [
             "Done",
             "Continue?\nOTAG_RESULT: READY",
@@ -726,6 +763,17 @@ mod tests {
             "OTAG_RESULT: PROBLEMS",
         ] {
             assert!(!auto_ready(output));
+        }
+        for summary in [
+            "125 passed; 1 failed",
+            "Failed tests: 2",
+            "Errors: 1",
+            "There was an error",
+        ] {
+            assert!(
+                !auto_ready(&format!("{summary}\nOTAG_RESULT: READY")),
+                "reported failures must stop Auto even with a contradictory marker"
+            );
         }
     }
     #[test]

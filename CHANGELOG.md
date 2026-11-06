@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Automatic team progression recognizes successful zero-failure test summaries
+  while continuing to stop on reported errors or nonzero failures.
+
 - Language selection is available in Settings only; the toolbar keeps the
   session and provider controls together.
 

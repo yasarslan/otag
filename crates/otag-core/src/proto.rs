@@ -262,6 +262,22 @@ pub enum Request {
         /// Auto when true; Manual otherwise.
         automatic: bool,
     },
+    /// Preview the files affected by a role's checkpoint.
+    TeamUndoPreview {
+        /// Role pane owning the step.
+        pane: PaneId,
+        /// Checkpoint execution identifier.
+        step: u64,
+    },
+    /// Confirm exactly the previously previewed file restoration.
+    TeamUndoConfirm {
+        /// Owning team.
+        team: u64,
+        /// Checkpoint execution identifier.
+        step: u64,
+        /// Tree identity returned in the preview.
+        expected: String,
+    },
     /// Be told about everything that happens in the session, without asking
     /// again: statuses, usage, questions and handoffs.
     ///
@@ -352,6 +368,11 @@ pub enum Handoff {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    /// Exact file list and token for an undo confirmation.
+    TeamUndoPreview {
+        /// Daemon-owned preview; no paths are accepted from the client.
+        preview: crate::team::UndoPreview,
+    },
     /// Answer to [`Request::Ping`].
     Pong,
     /// The request was carried out and has no payload.

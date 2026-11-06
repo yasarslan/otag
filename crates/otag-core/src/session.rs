@@ -518,6 +518,27 @@ impl Session {
     pub async fn team_operation(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.team_operations.lock().await
     }
+    /// Surface tool-event evidence of a read-only role attempting an edit.
+    pub async fn note_read_only_edit(self: &Arc<Self>, pane: PaneId) {
+        let _operation = self.team_operation().await;
+        let mut teams = self.teams();
+        let mut changed = false;
+        for team in &mut teams {
+            if let Some(index) = team
+                .members
+                .iter()
+                .position(|m| m.pane == pane && !m.role.editable())
+                && !team.violations.contains(&index)
+            {
+                team.violations.push(index);
+                team.automatic = false;
+                changed = true;
+            }
+        }
+        if changed {
+            self.set_teams(teams).await;
+        }
+    }
     /// Durable team state, copied without holding a lock across I/O.
     pub fn teams(&self) -> Vec<crate::team::Team> {
         self.state
@@ -1457,6 +1478,8 @@ impl Session {
             state.teams = snapshot.teams.clone();
             for team in &mut state.teams {
                 team.running = false;
+                team.queued = false;
+                team.write_root = None;
             }
             state.sidebar = snapshot.sidebar;
             restore_into(self, &mut state, snapshot, history);

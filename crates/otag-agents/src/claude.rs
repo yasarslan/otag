@@ -466,6 +466,13 @@ fn read_blocks(transcript: &mut Transcript, files: &mut BTreeSet<PathBuf>, block
                 }
             }
             Some("tool_use") => {
+                if block
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| WRITING_TOOLS.contains(&name))
+                {
+                    transcript.edit_attempt = true;
+                }
                 let Some(input) = block.input else { continue };
                 let name = block.name.unwrap_or_default();
                 if WRITING_TOOLS.contains(&name.as_str())

@@ -278,6 +278,8 @@ struct Record {
 #[derive(Debug, Deserialize)]
 struct Payload {
     #[serde(default)]
+    input: Option<String>,
+    #[serde(default)]
     last_agent_message: Option<String>,
     #[serde(default)]
     r#type: Option<String>,
@@ -431,6 +433,17 @@ pub fn parse_rollout(text: &str, session_id: Option<String>) -> Transcript {
 
 /// Read one of the items a turn produced.
 fn read_item(transcript: &mut Transcript, commands: &mut BTreeSet<String>, payload: &Payload) {
+    if payload
+        .name
+        .as_deref()
+        .is_some_and(|n| matches!(n, "apply_patch" | "Edit" | "Write"))
+        || payload
+            .input
+            .as_deref()
+            .is_some_and(|s| s.contains("tools.apply_patch("))
+    {
+        transcript.edit_attempt = true;
+    }
     match payload.r#type.as_deref() {
         Some("message") => {
             let text = payload

@@ -613,6 +613,8 @@ public struct GuardView: Codable, Sendable, Hashable {
 
 /// A command the app sends the daemon.
 public enum Request: Sendable {
+    case teamUndoPreview(pane: PaneID, step: UInt64)
+    case teamUndoConfirm(team: UInt64, step: UInt64, expected: String)
     case teamAdvance(pane: PaneID, revision: UInt64, back: Bool)
     case teamMode(team: UInt64, automatic: Bool)
     case startTeam(cwd: String, roles: [TeamRole])
@@ -653,6 +655,15 @@ extension Request: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Key.self)
         switch self {
+        case let .teamUndoPreview(pane, step):
+            try container.encode("team_undo_preview", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            try container.encode(step, forKey: Key("step"))
+        case let .teamUndoConfirm(team, step, expected):
+            try container.encode("team_undo_confirm", forKey: Key("type"))
+            try container.encode(team, forKey: Key("team"))
+            try container.encode(step, forKey: Key("step"))
+            try container.encode(expected, forKey: Key("expected"))
         case let .teamAdvance(pane, revision, back):
             try container.encode("team_advance", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
@@ -807,6 +818,7 @@ extension Event: Decodable {
 
 /// The daemon's answer, or something it pushed.
 public enum Response: Sendable {
+    case teamUndoPreview(TeamUndoPreview)
     case pong
     case ok
     case version(String)
@@ -832,12 +844,16 @@ extension Response: Decodable {
     private enum Key: String, CodingKey {
         case type, version, panes, report, pane, size, bytes, exit, event, asks, ask
         case delivered, summary, package, message, view, frame, workspace, cwd, samples
-        case sessions
+        case sessions, preview
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: Key.self)
         let kind = (try? container.decode(String.self, forKey: .type)) ?? ""
+        if kind == "team_undo_preview" {
+            self = .teamUndoPreview(try container.decode(TeamUndoPreview.self, forKey: .preview))
+            return
+        }
         switch kind {
         case "pong":
             self = .pong

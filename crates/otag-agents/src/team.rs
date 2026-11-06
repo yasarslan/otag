@@ -1,6 +1,29 @@
 //! Session-local permission policies for managed roles.
 
 use crate::AgentKind;
+
+/// Fail closed when the installed executable predates the verified policy.
+pub fn check_read_only(agent: AgentKind) -> Result<(), String> {
+    if agent != AgentKind::Claude {
+        return Ok(());
+    }
+    let output = std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .map_err(|_| "Install or update the selected agent before using a read-only team role.")?;
+    let version = String::from_utf8_lossy(&output.stdout);
+    let components: Vec<u32> = version
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .split('.')
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    if components.as_slice() < [2, 1, 285].as_slice() {
+        return Err("Read-only team roles need agent version 2.1.285 or newer for the verified sandbox policy. Update the agent or choose another agent.".into());
+    }
+    Ok(())
+}
 use std::path::Path;
 
 /// Build a managed role's start command without changing account settings.

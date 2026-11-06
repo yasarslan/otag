@@ -24,4 +24,10 @@ struct TeamTests {
         let pane = try JSONDecoder().decode(PaneInfo.self, from: Data("{\"id\":1}".utf8))
         #expect(pane.team == nil)
     }
+    @Test func missingTeamFieldsRemainSafelyWaiting() throws {
+        let value = try JSONDecoder().decode(TeamMembership.self, from: Data("{\"id\":1}".utf8))
+        #expect(value.waiting)
+        #expect(!value.automatic)
+        #expect(value.undoStep == nil)
+    }
 }

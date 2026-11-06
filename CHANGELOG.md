@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Team editors share a checkout write turn, with waiting roles and optional
+  separate worktrees. Read-only roles use verified agent permission controls;
+  tool-event edit attempts appear on the session and stop Auto progression.
+  Every step has a private Git checkpoint and file-list confirmation for Undo.
+
 - Team step transfer saves confirmed final answers under the project’s
   `.otag/team/` directory, supports returning reviews to Coder, and offers
   Manual/Auto progression with conservative completion checks and guard stops.

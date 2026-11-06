@@ -273,3 +273,7 @@
 "team.auto" = "Auto";
 "team.manual" = "Manual";
 "team.mode.help" = "Switch team progression between Manual and Auto. Shell steps always require manual action.";
+"team.undo" = "Undo this step";
+"team.undo.detail" = "Restore the files below to this step’s checkpoint. Running roles in this checkout will stop. Branches and commit history stay unchanged.";
+"team.undo.empty" = "This step has no file changes to undo.";
+"team.violation" = "This read-only role attempted to edit files. Automatic progression is off.";

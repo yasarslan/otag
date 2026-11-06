@@ -273,3 +273,7 @@
 "team.auto" = "Otomatik";
 "team.manual" = "Manuel";
 "team.mode.help" = "Takım ilerlemesini Manuel ve Otomatik arasında değiştir. Shell adımları her zaman manuel işlem gerektirir.";
+"team.undo" = "Bu adımı geri al";
+"team.undo.detail" = "Aşağıdaki dosyaları adımın kontrol noktasına döndür. Bu çalışma kopyasındaki çalışan roller duracak. Dallar ve kayıt geçmişi değişmez.";
+"team.undo.empty" = "Bu adımda geri alınacak dosya değişikliği yok.";
+"team.violation" = "Salt okunur rol dosya düzenlemeyi denedi. Otomatik ilerleme kapatıldı.";

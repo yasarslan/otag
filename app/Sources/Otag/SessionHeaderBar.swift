@@ -31,6 +31,7 @@ struct SessionPrompt: Identifiable {
 ///
 /// `nickname · name · project · status`, and nothing twice.
 struct SessionHeaderBar: View {
+    @State private var undoing = false
     let actions: SessionActions
     /// Whether this session has the keyboard, which only matters when it is
     /// sharing the window.
@@ -69,17 +70,27 @@ struct SessionHeaderBar: View {
             Spacer(minLength: Chrome.gap)
 
             if let team = actions.pane.team {
+                if team.violation {
+                    Image(systemName: "exclamationmark.shield").foregroundStyle(.orange)
+                        .help(Strings.t("team.violation"))
+                }
                 if team.current {
                     if team.waiting {
                         Button(Strings.t("team.startStep")) { advance(team) }
                     } else if team.manual || actions.pane.status == .idle || actions.pane.status == .done {
-                        Button(Strings.t("team.next")) { advance(team) }
+                        Button(Strings.t("team.next")) { advance(team) }.controlSize(.mini)
                         if team.index == 2 {
-                            Button(Strings.t("team.back")) { advance(team, back: true) }
+                            Button { advance(team, back: true) } label: {
+                                Image(systemName: "arrow.uturn.backward")
+                            }.help(Strings.t("team.back"))
                         }
                     }
                 } else {
                     Text(Strings.t("team.waiting")).font(.caption).foregroundStyle(.secondary)
+                }
+                if team.undoStep != nil {
+                    Button { undoing = true } label: { Image(systemName: "arrow.uturn.backward.circle") }
+                        .help(Strings.t("team.undo"))
                 }
             }
 
@@ -97,6 +108,11 @@ struct SessionHeaderBar: View {
         .chromeBackground()
         .overlay(alignment: .bottom) { Divider() }
         .help(actions.pane.agent.name)
+        .sheet(isPresented: $undoing) {
+            if let step = actions.pane.team?.undoStep {
+                TeamUndoSheet(socket: actions.store.socket, pane: actions.pane.id, step: step)
+            }
+        }
     }
 
     private func advance(_ team: TeamMembership, back: Bool = false) {

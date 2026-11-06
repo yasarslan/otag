@@ -208,6 +208,9 @@ async fn read_session(
     // counted; both are kept, and the report decides which to show. The
     // session it came from is the one this pane is running.
     shared.record_limits(agent, &transcript.limits, pane.session_id.as_deref());
+    if transcript.edit_attempt {
+        session.note_read_only_edit(pane.id).await;
+    }
 
     // The agent's own file is a better witness than its screen, so a turn
     // that began or ended there is reported as the agent speaking for

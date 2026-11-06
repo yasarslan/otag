@@ -82,7 +82,16 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
             workspace: pane.workspace,
             cwd: pane.cwd,
             title: pane.title,
-            agent: pane.agent,
+            agent: session
+                .teams()
+                .iter()
+                .find_map(|t| {
+                    t.members
+                        .iter()
+                        .find(|m| m.pane == pane.id)
+                        .map(|m| m.role.agent)
+                })
+                .unwrap_or(pane.agent),
             status: pane.status,
             session: pane.session,
             nickname: pane.nickname,

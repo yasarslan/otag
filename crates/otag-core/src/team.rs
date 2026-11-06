@@ -58,6 +58,24 @@ pub struct Member {
 /// A daemon-owned workflow, persisted with its session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Team {
+    /// Checkpoints in execution order, including repeated review/coding cycles.
+    #[serde(default)]
+    pub steps: Vec<Step>,
+    /// Shared-checkout ownership, present while an editor runs.
+    #[serde(default)]
+    pub write_root: Option<PathBuf>,
+    /// Explicitly requested activation waiting for a write turn.
+    #[serde(default)]
+    pub queued: bool,
+    /// FIFO ticket for editing activations.
+    #[serde(default)]
+    pub queue_ticket: u64,
+    /// Role indices with observed read-only write attempts.
+    #[serde(default)]
+    pub violations: Vec<usize>,
+    /// Confirmation is transient and cannot survive a daemon restart.
+    #[serde(skip)]
+    pub undo: Option<UndoPreview>,
     /// Monotonic process/step revision, used to invalidate stale UI actions.
     #[serde(default)]
     pub revision: u64,
@@ -81,9 +99,47 @@ pub struct Team {
     pub finished: bool,
 }
 
+/// A step checkpoint and the files observed when its turn ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+    /// Monotonic execution identifier.
+    pub number: u64,
+    /// Index of the role that executed this step.
+    pub role: usize,
+    /// Working-tree root for this step.
+    pub cwd: PathBuf,
+    /// Git tree before the step.
+    pub checkpoint: String,
+    /// Git tree at completion; protects subsequent work from an older undo.
+    #[serde(default)]
+    pub ended: Option<String>,
+    /// Whether the checkpoint has already been restored.
+    #[serde(default)]
+    pub undone: bool,
+}
+
+/// Exact files and tree identity shown by the undo confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UndoPreview {
+    /// Team owning the checkpoint.
+    pub team: u64,
+    /// Stable role pane.
+    pub pane: PaneId,
+    /// Execution identifier.
+    pub step: u64,
+    /// Current tree identity, used as a confirmation token.
+    pub expected: String,
+    /// Exact paths to restore or remove.
+    pub files: Vec<String>,
+}
+
 /// Small per-pane presentation of daemon-owned team state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
+    /// Most recent checkpoint belonging to this role.
+    pub undo_step: Option<u64>,
+    /// This role attempted to edit while read-only.
+    pub violation: bool,
     /// Revision the client must send with a step action.
     pub revision: u64,
     /// Team identity.
@@ -105,6 +161,13 @@ impl Team {
     pub fn membership(&self, pane: PaneId) -> Option<Membership> {
         let index = self.members.iter().position(|m| m.pane == pane)?;
         Some(Membership {
+            undo_step: self
+                .steps
+                .iter()
+                .rev()
+                .find(|s| s.role == index && !s.undone)
+                .map(|s| s.number),
+            violation: self.violations.contains(&index),
             revision: self.revision,
             id: self.id,
             index,
@@ -168,6 +231,12 @@ mod tests {
             worktree: false,
         };
         let team = Team {
+            steps: Vec::new(),
+            write_root: None,
+            queued: false,
+            queue_ticket: 0,
+            violations: Vec::new(),
+            undo: None,
             revision: 0,
             id: 1,
             project: "/project".into(),

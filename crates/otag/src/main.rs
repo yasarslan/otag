@@ -3,6 +3,7 @@
 
 mod agents;
 mod attach;
+mod checkpoint;
 mod cleanup;
 mod cli;
 mod client;

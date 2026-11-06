@@ -465,7 +465,7 @@ public final class SessionStore {
             handoffSettled()
             state = .failed(message)
         case .pong, .ok, .paneScreen, .output, .paneEnded, .sessionEnded,
-             .sessionStarted, .unknown:
+             .sessionStarted, .teamUndoPreview, .unknown:
             // Pane bytes belong to whichever terminal view asked for them,
             // and the rest needs nothing from the store.
             break

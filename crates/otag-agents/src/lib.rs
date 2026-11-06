@@ -241,6 +241,8 @@ pub struct Transcript {
     pub final_message: Option<String>,
     /// An interrupted turn must never trigger automatic progression.
     pub interrupted: bool,
+    /// Tool events show an attempted file modification.
+    pub edit_attempt: bool,
     /// Files it wrote to, in the order it first touched them.
     pub files_touched: Vec<PathBuf>,
     /// Shell commands it ran, oldest first.

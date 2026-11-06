@@ -379,6 +379,14 @@ impl Handler for Daemon {
             Request::TeamMode { team, automatic } => {
                 Some(crate::team::mode(&self.session, team, automatic).await)
             }
+            Request::TeamUndoPreview { pane, step } => {
+                Some(crate::team::undo_preview(&self.session, pane, step).await)
+            }
+            Request::TeamUndoConfirm {
+                team,
+                step,
+                expected,
+            } => Some(crate::team::undo_confirm(&self.session, team, step, expected).await),
             Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
             Request::DetachPane { pane } => {
                 self.attachments.remove(outbox.id(), pane);
@@ -398,6 +406,17 @@ impl Handler for Daemon {
             }
             Request::Subscribe => Some(events::start(&self.session, &self.events, outbox).await),
             Request::NightShift { pane, plan } => {
+                if plan.is_some()
+                    && self
+                        .session
+                        .teams()
+                        .iter()
+                        .any(|t| t.members.iter().any(|m| m.pane == pane))
+                {
+                    return Some(Response::error(
+                        "Team roles use team progression. Turn off the separate task queue for this role.",
+                    ));
+                }
                 if self.session.pane(pane).is_none() {
                     Some(Response::error(format!("otag has no pane {pane}")))
                 } else {
@@ -413,6 +432,19 @@ impl Handler for Daemon {
                 }
             }
             Request::Guard { pane, plan } => {
+                if self
+                    .session
+                    .teams()
+                    .iter()
+                    .any(|t| t.members.iter().any(|m| m.pane == pane))
+                    && plan
+                        .as_ref()
+                        .is_some_and(|p| p.when_reached != otag_core::proto::GuardAction::Wait)
+                {
+                    return Some(Response::error(
+                        "Team roles need a waiting limit guard. Use the team controls to continue or switch roles.",
+                    ));
+                }
                 if self.session.pane(pane).is_none() {
                     Some(Response::error(format!("otag has no pane {pane}")))
                 } else {
@@ -604,6 +636,16 @@ impl Daemon {
     /// Answered either way: a handoff is something the user asked for and
     /// waits on, so a refusal has to say why.
     async fn handoff(&self, pane: PaneId, handoff: ProtoHandoff) -> Response {
+        if self
+            .session
+            .teams()
+            .iter()
+            .any(|t| t.members.iter().any(|m| m.pane == pane))
+        {
+            return Response::error(
+                "Use team step controls for managed roles. A separate handoff would bypass the team's permissions and write turn.",
+            );
+        }
         let mode = match handoff {
             ProtoHandoff::Agent { to } => handoff::Mode::SwitchAgent { to },
             ProtoHandoff::Model { model } => handoff::Mode::SwitchModel { model },
@@ -683,6 +725,9 @@ impl Daemon {
             tracing::debug!(event, %pane, "a hook payload could not be read");
             return;
         };
+        if hook.written_file(event).is_some() {
+            self.session.note_read_only_edit(pane).await;
+        }
         if let Some(status) = hook.status(event) {
             self.session.set_status(pane, status, true).await;
         }

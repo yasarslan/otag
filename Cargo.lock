@@ -1137,6 +1137,7 @@ dependencies = [
 name = "otag-agents"
 version = "0.1.0"
 dependencies = [
+ "nix 0.29.0",
  "serde",
  "serde_json",
  "tempfile",

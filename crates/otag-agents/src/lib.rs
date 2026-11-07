@@ -16,6 +16,7 @@ pub mod approval;
 pub mod claude;
 pub mod codex;
 pub mod hooks;
+pub mod launch;
 pub mod provider;
 pub mod settings;
 pub mod team;

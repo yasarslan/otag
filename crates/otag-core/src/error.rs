@@ -41,6 +41,10 @@ pub enum Error {
     #[error("the otag daemon closed the connection before answering")]
     ConnectionClosed,
 
+    /// A requested agent executable could not be found.
+    #[error(transparent)]
+    MissingAgent(#[from] otag_agents::launch::MissingExecutable),
+
     /// The daemon answered with an error.
     #[error("the otag daemon reported an error: {message}")]
     Daemon {

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Find agent executables in common installation directories when they are missing from PATH, and show actionable launch errors.
+
 - Automatic team progression recognizes successful zero-failure test summaries
   while continuing to stop on reported errors or nonzero failures.
 

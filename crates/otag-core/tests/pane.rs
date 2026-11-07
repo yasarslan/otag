@@ -1,5 +1,8 @@
 //! Panes running real programs on real pseudo-terminals.
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,6 +81,49 @@ async fn a_pane_shows_what_its_program_prints() {
     let snapshot = wait_for_text(&handle, "hello from a pane").await;
     assert_eq!(snapshot.screen.row_text(0), "hello from a pane");
     assert_eq!(snapshot.screen.size(), inside(size));
+}
+
+fn fake_agent(path: &Path, output: &str, mode: u32) {
+    fs::write(path, format!("#!/bin/sh\nprintf '%s\\n' '{output}'\n")).expect("write a fake agent");
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set agent permissions");
+}
+
+#[tokio::test]
+async fn agents_start_from_the_native_install_directory_without_path() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let local_bin = home.path().join(".local/bin");
+    fs::create_dir_all(&local_bin).expect("create the native install directory");
+
+    for agent in ["claude", "codex"] {
+        fake_agent(&local_bin.join(agent), "native installation", 0o755);
+        let spec = PaneSpec::command([agent])
+            .with_env("HOME", home.path())
+            .with_env("PATH", "");
+        let (_session, handle) = running(spec, PaneSize::DEFAULT).await;
+        wait_for_text(&handle, "native installation").await;
+    }
+}
+
+#[tokio::test]
+async fn agent_launch_prefers_the_first_executable_on_the_pane_path() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let local_bin = home.path().join(".local/bin");
+    let first = home.path().join("first");
+    let second = home.path().join("second");
+    for directory in [&local_bin, &first, &second] {
+        fs::create_dir_all(directory).expect("create a bin directory");
+    }
+    fake_agent(&local_bin.join("claude"), "native installation", 0o755);
+    fake_agent(&first.join("claude"), "not executable", 0o644);
+    fake_agent(&second.join("claude"), "from pane PATH", 0o755);
+
+    let path = std::env::join_paths(["first", "second"]).expect("join the pane PATH");
+    let spec = PaneSpec::command(["claude"])
+        .with_cwd(home.path())
+        .with_env("HOME", home.path())
+        .with_env("PATH", path);
+    let (_session, handle) = running(spec, PaneSize::DEFAULT).await;
+    wait_for_text(&handle, "from pane PATH").await;
 }
 
 #[tokio::test]

@@ -72,11 +72,11 @@ impl Pty {
         mut prepared: otag_agents::provider::Prepared,
     ) -> Result<(Self, mpsc::Receiver<PtyEvent>)> {
         let private = prepared.is_private();
+        let command = build_prepared(id, spec, &prepared)?;
         let pair = portable_pty::native_pty_system()
             .openpty(pty_size(size))
             .map_err(|source| Error::pty("cannot open a pseudo-terminal for a new pane", source))?;
 
-        let command = build_prepared(id, spec, &prepared)?;
         let child = pair.slave.spawn_command(command).map_err(|source| {
             if private {
                 Error::pty(
@@ -245,6 +245,17 @@ fn build_prepared(
             });
         }
         command.cwd(cwd);
+    }
+
+    if let Some(program) = command.get_argv().first()
+        && let Some(executable) = otag_agents::launch::resolve(
+            program,
+            command.get_env("PATH"),
+            command.get_env("HOME").map(std::path::Path::new),
+            spec.cwd(),
+        )?
+    {
+        command.get_argv_mut()[0] = executable.into_os_string();
     }
 
     Ok(command)

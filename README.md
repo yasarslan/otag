@@ -13,11 +13,12 @@
 </p>
 
 ## What you can do
-
-- **Run agents side by side.** Organize sessions by project in the terminal or the native macOS app.
-- **See what needs your attention.** Check which agent is working, finished, or waiting for approval. The macOS app lets you respond from the session list.
-- **Track usage and hand off work.** See reported usage limits and reset times, or pass a task from Claude Code to Codex CLI with a local handoff file.
-- **Pick up where you left off.** Sessions keep running when you close the client. After a restart, otag restores the layout and resumes agent sessions it can identify.
+- **Coordinate multiple agents:** Organize Claude Code and Codex into project-based workflows.
+- **Delegate tasks:** Assign different roles and responsibilities across agents.
+- **Switch seamlessly:** Transfer work between agents while preserving context.
+- **Manage usage limits:** Monitor quotas and configure limit-aware handoffs.
+- **Automate workflows:** Progress through team tasks and queued prompts with safety checks.
+- **Keep your work organized:** Manage persistent sessions and isolated Git worktrees.
 
 ## Quick start
 

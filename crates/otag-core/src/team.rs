@@ -53,6 +53,16 @@ pub struct Member {
     pub pane: PaneId,
     /// Actual working directory, including an optional worktree.
     pub cwd: PathBuf,
+    /// Original workflow position, recorded when the membership first shrinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_index: Option<usize>,
+}
+
+impl Member {
+    /// Position used by role policy and saved step records.
+    pub fn role_index(&self, index: usize) -> usize {
+        self.original_index.unwrap_or(index)
+    }
 }
 
 /// A daemon-owned workflow, persisted with its session.
@@ -159,9 +169,37 @@ pub struct Membership {
 }
 
 impl Team {
+    /// Remove a member while preserving the identity of surviving roles and steps.
+    pub(crate) fn remove_member(&mut self, pane: PaneId) {
+        let Some(index) = self.members.iter().position(|m| m.pane == pane) else {
+            return;
+        };
+        for (position, member) in self.members.iter_mut().enumerate() {
+            member.original_index.get_or_insert(position);
+        }
+        self.members.remove(index);
+        self.violations.retain(|&position| position != index);
+        for position in &mut self.violations {
+            if *position > index {
+                *position -= 1;
+            }
+        }
+        if self.current == index {
+            self.running = false;
+            self.queued = false;
+            self.write_root = None;
+        } else if self.current > index {
+            self.current -= 1;
+        }
+        self.finished = self.current >= self.members.len();
+        self.undo = None;
+        self.revision = self.revision.saturating_add(1);
+    }
+
     /// Presentation for one member.
     pub fn membership(&self, pane: PaneId) -> Option<Membership> {
         let index = self.members.iter().position(|m| m.pane == pane)?;
+        let role_index = self.members[index].role_index(index);
         Some(Membership {
             project: self
                 .project
@@ -172,12 +210,12 @@ impl Team {
                 .steps
                 .iter()
                 .rev()
-                .find(|s| s.role == index && !s.undone)
+                .find(|s| s.role == role_index && !s.undone)
                 .map(|s| s.number),
             violation: self.violations.contains(&index),
             revision: self.revision,
             id: self.id,
-            index,
+            index: role_index,
             current: index == self.current && !self.finished,
             waiting: self.finished || index != self.current || !self.running,
             automatic: self.automatic,
@@ -251,6 +289,7 @@ mod tests {
                 role,
                 pane: PaneId::FIRST,
                 cwd: "/project".into(),
+                original_index: None,
             }],
             current: 0,
             automatic: false,

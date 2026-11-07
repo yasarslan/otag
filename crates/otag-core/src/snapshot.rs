@@ -53,6 +53,9 @@ pub struct Snapshot {
     /// Every pane, referred to by the layouts above.
     #[serde(default)]
     pub panes: Vec<PaneSnapshot>,
+    /// The next pane ID, including IDs no longer present in the layout.
+    #[serde(default)]
+    pub next_pane: Option<PaneId>,
 }
 
 const fn yes() -> bool {
@@ -70,6 +73,7 @@ impl Default for Snapshot {
             active_workspace: 0,
             workspaces: Vec::new(),
             panes: Vec::new(),
+            next_pane: None,
         }
     }
 }
@@ -164,6 +168,7 @@ mod tests {
         Snapshot {
             agent_models: std::collections::BTreeMap::new(),
             teams: Vec::new(),
+            next_pane: None,
             version: VERSION,
             size: PaneSize::new(30, 100),
             sidebar: false,

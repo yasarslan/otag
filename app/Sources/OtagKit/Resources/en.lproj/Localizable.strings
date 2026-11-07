@@ -259,6 +259,10 @@
 "team.mode" = "Session mode";
 "team.solo" = "Solo";
 "team.title" = "Team";
+"team.end" = "End team";
+"close.confirm.title" = "Stop active work?";
+"close.confirm.session" = "Closing this session will stop the agent and its running processes.";
+"close.confirm.team" = "Ending this team will close all its sessions and stop their running processes.";
 "team.roles" = "Roles";
 "team.role.name" = "Role name";
 "team.plan" = "Plan/Prompt";

@@ -79,6 +79,156 @@ fn request(home: &TestHome, value: Value) -> Value {
     serde_json::from_str(&line).expect("JSON response")
 }
 
+#[test]
+fn closed_sessions_and_teams_do_not_return_after_a_daemon_restart() {
+    use otag_core::proto::Bytes;
+
+    let home = TestHome::new().expect("home");
+    let project = home.path().join("project");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&project)
+            .status()
+            .expect("git init")
+            .success()
+    );
+    let mut daemon = spawn(&home, &[], false);
+    listening(&home, &mut daemon);
+    let send = |value: Value| {
+        let mut stream = UnixStream::connect(home.socket()).expect("connect");
+        writeln!(stream, "{value}").expect("send request without a reply");
+    };
+    let panes = || {
+        request(&home, json!({"type":"list_panes"}))["panes"]
+            .as_array()
+            .expect("panes")
+            .clone()
+    };
+    let start_team = || {
+        let result = request(
+            &home,
+            json!({"type":"start_team","cwd":project,"roles":[
+                {"name":"Plan"},{"name":"Coder"},{"name":"Review"}
+            ]}),
+        );
+        assert_eq!(result["type"], "session_started", "{result}");
+        result["pane"].clone()
+    };
+    let start = request(&home, json!({"type":"start_session","cwd":project}));
+    assert_eq!(start["type"], "session_started");
+    let running = start["pane"].clone();
+    let command = r#"set -m; /bin/sh -c 'trap "" HUP; echo $$ > "$HOME/job.pid"; while :; do sleep 1; done' &"#;
+    send(
+        json!({"type":"pane_input","pane":running,"bytes":Bytes::from(format!("{command}\n").into_bytes())}),
+    );
+    let job_file = home.path().join("job.pid");
+    until("job PID", || job_file.exists());
+    let job: i32 = std::fs::read_to_string(job_file)
+        .expect("job PID")
+        .trim()
+        .parse()
+        .expect("PID number");
+    let before = process::table().expect("process table");
+    let owned = process::descendants(&before, &[daemon.0.id() as i32]);
+    assert!(owned.iter().any(|p| p.pid == job));
+    send(json!({"type":"hook","event":"PostToolUse","pane":running,"payload":"{}"}));
+    until("active work", || {
+        panes().iter().any(|p| p["status"] == "working")
+    });
+    let close = json!({"type":"close_pane","pane":running});
+    assert_eq!(
+        request(&home, close.clone())["type"],
+        "close_confirmation_required"
+    );
+    assert_eq!(panes()[0]["id"], running);
+    assert_eq!(
+        request(
+            &home,
+            json!({"type":"close_pane","pane":running,"confirmed":true})
+        )["type"],
+        "ok"
+    );
+    assert!(panes().is_empty());
+    assert_eq!(request(&home, close)["type"], "ok");
+    until("the pane process tree to stop", || {
+        let current = process::table().expect("process table");
+        !owned
+            .iter()
+            .filter(|p| p.pid != daemon.0.id() as i32)
+            .any(|p| current.iter().any(|c| p.same(c)))
+    });
+
+    let exited = start_team();
+    send(json!({"type":"pane_input","pane":exited,"bytes":Bytes::from(b"exit 0\n".as_slice())}));
+    until("the team role to exit", || {
+        panes()
+            .iter()
+            .any(|p| p["id"] == exited && !p["exit"].is_null())
+    });
+    assert_eq!(
+        request(&home, json!({"type":"close_pane","pane":exited}))["type"],
+        "ok"
+    );
+    let remaining = panes();
+    assert_eq!(remaining.len(), 2);
+    assert_eq!(remaining[0]["team"]["index"], 1);
+    assert_eq!(remaining[0]["team"]["waiting"], true);
+    for role in remaining {
+        assert_eq!(
+            request(&home, json!({"type":"close_pane","pane":role["id"]}))["type"],
+            "ok"
+        );
+    }
+    assert!(panes().is_empty());
+
+    let team = start_team();
+    let store = otag_persist::Store::open(
+        home.path()
+            .join("state")
+            .join(otag_persist::DATABASE_FILE_NAME),
+    )
+    .expect("state database");
+    until("the live team to be saved", || {
+        store
+            .load_session()
+            .expect("read state")
+            .is_some_and(|s| s.teams.len() == 1 && s.panes.len() == 3)
+    });
+    send(json!({"type":"hook","event":"PostToolUse","pane":team,"payload":"{}"}));
+    until("active team work", || {
+        panes().iter().any(|p| p["status"] == "working")
+    });
+    assert_eq!(
+        request(&home, json!({"type":"end_team","team":team}))["type"],
+        "close_confirmation_required"
+    );
+    assert_eq!(panes().len(), 3);
+    assert_eq!(
+        request(
+            &home,
+            json!({"type":"end_team","team":team,"confirmed":true})
+        )["type"],
+        "ok"
+    );
+    assert!(panes().is_empty());
+    let saved = store
+        .load_session()
+        .expect("read state")
+        .expect("saved close");
+    assert!(saved.workspaces.is_empty() && saved.panes.is_empty() && saved.teams.is_empty());
+    drop(store);
+
+    // A crash immediately after acknowledgment cannot rely on shutdown saving.
+    daemon.0.kill().expect("stop daemon without a final save");
+    daemon.0.wait().expect("reap daemon");
+    let mut restarted = spawn(&home, &[], false);
+    listening(&home, &mut restarted);
+    assert!(panes().is_empty());
+    let next = request(&home, json!({"type":"start_session","cwd":project}));
+    assert!(next["pane"].as_u64().expect("new pane ID") > team.as_u64().expect("closed team ID"));
+}
+
 #[tokio::test]
 async fn a_custom_socket_never_restores_or_writes_the_default_home_database() {
     use otag_core::pane::{PaneSize, PaneSpec};

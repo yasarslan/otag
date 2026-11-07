@@ -197,6 +197,22 @@ pub enum Request {
         /// The pane to stop watching.
         pane: PaneId,
     },
+    /// Permanently close a session and stop its processes.
+    ClosePane {
+        /// Session to close.
+        pane: PaneId,
+        /// Whether the user confirmed interrupting active work.
+        #[serde(default)]
+        confirmed: bool,
+    },
+    /// Permanently close every session in a team.
+    EndTeam {
+        /// Team to end.
+        team: u64,
+        /// Whether the user confirmed interrupting active work.
+        #[serde(default)]
+        confirmed: bool,
+    },
     /// Write these bytes to one pane's input, named rather than focused:
     /// a client with windows of its own has no single focused pane.
     ///
@@ -412,6 +428,8 @@ pub enum Response {
     Pong,
     /// The request was carried out and has no payload.
     Ok,
+    /// Closing would interrupt active work. Repeat the request after confirmation.
+    CloseConfirmationRequired,
     /// Answer to [`Request::Version`].
     Version {
         /// Version of the running daemon.

@@ -35,6 +35,14 @@ use crate::{Error, Result};
 use otag_agents::{AgentKind, PaneStatus, Tokens};
 use otag_features::usage::Report;
 
+/// The session or team a client wants to close permanently.
+pub enum CloseTarget {
+    /// One pane, including a role in a team.
+    Pane(PaneId),
+    /// All sessions in a team.
+    Team(u64),
+}
+
 /// Shortest time between two published screens.
 ///
 /// A program can write far more often than a person can read. Updates within
@@ -411,6 +419,12 @@ struct State {
 }
 
 impl State {
+    fn remove_from_layout(&mut self, id: PaneId) {
+        self.workspaces
+            .retain_mut(|workspace| workspace.close_pane(id));
+        self.active = self.active.min(self.workspaces.len().saturating_sub(1));
+    }
+
     /// Where otag's furniture goes and what is left for panes.
     fn chrome(&self) -> Chrome {
         Chrome::of(self.size, self.sidebar)
@@ -574,6 +588,81 @@ impl Session {
                 self.close_pane(&handle, None).await;
             }
         }
+    }
+
+    /// Stop the requested sessions and remove their layout and team membership.
+    ///
+    /// Returns false if active work needs confirmation. A repeated close of
+    /// an already removed session or team succeeds.
+    pub async fn close_sessions(
+        self: &Arc<Self>,
+        target: CloseTarget,
+        confirmed: bool,
+    ) -> Result<bool> {
+        // Team progression can replace a process while retaining its pane ID.
+        let _operation = self.team_operation().await;
+        let (ids, pids) = {
+            let state = self.lock()?;
+            let ids = match target {
+                CloseTarget::Pane(id) => vec![id],
+                CloseTarget::Team(id) => state
+                    .teams
+                    .iter()
+                    .find(|team| team.id == id)
+                    .map(|team| team.members.iter().map(|member| member.pane).collect())
+                    .unwrap_or_default(),
+            };
+            let live: Vec<_> = ids
+                .iter()
+                .filter_map(|id| state.panes.get(id))
+                .filter(|pane| !pane.handle.is_finished())
+                .collect();
+            if !confirmed
+                && live.iter().any(|pane| {
+                    matches!(
+                        pane.status,
+                        PaneStatus::Working | PaneStatus::Looping | PaneStatus::NeedsApproval
+                    )
+                })
+            {
+                return Ok(false);
+            }
+            let pids: Vec<_> = live.iter().filter_map(|pane| pane.pid).collect();
+            (ids, pids)
+        };
+        if !pids.is_empty() {
+            tokio::task::spawn_blocking(move || crate::process::terminate_panes(&pids))
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(|result| result)
+                .map_err(|error| Error::io("cannot stop the session processes", error))?;
+        }
+        let handles = {
+            let mut state = self.lock()?;
+            match target {
+                CloseTarget::Pane(id) => {
+                    for team in &mut state.teams {
+                        team.remove_member(id);
+                    }
+                    state.teams.retain(|team| !team.members.is_empty());
+                }
+                CloseTarget::Team(id) => state.teams.retain(|team| team.id != id),
+            }
+            let mut handles = Vec::new();
+            for id in ids {
+                if let Some(pane) = state.panes.remove(&id) {
+                    handles.push(pane.handle);
+                    state.remove_from_layout(id);
+                }
+                state.ended.retain(|(ended, _)| *ended != id);
+            }
+            handles
+        };
+        self.commit(true).await;
+        for handle in handles {
+            let _ = handle.send(PaneCommand::Stop).await;
+        }
+        Ok(true)
     }
 
     /// Restart a managed role in its stable pane after stopping its old process tree.
@@ -1401,6 +1490,7 @@ impl Session {
         Snapshot {
             agent_models: state.agent_models.clone(),
             teams: state.teams.clone(),
+            next_pane: Some(state.next_pane),
             version: snapshot::VERSION,
             size: state.size,
             sidebar: state.sidebar,
@@ -1494,6 +1584,7 @@ impl Session {
                 return Ok(());
             }
             state.agent_models = snapshot.agent_models.clone();
+            state.next_pane = snapshot.next_pane.unwrap_or(PaneId::FIRST);
             if snapshot.is_empty() {
                 return Ok(());
             }
@@ -1563,10 +1654,7 @@ impl Session {
             if exit.is_some() {
                 state.last_exit = exit;
             }
-            state
-                .workspaces
-                .retain_mut(|workspace| workspace.close_pane(id));
-            state.active = state.active.min(state.workspaces.len().saturating_sub(1));
+            state.remove_from_layout(id);
         }
         self.commit(true).await;
     }
@@ -1945,7 +2033,9 @@ fn restore_into(
 ) {
     // Identifiers are never reused, so counting carries on above the highest
     // one the snapshot used.
-    state.next_pane = highest(snapshot.panes.iter().map(|pane| pane.id), PaneId::FIRST).next();
+    state.next_pane = state
+        .next_pane
+        .max(highest(snapshot.panes.iter().map(|pane| pane.id), PaneId::FIRST).next());
     state.next_workspace = highest(
         snapshot.workspaces.iter().map(|workspace| workspace.id),
         WorkspaceId::FIRST,

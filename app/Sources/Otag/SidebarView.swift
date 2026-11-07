@@ -38,8 +38,17 @@ struct SidebarView: View {
             ForEach(Array(Set(store.panes.compactMap { $0.team?.id })).sorted(), id: \.self) { team in
                 let members = TeamMembership.members(of: team, in: store.panes)
                 Section {
-                    DisclosureGroup(Strings.t("team.title") + " \(team)") {
+                    DisclosureGroup {
                         ForEach(members) { pane in row(for: pane) }
+                    } label: {
+                        Text(Strings.t("team.title") + " \(team)")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button(Strings.t("team.end"), role: .destructive) {
+                                    store.close(.team(team))
+                                }
+                            }
                     }
                 } header: {
                     ProjectHeader(name: members.first?.team?.project ?? members.first?.workspace ?? "")

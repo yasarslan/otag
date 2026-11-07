@@ -76,8 +76,13 @@ impl Snapshots {
     }
 
     /// Save the shape of the session.
-    pub async fn save_session(&self, snapshot: Snapshot) {
-        self.with(move |store| store.save_session(&snapshot)).await;
+    pub async fn save_session(&self, session: &Arc<Session>) -> bool {
+        let session = Arc::clone(session);
+        // Capture under the database lock so a background save cannot write
+        // an older layout after a close has been acknowledged.
+        self.with(move |store| store.save_session(&session.snapshot()))
+            .await
+            .is_some()
     }
 
     /// Save the lines these panes have shown, and forget the panes that are
@@ -170,7 +175,7 @@ pub async fn keep_saving(session: Arc<Session>, snapshots: Snapshots) {
                 // Let a burst of changes finish before writing any of them.
                 tokio::time::sleep(SETTLE).await;
                 changes.mark_unchanged();
-                snapshots.save_session(session.snapshot()).await;
+                snapshots.save_session(&session).await;
             }
             changed = content.changed() => {
                 if changed.is_err() { return; }
@@ -218,8 +223,8 @@ pub async fn save_usage(shared: &crate::usage::Shared, snapshots: &Snapshots) {
 }
 
 /// Save the session and the lines every pane has shown.
-pub async fn save_everything(session: &Session, snapshots: &Snapshots) {
-    snapshots.save_session(session.snapshot()).await;
+pub async fn save_everything(session: &Arc<Session>, snapshots: &Snapshots) {
+    snapshots.save_session(session).await;
     snapshots
         .save_history(session.histories(snapshot::HISTORY_LINES).await)
         .await;

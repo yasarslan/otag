@@ -407,6 +407,7 @@ mod tests {
         Snapshot {
             agent_models: std::collections::BTreeMap::new(),
             teams: Vec::new(),
+            next_pane: None,
             version: otag_core::snapshot::VERSION,
             size: PaneSize::new(30, 100),
             sidebar: true,

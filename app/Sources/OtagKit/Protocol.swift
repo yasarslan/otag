@@ -638,6 +638,8 @@ public enum Request: Sendable {
     case guardLimits(pane: PaneID, plan: GuardPlan?)
     case terminalAppearance(dark: Bool)
     case detachPane(pane: PaneID)
+    case closePane(pane: PaneID, confirmed: Bool)
+    case endTeam(team: UInt64, confirmed: Bool)
     case paneInput(pane: PaneID, bytes: Data)
     case paneResize(pane: PaneID, size: PaneSize)
     case newWorkspace(cwd: String?)
@@ -753,6 +755,14 @@ extension Request: Encodable {
         case let .detachPane(pane):
             try container.encode("detach_pane", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
+        case let .closePane(pane, confirmed):
+            try container.encode("close_pane", forKey: Key("type"))
+            try container.encode(pane, forKey: Key("pane"))
+            try container.encode(confirmed, forKey: Key("confirmed"))
+        case let .endTeam(team, confirmed):
+            try container.encode("end_team", forKey: Key("type"))
+            try container.encode(team, forKey: Key("team"))
+            try container.encode(confirmed, forKey: Key("confirmed"))
         case let .paneInput(pane, bytes):
             try container.encode("pane_input", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
@@ -830,6 +840,7 @@ public enum Response: Sendable {
     case teamUndoPreview(TeamUndoPreview)
     case pong
     case ok
+    case closeConfirmationRequired
     case version(String)
     case panes([PaneInfo])
     case usage(UsageReport)
@@ -869,6 +880,8 @@ extension Response: Decodable {
             self = .pong
         case "ok":
             self = .ok
+        case "close_confirmation_required":
+            self = .closeConfirmationRequired
         case "version":
             self = .version(try container.decodeIfPresent(String.self, forKey: .version) ?? "")
         case "panes":

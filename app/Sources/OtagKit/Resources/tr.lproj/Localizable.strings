@@ -259,6 +259,10 @@
 "team.mode" = "Oturum modu";
 "team.solo" = "Tekli";
 "team.title" = "Takım";
+"team.end" = "Takımı sonlandır";
+"close.confirm.title" = "Devam eden çalışma durdurulsun mu?";
+"close.confirm.session" = "Bu oturumu kapatmak, ajanı ve çalışan işlemlerini durdurur.";
+"close.confirm.team" = "Bu takımı sonlandırmak, tüm oturumlarını kapatır ve çalışan işlemlerini durdurur.";
 "team.roles" = "Roller";
 "team.role.name" = "Rol adı";
 "team.plan" = "Plan/İstem";

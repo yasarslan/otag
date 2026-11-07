@@ -45,6 +45,23 @@ struct ProtocolTests {
         #expect(try line(.terminalAppearance(dark: false)).contains(#""dark":false"#))
     }
 
+    @Test("a close names its target and carries confirmation only when granted")
+    func closeRequests() throws {
+        let close = try line(.closePane(pane: 3, confirmed: false))
+        #expect(close.contains(#""type":"close_pane""#))
+        #expect(close.contains(#""pane":3"#))
+        #expect(close.contains(#""confirmed":false"#))
+
+        let end = try line(.endTeam(team: 7, confirmed: true))
+        #expect(end.contains(#""type":"end_team""#))
+        #expect(end.contains(#""team":7"#))
+        #expect(end.contains(#""confirmed":true"#))
+        guard case .closeConfirmationRequired = try response(#"{"type":"close_confirmation_required"}"#) else {
+            Issue.record("expected a request for confirmation")
+            return
+        }
+    }
+
     @Test("a pane carries the first thing it was asked, when the daemon knows")
     func firstPromptDecodes() throws {
         let with = try response(#"""

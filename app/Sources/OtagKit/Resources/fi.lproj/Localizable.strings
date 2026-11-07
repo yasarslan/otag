@@ -259,6 +259,10 @@
 "team.mode" = "Istunnon tila";
 "team.solo" = "Yksittäinen";
 "team.title" = "Tiimi";
+"team.end" = "Lopeta tiimi";
+"close.confirm.title" = "Keskeytetäänkö käynnissä oleva työ?";
+"close.confirm.session" = "Istunnon sulkeminen pysäyttää agentin ja sen käynnissä olevat prosessit.";
+"close.confirm.team" = "Tiimin lopettaminen sulkee kaikki sen istunnot ja pysäyttää niiden käynnissä olevat prosessit.";
 "team.roles" = "Roolit";
 "team.role.name" = "Roolin nimi";
 "team.plan" = "Suunnitelma/Kehote";

@@ -217,9 +217,8 @@ public struct SessionActions {
         store.askForMorningReport()
     }
 
-    /// Stop showing this session. The daemon keeps running it.
+    /// Ask the daemon to close this session permanently.
     public func close() {
-        store.send(.detachPane(pane: pane.id))
-        workbench.close(pane: pane.id)
+        store.close(.pane(pane.id))
     }
 }

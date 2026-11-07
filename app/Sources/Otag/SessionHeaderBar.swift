@@ -80,7 +80,9 @@ struct SessionHeaderBar: View {
                         Button(Strings.t("team.startStep")) { advance(team) }
                     } else if team.manual || actions.pane.status == .idle || actions.pane.status == .done {
                         Button(Strings.t("team.next")) { advance(team) }.controlSize(.mini)
-                        if team.index == 2 {
+                        if team.index == 2, actions.store.panes.contains(where: {
+                            $0.team?.id == team.id && $0.team?.index == 1
+                        }) {
                             Button { advance(team, back: true) } label: {
                                 Image(systemName: "arrow.uturn.backward")
                             }.help(Strings.t("team.back"))

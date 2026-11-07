@@ -39,6 +39,38 @@ public enum ConnectionState: Equatable, Sendable {
 @MainActor
 @Observable
 public final class SessionStore {
+    /// The target of a permanent close request.
+    public enum CloseTarget: Equatable {
+        case pane(PaneID)
+        case team(UInt64)
+
+        public var titleKey: String {
+            switch self {
+            case .pane: return "menu.closeSession"
+            case .team: return "team.end"
+            }
+        }
+
+        public var confirmationKey: String {
+            switch self {
+            case .pane: return "close.confirm.session"
+            case .team: return "close.confirm.team"
+            }
+        }
+
+        fileprivate func request(confirmed: Bool) -> Request {
+            switch self {
+            case let .pane(id): return .closePane(pane: id, confirmed: confirmed)
+            case let .team(id): return .endTeam(team: id, confirmed: confirmed)
+            }
+        }
+    }
+
+    /// A close the daemon says would interrupt active work.
+    public private(set) var closeConfirmation: CloseTarget?
+    private var closing: CloseTarget?
+    private var pendingCloses: [CloseTarget] = []
+
     /// Every pane the daemon is running.
     public private(set) var panes: [PaneInfo] = []
     public private(set) var hasLoadedPanes = false
@@ -402,6 +434,62 @@ public final class SessionStore {
         }
     }
 
+    /// Ask the daemon to close sessions. The pane subscription updates the layout.
+    public func close(_ target: CloseTarget) {
+        guard closeConfirmation != target, closing != target, !pendingCloses.contains(target)
+        else { return }
+        pendingCloses.append(target)
+        closeNext()
+    }
+
+    /// Dismiss the prompt or retry the close with the user's confirmation.
+    public func resolveClose(confirming target: CloseTarget? = nil) {
+        closeConfirmation = nil
+        if let target {
+            requestClose(target, confirmed: true)
+        } else {
+            // Let the alert finish dismissing before presenting another one.
+            Task { closeNext() }
+        }
+    }
+
+    private func closeNext() {
+        guard closing == nil, closeConfirmation == nil, !pendingCloses.isEmpty else { return }
+        requestClose(pendingCloses.removeFirst(), confirmed: false)
+    }
+
+    private func requestClose(_ target: CloseTarget, confirmed: Bool) {
+        closing = target
+        Task {
+            defer {
+                closing = nil
+                closeNext()
+            }
+            do {
+                let connection = try DaemonConnection(socket: socket)
+                defer { connection.close() }
+                try connection.send(target.request(confirmed: confirmed))
+                for await response in connection.responses {
+                    switch response {
+                    case .ok:
+                        return
+                    case .closeConfirmationRequired where !confirmed:
+                        closeConfirmation = target
+                        return
+                    case let .error(message):
+                        notice = message
+                        return
+                    default:
+                        throw DaemonError.unexpected(Strings.t(target.titleKey))
+                    }
+                }
+                throw DaemonError.disconnected
+            } catch {
+                notice = error.localizedDescription
+            }
+        }
+    }
+
     /// Connect, subscribe, and apply everything that arrives; try again
     /// after a pause if the daemon goes away.
     private func run() async {
@@ -475,7 +563,7 @@ public final class SessionStore {
         case let .error(message):
             handoffSettled()
             state = .failed(message)
-        case .pong, .ok, .paneScreen, .output, .paneEnded, .sessionEnded,
+        case .pong, .ok, .closeConfirmationRequired, .paneScreen, .output, .paneEnded, .sessionEnded,
              .sessionStarted, .teamUndoPreview, .unknown:
             // Pane bytes belong to whichever terminal view asked for them,
             // and the rest needs nothing from the store.

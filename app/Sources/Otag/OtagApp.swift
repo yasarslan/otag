@@ -188,8 +188,7 @@ struct OtagApp: App {
             workbench.close(pane: pane)
             return
         }
-        store.send(.detachPane(pane: pane))
-        workbench.close(pane: pane)
+        store.close(.pane(pane))
     }
 
     /// Show the nth session in the sidebar's order.
@@ -281,6 +280,21 @@ struct MainView: View {
             .frame(width: 0, height: 0)
         }
         .toolbar { toolbar }
+        .alert(
+            Strings.t("close.confirm.title"),
+            isPresented: Binding(
+                get: { store.closeConfirmation != nil },
+                set: { if !$0 { store.resolveClose() } }
+            ),
+            presenting: store.closeConfirmation
+        ) { target in
+            Button(Strings.t(target.titleKey), role: .destructive) {
+                store.resolveClose(confirming: target)
+            }
+            Button(Strings.t("sheet.cancel"), role: .cancel) {}
+        } message: { target in
+            Text(Strings.t(target.confirmationKey))
+        }
         .sheet(item: $pending) { request in
             NewSessionSheet(
                 socket: store.socket,

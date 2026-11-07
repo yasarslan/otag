@@ -15,7 +15,7 @@ use otag_core::paths::SOCKET_ENV;
 use otag_core::proto::{AskView, Event, Handoff as ProtoHandoff, PaneUsage, Request, Response};
 use otag_core::raw;
 use otag_core::server::{Handler, Outbox, Server};
-use otag_core::session::Session;
+use otag_core::session::{CloseTarget, Session};
 use otag_features::inbox::{AskId, Inbox};
 
 use crate::{agents, events, guard, handoff, inbox, nightshift, notify, persist, usage};
@@ -149,6 +149,7 @@ async fn serve(socket: &Path, state: &Path, parent: Option<i32>) -> Result<()> {
 
     let daemon = Daemon {
         session: Arc::clone(&session),
+        snapshots: snapshots.clone(),
         shifts: Arc::clone(&shifts),
         guards: Arc::clone(&guards),
         usage: Arc::clone(&shared_usage),
@@ -249,6 +250,7 @@ async fn lifetime(socket: &Path, identity: &std::fs::Metadata, parent: Option<i3
 /// Everything one daemon owns.
 struct Daemon {
     session: Arc<Session>,
+    snapshots: Option<persist::Snapshots>,
     usage: Arc<usage::Shared>,
     /// Carries events to the clients that asked to be told about them.
     events: events::Bus,
@@ -397,6 +399,12 @@ impl Handler for Daemon {
                 self.attachments.remove(outbox.id(), pane);
                 Some(Response::Ok)
             }
+            Request::ClosePane { pane, confirmed } => {
+                Some(self.close(CloseTarget::Pane(pane), confirmed).await)
+            }
+            Request::EndTeam { team, confirmed } => {
+                Some(self.close(CloseTarget::Team(team), confirmed).await)
+            }
             Request::PaneInput { pane, bytes } => {
                 if let Err(error) = self.session.input_to(pane, bytes.into_vec()).await {
                     tracing::debug!(%error, %pane, "cannot deliver input to a pane");
@@ -500,6 +508,26 @@ struct StartSession {
 }
 
 impl Daemon {
+    async fn close(&self, target: CloseTarget, confirmed: bool) -> Response {
+        match self.session.close_sessions(target, confirmed).await {
+            Ok(false) => Response::CloseConfirmationRequired,
+            Ok(true) => {
+                if let Some(snapshots) = &self.snapshots
+                    && !snapshots.save_session(&self.session).await
+                {
+                    return Response::error(
+                        "Closed the sessions, but could not save the change. Check the daemon state directory before restarting.",
+                    );
+                }
+                Response::Ok
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot close the requested sessions");
+                Response::error(format!("Could not close the sessions: {error}. Try again."))
+            }
+        }
+    }
+
     async fn api_provider(&self, provider: &str, model: Option<String>, refresh: bool) -> Response {
         use otag_agents::provider as api;
         if provider != AgentKind::Deepseek.name() {
@@ -1009,6 +1037,7 @@ mod tests {
         (
             Daemon {
                 session,
+                snapshots: None,
                 usage: usage::Shared::new(),
                 events: events::Bus::new(),
                 attachments: raw::Attachments::new(),

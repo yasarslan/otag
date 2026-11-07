@@ -125,17 +125,21 @@ struct SessionActionsTests {
         #expect(actions.canHandOff, "nothing is connected, so nothing is pending")
     }
 
-    @Test("closing a session stops showing it and leaves it running")
-    func closing() {
+    @Test("closing a session waits for the daemon to remove it")
+    func closing() async throws {
         let pane = claude()
-        let (actions, _, workbench, _, suite) = parts(pane: pane)
+        let (actions, store, workbench, _, suite) = parts(pane: pane)
         defer { UserDefaults().removePersistentDomain(forName: suite) }
 
+        store.apply(.panes([pane]))
         workbench.select(pane: pane.id)
-        #expect(workbench.panes == [pane.id])
-
         actions.close()
-        #expect(workbench.panes.isEmpty, "the window stopped showing it")
+        for _ in 0 ..< 100 where store.notice == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.notice != nil, "the daemon connection failure is visible")
+        #expect(store.panes == [pane])
+        #expect(workbench.panes == [pane.id], "a failed close leaves the session in the layout")
     }
 
     @Test("splitting puts the other session beside this one")

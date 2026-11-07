@@ -125,6 +125,18 @@ pub fn terminate(roots: &[i32]) -> io::Result<()> {
     terminate_owned(owned)
 }
 
+/// Stop pane trees whose roots are still direct children of this daemon.
+pub(crate) fn terminate_panes(pids: &[u32]) -> io::Result<()> {
+    let all = table()?;
+    let daemon = std::process::id() as i32;
+    let roots: Vec<_> = all
+        .iter()
+        .filter(|process| process.parent == daemon && pids.contains(&(process.pid as u32)))
+        .map(|process| process.pid)
+        .collect();
+    terminate_owned(descendants(&all, &roots))
+}
+
 /// Stop every live descendant of a daemon, without relying on possibly stale
 /// pane PIDs and without signalling the daemon itself.
 pub fn terminate_children(daemon: i32) -> io::Result<()> {

@@ -20,6 +20,17 @@
 - **Automate workflows:** Progress through team tasks and queued prompts with safety checks.
 - **Keep your work organized:** Manage persistent sessions and isolated Git worktrees.
 
+## Download
+
+The macOS download supports Apple silicon Macs running macOS 14 or later. Install
+and sign in to Claude Code, Codex, or both before starting a session.
+
+1. Download the `.dmg` from [GitHub Releases](https://github.com/yasarslan/otag/releases).
+2. Open the disk image and drag **Otag** to **Applications**.
+3. Try opening **Otag** from **Applications**. Because the app is not notarized,
+   go to **System Settings → Privacy & Security → Open Anyway** after the first
+   launch attempt, then confirm.
+
 ## Quick start
 
 otag is **pre-alpha** and continues to evolve based on what comes up in day-to-day use.

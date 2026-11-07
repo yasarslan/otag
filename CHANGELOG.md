@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Build a verified macOS disk image and SHA-256 checksum with `scripts/make-dmg.sh`.
+
 - API LLM configuration stores user keys in macOS Keychain and supports a
   distinct DeepSeek agent, model selection, connection testing, switching,
   and documented balance refresh. Credentials are resolved only at launch

@@ -111,6 +111,7 @@ final class BrowserPage: NSObject, WKNavigationDelegate, WKUIDelegate {
 }
 
 struct BrowserPaneView: View {
+    @Environment(\.pixelLength) private var pixelLength
     @Bindable var page: BrowserPage
     let close: () -> Void
 
@@ -151,8 +152,12 @@ struct BrowserPaneView: View {
                     .accessibilityLabel(Strings.t("menu.closeSession"))
             }
             .buttonStyle(.borderless)
-            .padding(8)
+            .padding(.horizontal, Chrome.gutter)
+            .frame(height: Chrome.headerHeight)
             .chromeBackground()
+            .overlay(alignment: .bottom) {
+                Chrome.hairline.frame(height: pixelLength).allowsHitTesting(false)
+            }
             if let problem = page.problem {
                 Text(problem)
                     .font(.caption)

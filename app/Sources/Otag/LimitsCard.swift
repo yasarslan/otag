@@ -48,7 +48,7 @@ struct LimitsCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
-            .cardBackground()
+            .cardBackground(floating: true)
             .contentShape(RoundedRectangle(cornerRadius: Chrome.cardRadius))
         }
         .buttonStyle(.plain)

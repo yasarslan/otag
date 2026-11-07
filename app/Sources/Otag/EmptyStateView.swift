@@ -11,6 +11,7 @@ import SwiftUI
 struct EmptyStateView: View {
     let state: ConnectionState
     let newSession: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,8 +25,16 @@ struct EmptyStateView: View {
 
             case .connected:
                 Card {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 52, height: 52)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 15))
+                        .accessibilityHidden(true)
+
                     Text(Strings.t("empty.title"))
                         .font(.title2.weight(.semibold))
+                        .multilineTextAlignment(.center)
 
                     Button {
                         newSession()
@@ -34,7 +43,6 @@ struct EmptyStateView: View {
                     }
                     .primaryActionStyle(prominent: true)
                     .controlSize(.large)
-                    .padding(.bottom, 4)
 
                     VStack(alignment: .leading, spacing: 10) {
                         line("sidebar.left", Strings.t("empty.sidebar"))
@@ -59,6 +67,15 @@ struct EmptyStateView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RadialGradient(
+                colors: [Color.accentColor.opacity(colorScheme == .dark ? 0.17 : 0.12), .clear],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 650
+            )
+            .allowsHitTesting(false)
+        }
     }
 
     private func line(_ symbol: String, _ text: String) -> some View {
@@ -79,12 +96,12 @@ struct EmptyStateView: View {
         @ViewBuilder let content: Content
 
         var body: some View {
-            VStack(spacing: 14) {
+            VStack(spacing: 16) {
                 content
             }
             .padding(28)
             .frame(width: 420)
-            .cardBackground()
+            .cardBackground(radius: 20)
         }
     }
 }

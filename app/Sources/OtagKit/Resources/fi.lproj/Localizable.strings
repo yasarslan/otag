@@ -65,6 +65,8 @@
 "menu.nightshift.stop" = "Lopeta yövuoro";
 "menu.close" = "Sulje";
 "sidebar.nickname" = "lempinimi";
+"sidebar.show" = "Näytä sivupalkki";
+"sidebar.hide" = "Piilota sivupalkki";
 "sidebar.empty.title" = "Ei istuntoja";
 "sidebar.empty.detail" = "Aloita painamalla ⌘N tai suorita `otag` päätteessä.";
 "sidebar.looking" = "Etsitään taustapalvelua…";

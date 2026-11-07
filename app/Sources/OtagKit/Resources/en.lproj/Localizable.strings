@@ -65,6 +65,8 @@
 "menu.nightshift.stop" = "Stop the night shift";
 "menu.close" = "Close";
 "sidebar.nickname" = "nickname";
+"sidebar.show" = "Show Sidebar";
+"sidebar.hide" = "Hide Sidebar";
 "sidebar.empty.title" = "No sessions";
 "sidebar.empty.detail" = "Press ⌘N to start one, or run `otag` in a terminal.";
 "sidebar.looking" = "Looking for the daemon…";

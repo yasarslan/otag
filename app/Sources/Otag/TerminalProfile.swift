@@ -32,7 +32,8 @@ import SwiftTerm
 enum TerminalProfile {
     /// The font every pane uses, at the size the user chose.
     static func font(size: Double) -> NSFont {
-        NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        NSFont(name: "SFMono-Regular", size: size)
+            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     /// How tall a line is, as a multiple of the font's own height.
@@ -58,15 +59,13 @@ enum TerminalProfile {
         view.installColors(ansi(theme))
     }
 
-    /// Which theme a view should be drawn in, for a choice and the
-    /// appearance the view finds itself in.
-    static func theme(for choice: TerminalThemeChoice, in view: NSView) -> TerminalTheme {
-        choice.resolved(dark: isDark(view))
+    /// Keeps legacy settings readable while offering the two dark palettes.
+    static func choice(for stored: String) -> TerminalThemeChoice {
+        TerminalThemeChoice.stored(stored) == .midnight ? .midnight : .glassDark
     }
 
-    /// Whether this view is being drawn in a dark appearance.
-    static func isDark(_ view: NSView) -> Bool {
-        view.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    static func theme(for stored: String) -> TerminalTheme {
+        choice(for: stored).resolved(dark: true)
     }
 
     /// A theme's sixteen colours, in the order a terminal numbers them.

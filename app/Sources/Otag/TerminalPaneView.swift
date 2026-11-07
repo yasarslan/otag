@@ -9,7 +9,29 @@ import SwiftUI
 /// the user's keys come out. Nothing here interprets the stream: a screen
 /// message replaces what the view has, output is appended, and the size the
 /// view settles on is sent back so the program is told the truth.
-struct TerminalPaneView: NSViewRepresentable {
+struct TerminalPaneView: View {
+    let pane: PaneID
+    let socket: URL
+    let focused: Bool
+    let dimmed: Bool
+    let onEnded: (PaneExit?) -> Void
+    let onGone: (String) -> Void
+    let onFocus: () -> Void
+
+    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.glassDark.rawValue
+
+    var body: some View {
+        TerminalSurface(
+            pane: pane, socket: socket, focused: focused,
+            onEnded: onEnded, onGone: onGone, onFocus: onFocus
+        )
+        .opacity(dimmed ? 0.9 : 1)
+        .padding(14)
+        .background(Color(nsColor: TerminalProfile.colour(TerminalProfile.theme(for: theme).background)))
+    }
+}
+
+private struct TerminalSurface: NSViewRepresentable {
     /// The pane to show.
     let pane: PaneID
     /// Where the daemon is.
@@ -27,13 +49,7 @@ struct TerminalPaneView: NSViewRepresentable {
     @Environment(\.windowVisible) private var windowVisible
 
     @AppStorage(Preference.fontSize) private var fontSize = Preference.defaultFontSize
-    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.system.rawValue
-
-    /// The theme the user chose, which is a choice rather than a theme: it
-    /// can mean "whichever the system is".
-    private var choice: TerminalThemeChoice {
-        TerminalThemeChoice.stored(theme)
-    }
+    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.glassDark.rawValue
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -46,13 +62,16 @@ struct TerminalPaneView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> TerminalView {
-        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        let view = SteadyTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         view.terminalDelegate = context.coordinator
         // One profile for every pane, whatever is running in it: see
         // `TerminalProfile`. The agents differ enough already.
-        let theme = TerminalProfile.theme(for: choice, in: view)
+        let theme = TerminalProfile.theme(for: self.theme)
         context.coordinator.drawn = theme
         TerminalProfile.apply(to: view, theme: theme, size: fontSize)
+        // Leave contrast headroom for the inactive pane's 10% dimming.
+        view.minimumContrastRatio = 5.5
+        view.setCursorStyle(.steadyBlock)
         view.allowMouseReporting = true
         view.suspendsRenderingWhenNotVisible = true
 
@@ -71,7 +90,7 @@ struct TerminalPaneView: NSViewRepresentable {
         // Settings reach every pane that is already open — and what makes a
         // switch between light and dark follow, for anyone who left the
         // choice on the system.
-        let theme = TerminalProfile.theme(for: choice, in: view)
+        let theme = TerminalProfile.theme(for: self.theme)
         if view.font.pointSize != fontSize || context.coordinator.drawn != theme {
             context.coordinator.drawn = theme
             TerminalProfile.apply(to: view, theme: theme, size: fontSize)
@@ -263,5 +282,18 @@ struct TerminalPaneView: NSViewRepresentable {
         func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
 
         func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+    }
+}
+
+/// Keeps the cursor shape requested by the program with a steady presentation.
+private final class SteadyTerminalView: TerminalView {
+    nonisolated override func cursorStyleChanged(source: Terminal, newStyle: CursorStyle) {
+        let steadyStyle: CursorStyle
+        switch newStyle {
+        case .blinkBlock, .steadyBlock: steadyStyle = .steadyBlock
+        case .blinkUnderline, .steadyUnderline: steadyStyle = .steadyUnderline
+        case .blinkBar, .steadyBar: steadyStyle = .steadyBar
+        }
+        super.cursorStyleChanged(source: source, newStyle: steadyStyle)
     }
 }

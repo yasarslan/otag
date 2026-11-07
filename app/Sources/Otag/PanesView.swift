@@ -38,6 +38,7 @@ private struct PaneTree: View {
     let workbench: Workbench
     let browsers: BrowserSessions
     let webViews: BrowserWebViews
+    @Environment(\.pixelLength) private var pixelLength
 
     var body: some View {
         switch node {
@@ -57,7 +58,7 @@ private struct PaneTree: View {
         case let .split(axis, children, fractions):
             GeometryReader { geometry in
                 let along = axis == .horizontal ? geometry.size.width : geometry.size.height
-                let dividers = Double(max(children.count - 1, 0)) * Self.dividerWidth
+                let dividers = Double(max(children.count - 1, 0)) * pixelLength
                 let usable = max(along - dividers, 1)
 
                 let content = ForEach(Array(children.enumerated()), id: \.element.id) { index, child in
@@ -77,6 +78,7 @@ private struct PaneTree: View {
                         DividerHandle(axis: axis) { delta in
                             workbench.move(divider: index, of: node.id, by: delta / usable)
                         }
+                        .zIndex(1)
                     }
                 }
 
@@ -89,9 +91,6 @@ private struct PaneTree: View {
         }
     }
 
-    /// How wide a divider is, and how much room there is to grab it.
-    private static let dividerWidth: Double = 5
-
     private func share(_ fractions: [Double], _ index: Int) -> Double {
         guard fractions.indices.contains(index) else { return 0 }
         let total = fractions.reduce(0, +)
@@ -101,17 +100,27 @@ private struct PaneTree: View {
 
 /// A draggable line between two panes.
 private struct DividerHandle: View {
+    private static let hitWidth: CGFloat = 5
     let axis: SplitAxis
     let move: (Double) -> Void
 
+    @Environment(\.pixelLength) private var pixelLength
     @State private var carried: Double = 0
 
     var body: some View {
-        Rectangle()
-            .fill(.separator)
+        Chrome.splitHairline
             .frame(
-                width: axis == .horizontal ? 5 : nil,
-                height: axis == .vertical ? 5 : nil
+                width: axis == .horizontal ? pixelLength : nil,
+                height: axis == .vertical ? pixelLength : nil
+            )
+            .overlay { hitTarget }
+    }
+
+    private var hitTarget: some View {
+        Color.clear
+            .frame(
+                width: axis == .horizontal ? Self.hitWidth : nil,
+                height: axis == .vertical ? Self.hitWidth : nil
             )
             .contentShape(Rectangle())
             .onHover { inside in
@@ -146,6 +155,7 @@ private struct PaneCell: View {
     let webViews: BrowserWebViews
 
     @AppStorage(Preference.dimIdle) private var dimIdle = true
+    @Environment(\.pixelLength) private var pixelLength
     /// Why this pane cannot be followed any more, once that has happened.
     @State private var gone: String?
 
@@ -173,10 +183,20 @@ private struct PaneCell: View {
             }
         }
         .onTapGesture { workbench.focus(pane: pane) }
-        // A session doing nothing, with the keyboard somewhere else, fades
-        // slightly into the background. Nothing moves and nothing blinks;
-        // the eye simply goes to what is working.
-        .opacity(dimmed ? 0.72 : 1)
+        .overlay {
+            if let borderColour {
+                Rectangle()
+                    .strokeBorder(borderColour, lineWidth: pixelLength)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var borderColour: Color? {
+        if store.pane(pane)?.status.wantsAttention == true || store.asks.contains(where: { $0.pane == pane }) {
+            return Chrome.attention
+        }
+        return workbench.focus == pane ? Chrome.paneFocus : nil
     }
 
     private var terminal: some View {
@@ -184,6 +204,7 @@ private struct PaneCell: View {
             pane: pane,
             socket: store.socket,
             focused: workbench.focus == pane && workbench.panes.count > 1,
+            dimmed: dimmed,
             onEnded: { _ in if store.pane(pane)?.team == nil { workbench.close(pane: pane) } },
             onGone: { message in gone = message },
             onFocus: { workbench.focus(pane: pane) }
@@ -196,12 +217,6 @@ private struct PaneCell: View {
                 // ever showed. Saying so beats a view that quietly does
                 // nothing when it is typed into.
                 PaneGoneOverlay(reason: gone) { workbench.close(pane: pane) }
-            }
-        }
-        .overlay {
-            if workbench.panes.count > 1, workbench.focus == pane {
-                RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(.tint.opacity(0.5), lineWidth: 1)
             }
         }
     }

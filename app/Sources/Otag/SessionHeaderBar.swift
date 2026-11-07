@@ -31,6 +31,7 @@ struct SessionPrompt: Identifiable {
 ///
 /// `nickname · name · project · status`, and nothing twice.
 struct SessionHeaderBar: View {
+    @Environment(\.pixelLength) private var pixelLength
     @State private var undoing = false
     let actions: SessionActions
     /// Whether this session has the keyboard, which only matters when it is
@@ -106,7 +107,9 @@ struct SessionHeaderBar: View {
         .padding(.horizontal, Chrome.gutter)
         .frame(height: Chrome.headerHeight)
         .chromeBackground()
-        .overlay(alignment: .bottom) { Divider() }
+        .overlay(alignment: .bottom) {
+            Chrome.hairline.frame(height: pixelLength).allowsHitTesting(false)
+        }
         .help(actions.pane.agent.name)
         .sheet(isPresented: $undoing) {
             if let step = actions.pane.team?.undoStep {

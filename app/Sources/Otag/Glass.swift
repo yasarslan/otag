@@ -1,98 +1,90 @@
+import AppKit
 import OtagKit
 import SwiftUI
 
-/// The window's chrome, and the one place that knows what the system can do.
-///
-/// macOS 26 draws chrome as Liquid Glass; macOS 14 and 15 draw it as a
-/// material. The difference is real but it is not interesting to a view, so
-/// it lives here: a sidebar asks for `.chromeBackground()` and gets whichever
-/// the system has. No view in otag writes an availability check.
-///
-/// Glass is for **chrome only** — the sidebar, the header bar, the limits
-/// card, the empty-state card. A terminal stays opaque: text an agent drew
-/// must not have the desktop showing through it, and a pane paints its
-/// theme's background flat.
+/// Shared window surfaces and dimensions.
 enum Chrome {
-    /// How round a card is.
     static let cardRadius: CGFloat = 12
-    /// How round a control is.
     static let controlRadius: CGFloat = 8
-    /// The gap between things that belong together.
     static let gap: CGFloat = 8
-    /// The gap between things that do not.
     static let gutter: CGFloat = 16
-    /// How tall a header bar is.
     static let headerHeight: CGFloat = 32
+
+    static let sidebar = adaptive(light: 0xF1F2F4, dark: 0x20232A)
+    static let header = adaptive(light: 0xE9EBEF, dark: 0x292D35)
+    static let card = adaptive(light: 0xF8F9FA, dark: 0x2D313A)
+    static let hairline = adaptive(light: 0xCCD0D7, dark: 0x383D46)
+    static let splitHairline = Color(nsColor: TerminalProfile.colour(0x454B56))
+    static let attention = adaptive(light: 0xA06C24, dark: 0xD5A45E)
+    static let paneFocus = adaptive(light: 0x8E8E93, dark: 0x6E6E73)
+
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return TerminalProfile.colour(isDark ? dark : light)
+        })
+    }
 }
 
 extension View {
-    /// The background of a region of chrome that fills its own edge of the
-    /// window: the sidebar, the header bar.
+    /// Sets the window and native title bar over the same opaque surface.
     @ViewBuilder
+    func workspaceBackground() -> some View {
+        if #available(macOS 15, *) {
+            containerBackground(Chrome.header, for: .window)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            self
+        }
+    }
+
     func chromeBackground() -> some View {
-        if #available(macOS 26, *) {
-            background(.clear).glassEffect(.regular, in: Rectangle())
-        } else {
-            background(.regularMaterial)
-        }
+        background(Chrome.header)
     }
 
-    /// The background of a card that floats over something: the limits card,
-    /// the empty state, a notice.
-    @ViewBuilder
-    func cardBackground(radius: CGFloat = Chrome.cardRadius) -> some View {
-        if #available(macOS 26, *) {
-            glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius))
-        } else {
-            background(.regularMaterial, in: RoundedRectangle(cornerRadius: radius))
-                .overlay {
-                    RoundedRectangle(cornerRadius: radius)
-                        .strokeBorder(.quaternary, lineWidth: 1)
-                }
-        }
+    func cardBackground(radius: CGFloat = Chrome.cardRadius, floating: Bool = false) -> some View {
+        modifier(CardSurface(radius: radius, floating: floating))
     }
 
-    /// The one primary button in a header bar.
-    ///
-    /// `prominent` when the agent is running out of room, which is the only
-    /// time otag raises its voice. The same button either way, so nothing on
-    /// the header ever moves.
     @ViewBuilder
     func primaryActionStyle(prominent: Bool) -> some View {
-        if #available(macOS 26, *) {
-            if prominent {
-                buttonStyle(.glassProminent).controlSize(.small)
-            } else {
-                buttonStyle(.glass).controlSize(.small)
-            }
-        } else {
-            if prominent {
-                buttonStyle(.borderedProminent).controlSize(.small)
-            } else {
-                buttonStyle(.bordered).controlSize(.small)
-            }
-        }
-    }
-
-    /// A small round button that sits on chrome: the `⋯` menu, a close.
-    @ViewBuilder
-    func chromeButtonStyle() -> some View {
-        if #available(macOS 26, *) {
-            buttonStyle(.glass).controlSize(.small)
+        if prominent {
+            buttonStyle(.borderedProminent).controlSize(.small)
         } else {
             buttonStyle(.bordered).controlSize(.small)
         }
     }
 
-    /// Groups several pieces of glass so they blend into each other rather
-    /// than stacking up. Nothing on macOS 14 and 15, where there is no glass
-    /// to blend.
-    @ViewBuilder
-    func glassGroup(spacing: CGFloat = Chrome.gap) -> some View {
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: spacing) { self }
+    func chromeButtonStyle() -> some View {
+        modifier(ToolbarButtonSurface())
+    }
+}
+
+/// Only explicitly floating cards use glass, backed by a solid window.
+private struct CardSurface: ViewModifier {
+    let radius: CGFloat
+    let floating: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius)
+        if #available(macOS 26, *), floating, !reduceTransparency {
+            content.glassEffect(.regular, in: shape)
         } else {
-            self
+            content.background(Chrome.card, in: shape)
+        }
+    }
+}
+
+/// Toolbar buttons fall back to the system bordered style when glass is disabled.
+private struct ToolbarButtonSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *), !reduceTransparency {
+            content.buttonStyle(.glass).controlSize(.small)
+        } else {
+            content.buttonStyle(.bordered).controlSize(.small)
         }
     }
 }
@@ -142,17 +134,15 @@ struct StatusPill: View {
             .foregroundStyle(colour)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(colour.opacity(0.14), in: Capsule())
+            .background(colour.opacity(0.10), in: Capsule())
             .help(status.localizedPrecise)
             .accessibilityLabel(status.localizedPrecise)
     }
 
     private var colour: Color {
         switch status.badge {
-        case .needsYou: return status == .error ? .red : .accentColor
-        case .working: return .accentColor
-        case .done: return .green
-        case .idle: return .secondary
+        case .needsYou: return status == .error ? .red : Chrome.attention
+        case .working, .done, .idle: return .secondary
         }
     }
 }

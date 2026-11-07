@@ -1,3 +1,4 @@
+import AppKit
 import OtagKit
 import SwiftUI
 
@@ -49,7 +50,9 @@ struct SidebarView: View {
                     ForEach(browsers.sessions) { browser in
                         Label(browser.url.absoluteString, systemImage: "globe")
                             .lineLimit(1)
+                            .foregroundStyle(Color.primary)
                             .tag(browser.id)
+                            .listRowBackground(rowBackground(selected: selection == browser.id))
                             .draggable(DraggedSession(pane: browser.id))
                             .contextMenu {
                                 Button(Strings.t("menu.closeSession")) { browsers.close(browser.id) }
@@ -60,7 +63,6 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .chromeBackground()
         .overlay {
             if store.workspaces.isEmpty && browsers.sessions.isEmpty {
                 EmptySidebar(state: store.state)
@@ -93,6 +95,7 @@ struct SidebarView: View {
             cancel: { naming = nil }
         )
         .tag(pane.id)
+        .listRowBackground(rowBackground(selected: selection == pane.id))
         .draggable(DraggedSession(pane: pane.id)) { dragPreview(of: pane) }
         .contextMenu {
             SessionContextMenu(
@@ -102,6 +105,16 @@ struct SidebarView: View {
                 setNickname: { naming = pane.id }
             )
         }
+    }
+
+    private func rowBackground(selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: Chrome.controlRadius)
+            .fill(selected ? Color.accentColor.opacity(0.14) : .clear)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background {
+                SidebarSelectionStyle().frame(width: 0, height: 0)
+            }
     }
 
     /// What the user sees under the cursor: the session's own name, so it is
@@ -130,6 +143,28 @@ struct SidebarView: View {
     private func number(of pane: PaneID) -> Int? {
         guard let index = store.ordered.firstIndex(of: pane), index < 9 else { return nil }
         return index + 1
+    }
+}
+
+/// Leaves selection and keyboard navigation to the list and draws its highlight in SwiftUI.
+private struct SidebarSelectionStyle: NSViewRepresentable {
+    func makeNSView(context: Context) -> SelectionProbe { SelectionProbe() }
+
+    func updateNSView(_ view: SelectionProbe, context: Context) {}
+
+    final class SelectionProbe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            var ancestor = superview
+            while let view = ancestor {
+                if let table = view as? NSTableView {
+                    table.selectionHighlightStyle = .none
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
     }
 }
 
@@ -175,6 +210,8 @@ private struct SessionRow: View {
                 AgentMark(agent: pane.agent)
 
                 Text(name)
+                    .fontWeight(.regular)
+                    .foregroundStyle(Color.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
@@ -288,6 +325,9 @@ private struct EmptySidebar: View {
                 ProgressView().controlSize(.small)
                 Text(Strings.t("sidebar.looking"))
             } else {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 22, weight: .light))
+                    .accessibilityHidden(true)
                 Text(Strings.t("sidebar.empty.title"))
                     .font(.headline)
                 Text(Strings.t("sidebar.empty.detail"))

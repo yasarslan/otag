@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The macOS workspace has a redesigned session start card and a softly tinted empty view.
+- The macOS app uses opaque window surfaces, coordinated light and dark chrome, dark terminals, and thinner pane separators and focus borders.
+- Focused macOS panes use a neutral grey border, with amber taking priority when a pane needs attention.
+
 ### Fixed
 
 - Automatic team progression recognizes successful zero-failure test summaries

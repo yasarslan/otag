@@ -31,11 +31,10 @@ struct OtagApp: App {
     @State private var attention = Attention()
     @State private var palette = false
     @AppStorage("hasOnboarded") private var onboarded = false
-    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.system.rawValue
-    @Environment(\.colorScheme) private var appearance
+    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.glassDark.rawValue
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Otag") {
             MainView(
                 store: store,
                 workbench: workbench,
@@ -58,7 +57,6 @@ struct OtagApp: App {
                 if case .connected = state { tellTheDaemonAboutTheTheme() }
             }
             .onChange(of: theme) { _, _ in tellTheDaemonAboutTheTheme() }
-            .onChange(of: appearance) { _, _ in tellTheDaemonAboutTheTheme() }
             // The Dock badge and the notifications follow the inbox, which
             // the daemon keeps in step with the panes themselves.
             .onChange(of: store.asks) { _, asks in
@@ -76,7 +74,7 @@ struct OtagApp: App {
             }
         }
         .defaultSize(width: 1_100, height: 700)
-        .windowToolbarStyle(.unified)
+        .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(Strings.t("menu.newSession")) { pending = PendingSession(axis: nil) }
@@ -155,8 +153,7 @@ struct OtagApp: App {
 
     /// Tell the daemon whether the panes are being drawn on dark paper.
     private func tellTheDaemonAboutTheTheme() {
-        let resolved = TerminalThemeChoice.stored(theme).resolved(dark: appearance == .dark)
-        store.send(.terminalAppearance(dark: resolved.isDark))
+        store.send(.terminalAppearance(dark: TerminalProfile.theme(for: theme).isDark))
     }
 
     /// The session the window is showing.
@@ -233,40 +230,49 @@ struct MainView: View {
     @State private var prompt: SessionPrompt?
     /// Whether this window is visible; terminal streams follow it.
     @State private var windowVisible = true
+    @State private var sidebarShown = true
     /// Which toolbar popover is open.
     @State private var guarding = false
     @State private var switching = false
     @State private var apiProviderShown = false
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                store: store,
-                names: names,
-                workbench: workbench,
-                browsers: browsers,
-                selection: selection,
-                ask: { pane, kind in prompt = SessionPrompt(pane: pane, kind: kind) }
-            )
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 380)
-        } detail: {
-            if workbench.root == nil {
-                EmptyStateView(state: store.state) {
-                    pending = PendingSession(axis: nil)
-                }
-                // With nothing showing, a session dragged anywhere here
-                // opens it: there are no edges to aim at yet.
-                .dropDestination(for: DraggedSession.self) { items, _ in
-                    guard let dropped = items.first,
-                          (store.pane(dropped.pane) != nil || browsers.session(dropped.pane) != nil) else { return false }
-                    workbench.select(pane: dropped.pane)
-                    return true
-                }
-            } else {
-                PanesView(store: store, names: names, workbench: workbench, browsers: browsers, webViews: webViews)
+        HSplitView {
+            if sidebarShown {
+                SidebarView(
+                    store: store,
+                    names: names,
+                    workbench: workbench,
+                    browsers: browsers,
+                    selection: selection,
+                    ask: { pane, kind in prompt = SessionPrompt(pane: pane, kind: kind) }
+                )
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 380, maxHeight: .infinity)
+                .background(Chrome.sidebar)
             }
+            Group {
+                if workbench.root == nil {
+                    EmptyStateView(state: store.state) {
+                        pending = PendingSession(axis: nil)
+                    }
+                    .background(Chrome.header)
+                    // With nothing showing, a session dragged anywhere here opens it.
+                    .dropDestination(for: DraggedSession.self) { items, _ in
+                        guard let dropped = items.first,
+                              (store.pane(dropped.pane) != nil || browsers.session(dropped.pane) != nil) else { return false }
+                        workbench.select(pane: dropped.pane)
+                        return true
+                    }
+                } else {
+                    PanesView(store: store, names: names, workbench: workbench, browsers: browsers, webViews: webViews)
+                }
+            }
+            .frame(idealWidth: 840, maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
         }
         .environment(\.windowVisible, windowVisible)
+        .background(Chrome.header)
+        .workspaceBackground()
         .background {
             WindowVisibility { visible, anyVisible in
                 windowVisible = visible
@@ -372,6 +378,15 @@ struct MainView: View {
     /// a toolbar nobody learns.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                sidebarShown.toggle()
+            } label: {
+                Label(Strings.t(sidebarShown ? "sidebar.hide" : "sidebar.show"), systemImage: "sidebar.left")
+            }
+            .labelStyle(.iconOnly)
+            .keyboardShortcut("s", modifiers: [.command, .control])
+        }
         ToolbarItem(placement: .navigation) {
             if let team = focused?.team {
                 Button {

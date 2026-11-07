@@ -61,16 +61,16 @@ public struct TerminalTheme: Identifiable, Sendable, Hashable {
         ]
     )
 
-    /// What a dark system appearance gets.
+    /// The workspace's default terminal palette.
     public static let glassDark = TerminalTheme(
         id: "glass-dark",
         name: "Glass Dark",
         detail: "Near-black paper, muted ink. The quiet default.",
         isDark: true,
-        background: 0x1C1C1E,
-        foreground: 0xE8E8ED,
-        cursor: 0xE8E8ED,
-        selection: 0x2F4A6B,
+        background: 0x15171C,
+        foreground: 0xE6E6E6,
+        cursor: 0xE6E6E6,
+        selection: 0x34445B,
         ansi: [
             0x3A3A3F, 0xD4756A, 0x8FB573, 0xD9B365,
             0x6FA8D4, 0xB48EAD, 0x74B0B5, 0xC9C9C4,

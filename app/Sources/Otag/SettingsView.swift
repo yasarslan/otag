@@ -42,11 +42,10 @@ struct SettingsView: View {
 
 /// How otag looks: the theme every pane uses, and how big its text is.
 private struct AppearanceSettings: View {
-    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.system.rawValue
+    @AppStorage(Preference.theme) private var theme = TerminalThemeChoice.glassDark.rawValue
     @AppStorage(Preference.fontSize) private var fontSize = Preference.defaultFontSize
     @AppStorage(Preference.dimIdle) private var dimIdle = true
 
-    @Environment(\.colorScheme) private var scheme
     @State private var offering = false
 
     var body: some View {
@@ -54,8 +53,8 @@ private struct AppearanceSettings: View {
             LanguageSettings()
 
             Section(Strings.t("settings.theme")) {
-                Picker(Strings.t("settings.theme"), selection: $theme) {
-                    ForEach(TerminalThemeChoice.allCases) { choice in
+                Picker(Strings.t("settings.theme"), selection: themeSelection) {
+                    ForEach([TerminalThemeChoice.glassDark, .midnight]) { choice in
                         Text(choice.label).tag(choice.rawValue)
                     }
                 }
@@ -100,9 +99,13 @@ private struct AppearanceSettings: View {
         }
     }
 
-    /// The theme this choice means in the appearance the window is in.
+    private var themeSelection: Binding<String> {
+        Binding(get: { TerminalProfile.choice(for: theme).rawValue }, set: { theme = $0 })
+    }
+
+    /// The palette used by the preview and the terminal.
     private var resolved: TerminalTheme {
-        TerminalThemeChoice.stored(theme).resolved(dark: scheme == .dark)
+        TerminalProfile.theme(for: theme)
     }
 }
 

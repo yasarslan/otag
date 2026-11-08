@@ -66,6 +66,9 @@ pub struct HookPayload {
     /// What the agent wants to tell the user.
     #[serde(default)]
     pub message: Option<String>,
+    /// Why Claude Code emitted a Notification event.
+    #[serde(default)]
+    pub notification_type: Option<String>,
     /// Why a session started: new, resumed, or cleared.
     #[serde(default)]
     pub source: Option<String>,
@@ -108,6 +111,27 @@ impl HookPayload {
             "Stop" | "SubagentStop" => Some(PaneStatus::Done),
             "SessionStart" => Some(PaneStatus::Idle),
             _ => None,
+        }
+    }
+
+    /// Status events that can drive an automatic team transition.
+    #[must_use]
+    pub fn team_status(&self, event: &str) -> Option<PaneStatus> {
+        match event {
+            // Claude emits this before every tool call, even if it will
+            // proceed without showing a permission prompt.
+            "PreToolUse" => Some(PaneStatus::Working),
+            "PermissionRequest" => Some(PaneStatus::NeedsApproval),
+            "SubagentStop" => None,
+            "Notification"
+                if self
+                    .notification_type
+                    .as_deref()
+                    .is_some_and(|kind| kind != "permission_prompt") =>
+            {
+                None
+            }
+            _ => self.status(event),
         }
     }
 

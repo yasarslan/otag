@@ -7,7 +7,17 @@ pub fn check_read_only(agent: AgentKind) -> Result<(), String> {
     if !matches!(agent, AgentKind::Claude | AgentKind::Deepseek) {
         return Ok(());
     }
-    let output = std::process::Command::new("claude")
+    let path = std::env::var_os("PATH");
+    let home = std::env::var_os("HOME");
+    let cwd = std::env::current_dir().ok();
+    let executable = crate::launch::resolve(
+        std::ffi::OsStr::new("claude"),
+        path.as_deref(),
+        home.as_deref().map(Path::new),
+        cwd.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
+    let output = std::process::Command::new(executable.as_deref().unwrap_or(Path::new("claude")))
         .arg("--version")
         .output()
         .map_err(|_| "Install or update the selected agent before using a read-only team role.")?;
@@ -39,15 +49,30 @@ pub fn command_on_model(
     read_only: bool,
     model: Option<&str>,
 ) -> Vec<String> {
+    launch(agent, cwd, Some(prompt), read_only, model)
+}
+
+/// Open a role's interactive welcome screen without giving it a task.
+pub fn standby_command(agent: AgentKind, cwd: &Path, model: Option<&str>) -> Vec<String> {
+    launch(agent, cwd, None, true, model)
+}
+
+fn launch(
+    agent: AgentKind,
+    cwd: &Path,
+    prompt: Option<&str>,
+    read_only: bool,
+    model: Option<&str>,
+) -> Vec<String> {
     if agent == AgentKind::Deepseek {
         return crate::provider::wrap(
-            command_on_model(AgentKind::Claude, cwd, prompt, read_only, model),
+            launch(AgentKind::Claude, cwd, prompt, read_only, model),
             model,
         );
     }
     let mut command = agent.adapter().start_command(None, model);
     if !read_only {
-        command.push(prompt.into());
+        command.extend(prompt.map(str::to_owned));
         return command;
     }
     let options: Vec<String> = match agent {
@@ -81,10 +106,10 @@ pub fn command_on_model(
         }
     };
     // Put options before the positional prompt, including variadic tool options.
-    let mut options = options;
-    options.push("--".into());
     command.extend(options);
-    command.push(prompt.into());
+    if let Some(prompt) = prompt {
+        command.extend(["--".into(), prompt.into()]);
+    }
     command
 }
 

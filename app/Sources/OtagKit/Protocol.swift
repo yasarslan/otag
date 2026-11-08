@@ -618,9 +618,9 @@ public enum Request: Sendable {
     case apiProvider(model: String?, refresh: Bool)
     case teamUndoPreview(pane: PaneID, step: UInt64)
     case teamUndoConfirm(team: UInt64, step: UInt64, expected: String)
-    case teamAdvance(pane: PaneID, revision: UInt64, back: Bool)
+    case teamAdvance(pane: PaneID, revision: UInt64, back: Bool, confirmation: UInt64? = nil)
     case teamMode(team: UInt64, automatic: Bool)
-    case startTeam(cwd: String, roles: [TeamRole])
+    case startTeam(cwd: String, roles: [TeamRole], task: String)
     case ping
     case version
     case listPanes
@@ -674,19 +674,21 @@ extension Request: Encodable {
             try container.encode(team, forKey: Key("team"))
             try container.encode(step, forKey: Key("step"))
             try container.encode(expected, forKey: Key("expected"))
-        case let .teamAdvance(pane, revision, back):
+        case let .teamAdvance(pane, revision, back, confirmation):
             try container.encode("team_advance", forKey: Key("type"))
             try container.encode(pane, forKey: Key("pane"))
             try container.encode(revision, forKey: Key("revision"))
             try container.encode(back, forKey: Key("back"))
+            try container.encodeIfPresent(confirmation, forKey: Key("confirmation"))
         case let .teamMode(team, automatic):
             try container.encode("team_mode", forKey: Key("type"))
             try container.encode(team, forKey: Key("team"))
             try container.encode(automatic, forKey: Key("automatic"))
-        case let .startTeam(cwd, roles):
+        case let .startTeam(cwd, roles, task):
             try container.encode("start_team", forKey: Key("type"))
             try container.encode(cwd, forKey: Key("cwd"))
             try container.encode(roles, forKey: Key("roles"))
+            try container.encode(task, forKey: Key("task"))
         case .ping:
             try container.encode("ping", forKey: Key("type"))
         case .version:
@@ -838,6 +840,7 @@ extension Event: Decodable {
 public enum Response: Sendable {
     case apiProvider(APIProviderInfo)
     case teamUndoPreview(TeamUndoPreview)
+    case teamAdvanceWarning(TeamAdvanceWarning)
     case pong
     case ok
     case closeConfirmationRequired
@@ -876,6 +879,8 @@ extension Response: Decodable {
             return
         }
         switch kind {
+        case "team_advance_warning":
+            self = .teamAdvanceWarning(try TeamAdvanceWarning(from: decoder))
         case "pong":
             self = .pong
         case "ok":

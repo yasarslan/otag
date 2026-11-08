@@ -42,11 +42,8 @@ public enum SessionName {
 
     /// A name for a session, from everything otag knows about it.
     ///
-    /// Three sources, in this order: what the user called it, what they
-    /// first asked it, and — when the daemon has neither — what is running
-    /// in it with a number, so that three Codex sessions in one folder are
-    /// "Codex 1", "Codex 2" and "Codex 3" rather than the folder's name
-    /// three times.
+    /// An explicit rename wins. Team roles use their configured names.
+    /// Other sessions use the first prompt or a numbered agent label.
     ///
     /// The folder is deliberately *not* a source. It is in the sidebar's
     /// section header and in the session's own header bar already, and using
@@ -58,6 +55,11 @@ public enum SessionName {
     ) -> String {
         if let chosen, !chosen.trimmingCharacters(in: .whitespaces).isEmpty {
             return chosen
+        }
+        if let team = pane.team {
+            if let role = team.roleName, !role.isEmpty { return role }
+            if !pane.title.isEmpty { return pane.title }
+            return fallback(for: pane, ordinal: ordinal)
         }
         if let prompt = pane.firstPrompt, let name = from(prompt: prompt) {
             return name

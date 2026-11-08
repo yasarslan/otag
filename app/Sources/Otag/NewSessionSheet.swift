@@ -117,25 +117,33 @@ struct NewSessionSheet: View {
                         Button(Strings.t("team.add")) { roles.append(TeamRole(name: "")) }
                     }
                 } else {
-                Section {
-                    TextField(
-                        Strings.t("new.model"),
-                        text: $model,
-                        prompt: Text(Strings.t("new.model.default"))
-                    )
+                    Section {
+                        TextField(
+                            Strings.t("new.model"),
+                            text: $model,
+                            prompt: Text(Strings.t("new.model.default"))
+                        )
                         .disabled(agent == nil)
+                    }
+                }
+                Section {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(Strings.t("new.prompt"))
+                        Text(Strings.t(team ? "team.task" : "new.prompt"))
                         TextEditor(text: $prompt)
                             .font(.body)
+                            .accessibilityLabel(Strings.t(team ? "team.task" : "new.prompt"))
                             .frame(minHeight: 70)
                             .overlay {
                                 RoundedRectangle(cornerRadius: 5)
                                     .strokeBorder(.separator)
                             }
-                            .disabled(agent == nil)
+                            .disabled(!team && agent == nil)
+                        if team && trimmedPrompt.isEmpty {
+                            Text(Strings.t("team.taskRequired"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
                 }
                 if !provider.configured {
                     Text(Strings.t("api.needKey")).font(.caption).foregroundStyle(.secondary)
@@ -159,6 +167,7 @@ struct NewSessionSheet: View {
                 Button(Strings.t(starting ? "new.starting" : "new.start")) { start() }
                     .keyboardShortcut(.defaultAction)
                     .disabled((folder == nil && (!browser || team)) || starting
+                        || (team && trimmedPrompt.isEmpty)
                         || (!team && agent == .deepseek && !provider.configured)
                         || (team && roles.contains { $0.agent == .deepseek } && !provider.configured))
             }
@@ -198,6 +207,8 @@ struct NewSessionSheet: View {
         }
     }
 
+    private var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     /// Tell the daemon to start it, and hand the pane back.
     private func start() {
         if browser && !team {
@@ -205,7 +216,7 @@ struct NewSessionSheet: View {
             dismiss()
             return
         }
-        guard let folder else { return }
+        guard let folder, !team || !trimmedPrompt.isEmpty else { return }
         starting = true
         problem = nil
         // Remembered on starting rather than on choosing, so a sheet that
@@ -217,7 +228,7 @@ struct NewSessionSheet: View {
             cwd: folder.path,
             agent: agent,
             model: model.trimmingCharacters(in: .whitespacesAndNewlines),
-            prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+            prompt: trimmedPrompt,
             worktree: worktree
         )
 
@@ -227,7 +238,9 @@ struct NewSessionSheet: View {
                 // store's connection is busy carrying events.
                 let connection = try DaemonConnection(socket: socket)
                 defer { connection.close() }
-                try connection.send(team ? .startTeam(cwd: folder.path, roles: roles) : .startSession(asked))
+                try connection.send(team
+                    ? .startTeam(cwd: folder.path, roles: roles, task: trimmedPrompt)
+                    : .startSession(asked))
 
                 for await response in connection.responses {
                     switch response {

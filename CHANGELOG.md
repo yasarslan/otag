@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Closing macOS sessions or ending teams stops their processes and keeps them closed across daemon restarts.
+- Team panes keep their screen and scrollback when steps change or a hidden window returns.
+- Team sessions display their configured role names in the macOS app.
+- Sending a team result marked QUESTION, FAILED, or PROBLEMS requires confirmation.
+- Team roles open their terminals at creation, and the macOS workspace shows every role in the selected team.
+- The team toolbar names the next role and offers a persistent Automatic checkbox that pauses progression for results needing attention, permission requests, and limit guard stops.
+- Claude team turns are detected from their transcripts when hooks or process-name matching are unavailable.
+- Restored team panes retain their saved screen and scrollback, including output from full-screen terminals.
+- Team controls appear on the right side of the toolbar before Arrange.
+- Starting a team requires a task, which is included in the first role’s instructions.
+- Team handoffs recognize native Claude completion records and the new done footer. Completed Claude and Codex steps can be sent manually, with confirmation for warnings or a missing result marker.
 
 ## [0.1.0] - 2026-11-07
 

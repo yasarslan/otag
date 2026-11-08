@@ -264,6 +264,9 @@ pub enum Request {
         cwd: PathBuf,
         /// Ordered role configuration.
         roles: Vec<crate::team::Role>,
+        /// The task the user wants the team to work on.
+        #[serde(default)]
+        task: String,
     },
     /// Advance or resume the selected role, with stale-action protection.
     TeamAdvance {
@@ -274,6 +277,9 @@ pub enum Request {
         /// Send a review with problems back to the coding step.
         #[serde(default)]
         back: bool,
+        /// Token for the exact result the user agreed to send.
+        #[serde(default)]
+        confirmation: Option<u64>,
     },
     /// Change a team's progression policy.
     TeamMode {
@@ -423,6 +429,19 @@ pub enum Response {
     TeamUndoPreview {
         /// Daemon-owned preview; no paths are accepted from the client.
         preview: crate::team::UndoPreview,
+    },
+    /// The current result needs confirmation before the workflow can move.
+    TeamAdvanceWarning {
+        /// Current role pane.
+        pane: PaneId,
+        /// Current workflow revision.
+        revision: u64,
+        /// Whether the user requested a return to coding.
+        back: bool,
+        /// Result reported by the role.
+        result: String,
+        /// Token bound to the exact result and requested transition.
+        confirmation: u64,
     },
     /// Answer to [`Request::Ping`].
     Pong,

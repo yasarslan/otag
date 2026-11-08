@@ -108,7 +108,7 @@ fn closed_sessions_and_teams_do_not_return_after_a_daemon_restart() {
     let start_team = || {
         let result = request(
             &home,
-            json!({"type":"start_team","cwd":project,"roles":[
+            json!({"type":"start_team","cwd":project,"task":"Test team closure.","roles":[
                 {"name":"Plan"},{"name":"Coder"},{"name":"Review"}
             ]}),
         );

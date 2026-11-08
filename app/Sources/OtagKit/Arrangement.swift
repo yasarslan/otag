@@ -64,6 +64,16 @@ public enum Arrangement {
         }
     }
 
+    /// Keep every team role on screen, adding rows for larger teams.
+    public static func team(_ panes: [PaneID]) -> PaneNode? {
+        guard panes.count > most else { return of(panes) }
+        let rows = stride(from: 0, to: panes.count, by: 2).map { index in
+            if index + 1 == panes.count { return PaneNode.leaf(panes[index]) }
+            return row(panes[index], panes[index + 1])
+        }
+        return .split(axis: .vertical, children: rows, fractions: rows.map { _ in 1 / Double(rows.count) })
+    }
+
     /// Two sessions side by side, each half the width.
     private static func row(_ left: PaneID, _ right: PaneID) -> PaneNode {
         .split(axis: .horizontal, children: [.leaf(left), .leaf(right)], fractions: [0.5, 0.5])

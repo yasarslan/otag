@@ -252,7 +252,7 @@ private struct SessionRow: View {
                         typed = pane.nickname
                         typing = true
                     }
-            } else if !pane.nickname.isEmpty {
+            } else if !pane.nickname.isEmpty && pane.nickname != name {
                 Text(pane.nickname)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)

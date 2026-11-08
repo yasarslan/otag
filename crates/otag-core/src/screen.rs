@@ -114,6 +114,25 @@ impl Screen {
         lines
     }
 
+    pub(crate) fn replay_history(&mut self, max: usize) -> crate::replay::History {
+        if !self.parser.screen().alternate_screen() {
+            return crate::replay::History {
+                lines: self.scrollback_lines(max),
+                normal_screen: None,
+            };
+        }
+
+        // vt100 exposes scrollback for the active buffer only. Read the
+        // normal buffer from a copy so the live alternate grid stays put.
+        let mut normal = Self::new(self.size);
+        *normal.parser.screen_mut() = self.parser.screen().clone();
+        normal.process(b"\x1b[?1049l");
+        crate::replay::History {
+            lines: normal.scrollback_lines(max),
+            normal_screen: Some(normal.state()),
+        }
+    }
+
     /// Every line the pane has shown that is worth keeping, oldest first, at
     /// most `max` of them.
     ///

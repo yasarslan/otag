@@ -72,36 +72,52 @@ impl Bus {
 /// What the daemon reports about every pane it is running.
 #[must_use]
 pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
+    let teams = session.teams();
     session
         .summaries()
         .into_iter()
-        .map(|pane| PaneInfo {
-            team: session.teams().iter().find_map(|t| t.membership(pane.id)),
-            id: pane.id,
-            size: pane.size,
-            workspace: pane.workspace,
-            cwd: pane.cwd,
-            title: pane.title,
-            agent: session
-                .teams()
-                .iter()
-                .find_map(|t| {
-                    t.members
-                        .iter()
-                        .find(|m| m.pane == pane.id)
-                        .map(|m| m.role.agent)
-                })
-                .unwrap_or(pane.agent),
-            status: pane.status,
-            session: pane.session,
-            nickname: pane.nickname,
-            first_prompt: pane.first_prompt,
-            tokens: pane.tokens,
-            context_window: pane.context_window,
-            // Both filled in by the daemon, which is what holds the plans.
-            night_shift: None,
-            guard: None,
-            exit: pane.exit,
+        .map(|pane| {
+            use otag_agents::PaneStatus;
+            let mut team = teams.iter().find_map(|team| team.membership(pane.id));
+            if let Some(role) = &mut team {
+                role.can_advance = role.current
+                    && (role.waiting || role.manual || pane.status == PaneStatus::Done);
+            }
+            let status = if team.as_ref().is_some_and(|role| {
+                role.needs_you
+                    || (role.current && pane.status == PaneStatus::Done && pane.team_result_warning)
+            }) {
+                PaneStatus::NeedsApproval
+            } else {
+                pane.status
+            };
+            PaneInfo {
+                team,
+                id: pane.id,
+                size: pane.size,
+                workspace: pane.workspace,
+                cwd: pane.cwd,
+                title: pane.title,
+                agent: teams
+                    .iter()
+                    .find_map(|t| {
+                        t.members
+                            .iter()
+                            .find(|m| m.pane == pane.id)
+                            .map(|m| m.role.agent)
+                    })
+                    .unwrap_or(pane.agent),
+                status,
+                session: pane.session,
+                nickname: pane.nickname,
+                first_prompt: pane.first_prompt,
+                tokens: pane.tokens,
+                context_window: pane.context_window,
+                // Both filled in by the daemon, which is what holds the plans.
+                night_shift: None,
+                guard: None,
+                exit: pane.exit,
+            }
         })
         .collect()
 }

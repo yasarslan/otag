@@ -209,7 +209,6 @@ private struct PaneCell: View {
             onGone: { message in gone = message },
             onFocus: { workbench.focus(pane: pane) }
         )
-        .id(store.pane(pane)?.team?.revision)
         .overlay {
             if let gone {
                 // The daemon is running and has no such pane: the session is

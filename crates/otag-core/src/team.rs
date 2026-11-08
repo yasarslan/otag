@@ -93,6 +93,9 @@ pub struct Team {
     pub id: u64,
     /// Shared project directory.
     pub project: PathBuf,
+    /// The initial task, retained for a later restart of the first role.
+    #[serde(default)]
+    pub task: String,
     /// Members in execution order.
     pub members: Vec<Member>,
     /// Role whose step may run.
@@ -101,6 +104,9 @@ pub struct Team {
     /// Automatic progression; false is Manual.
     #[serde(default)]
     pub automatic: bool,
+    /// Automatic progression is waiting for an explicit decision.
+    #[serde(default)]
+    pub needs_you: bool,
     /// Whether the current role has started.
     #[serde(default)]
     pub running: bool,
@@ -146,6 +152,9 @@ pub struct UndoPreview {
 /// Small per-pane presentation of daemon-owned team state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
+    /// User-configured role name.
+    #[serde(default)]
+    pub role_name: String,
     /// Display name of the shared project, including roles in other worktrees.
     pub project: String,
     /// Most recent checkpoint belonging to this role.
@@ -164,6 +173,15 @@ pub struct Membership {
     pub waiting: bool,
     /// Selected progression mode.
     pub automatic: bool,
+    /// The current step is paused for the user.
+    #[serde(default)]
+    pub needs_you: bool,
+    /// The role to receive the current step's result, if one remains.
+    #[serde(default)]
+    pub next_role: Option<String>,
+    /// The current role can start or send its result.
+    #[serde(default)]
+    pub can_advance: bool,
     /// Shell roles are always manual.
     pub manual: bool,
 }
@@ -188,6 +206,7 @@ impl Team {
             self.running = false;
             self.queued = false;
             self.write_root = None;
+            self.needs_you = false;
         } else if self.current > index {
             self.current -= 1;
         }
@@ -201,6 +220,7 @@ impl Team {
         let index = self.members.iter().position(|m| m.pane == pane)?;
         let role_index = self.members[index].role_index(index);
         Some(Membership {
+            role_name: self.members[index].role.name.clone(),
             project: self
                 .project
                 .file_name()
@@ -219,6 +239,12 @@ impl Team {
             current: index == self.current && !self.finished,
             waiting: self.finished || index != self.current || !self.running,
             automatic: self.automatic,
+            needs_you: index == self.current && self.needs_you,
+            next_role: self
+                .members
+                .get(index + 1)
+                .map(|next| next.role.name.clone()),
+            can_advance: false,
             manual: self.members[index].role.agent.is_none(),
         })
     }
@@ -276,6 +302,7 @@ mod tests {
             worktree: false,
         };
         let team = Team {
+            task: String::new(),
             steps: Vec::new(),
             write_root: None,
             queued: false,
@@ -293,6 +320,7 @@ mod tests {
             }],
             current: 0,
             automatic: false,
+            needs_you: false,
             running: true,
             finished: false,
         };

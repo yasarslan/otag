@@ -2,8 +2,8 @@
 //!
 //! Hooks report agent changes immediately when installed. As a fallback,
 //! scan processes every thirty seconds, briefly using a one-second interval
-//! while new sessions start. Structural notifications wake an empty daemon
-//! without a timer, and ordinary metadata changes do not restart the scan.
+//! while new sessions start or team roles are active. Structural
+//! notifications wake an empty daemon without a timer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -77,7 +77,19 @@ pub async fn keep_watching(session: Arc<Session>, shared: Arc<usage::Shared>) {
 
     loop {
         let panes = session.summaries().iter().map(|pane| pane.id).collect();
-        schedule.update(panes, Instant::now());
+        let now = Instant::now();
+        schedule.update(panes, now);
+        if let Some(next) = schedule.next
+            && session.teams().iter().any(|team| {
+                team.running
+                    && team
+                        .members
+                        .get(team.current)
+                        .is_some_and(|member| member.role.agent.is_some())
+            })
+        {
+            schedule.next = Some(next.min(now + STARTING_INTERVAL));
+        }
         if schedule.panes.is_empty() {
             read.clear();
         }
@@ -96,6 +108,8 @@ pub async fn keep_watching(session: Arc<Session>, shared: Arc<usage::Shared>) {
 /// What otag remembers about a pane between two passes.
 #[derive(Debug, Default)]
 struct Seen {
+    /// The transcript that supplied the last observed turn.
+    path: Option<std::path::PathBuf>,
     /// When its session file was last read, so an unchanged file is not
     /// parsed again on each scan.
     at: Option<SystemTime>,
@@ -120,28 +134,38 @@ async fn watch_once(
         return;
     }
 
-    let processes = match list_processes().await {
-        Some(processes) => processes,
-        // Without a process list there is nothing to conclude. What otag
-        // already knew about each pane stays as it was, because a missing
-        // `ps` is not evidence that the agents are gone.
-        None => return,
-    };
-    let tree = Tree::of(&processes);
+    let processes = list_processes().await;
+    let tree = processes.as_deref().map(Tree::of);
     let ids: Vec<PaneId> = panes.iter().map(|pane| pane.id).collect();
+    let teams = session.teams();
     let mut fresh = false;
 
     for pane in panes {
-        let found = pane.pid.and_then(|pid| tree.agent_in(pid));
-        if found != pane.agent {
+        let role = teams.iter().find_map(|team| team.membership(pane.id));
+        if role.as_ref().is_some_and(|role| role.waiting) {
+            // The welcome screen belongs to this pane, but a transcript
+            // discovered by directory could belong to the active role.
+            read.remove(&pane.id);
+            continue;
+        }
+        let found = pane.pid.and_then(|pid| tree.as_ref()?.agent_in(pid));
+        if role.is_none() && tree.is_some() && found != pane.agent {
             session.set_agent(pane.id, found).await;
         }
-        let Some(agent) = found else {
+        // The daemon launched a managed agent itself. A native install
+        // can appear in ps under a versioned executable name.
+        let agent = if role.is_some() {
+            pane.agent.or(found)
+        } else {
+            found
+        };
+        let Some(agent) = agent else {
             continue;
         };
 
-        if pane.trusts_the_screen
-            && let Some(status) = agent.adapter().detect_status(&pane.screen)
+        if let Some(status) = agent.adapter().detect_status(&pane.screen)
+            && (pane.trusts_the_screen
+                || (role.is_some() && status == otag_agents::PaneStatus::NeedsApproval))
         {
             session.set_status(pane.id, status, false).await;
         }
@@ -185,6 +209,12 @@ async fn read_session(
         return false;
     };
     let seen = read.entry(pane.id).or_default();
+    if seen.path.as_ref() != Some(&path) {
+        *seen = Seen {
+            path: Some(path.clone()),
+            ..Seen::default()
+        };
+    }
     if seen.at == Some(modified) {
         return false;
     }
@@ -217,7 +247,20 @@ async fn read_session(
     // itself. Only a change counts: a turn writes many lines, and claiming
     // the agent reported on every one of them would hide a question it put
     // on its screen in the middle of that turn.
-    if let Some(turn) = transcript.turn
+    if transcript.turn == Some(otag_agents::TurnState::Finished)
+        && session.is_team_role(pane.id)
+        && !transcript.interrupted
+    {
+        let result =
+            crate::team::warning_result(transcript.final_message.as_deref().unwrap_or_default());
+        tracing::debug!(pane = %pane.id, ?agent, result = result.unwrap_or("READY"), "team turn finished from transcript");
+        session
+            .set_team_result(pane.id, pane.started_at, result.is_some())
+            .await;
+        if let Some(seen) = read.get_mut(&pane.id) {
+            seen.turn = transcript.turn;
+        }
+    } else if let Some(turn) = transcript.turn
         && was != Some(turn)
     {
         if let Some(seen) = read.get_mut(&pane.id) {

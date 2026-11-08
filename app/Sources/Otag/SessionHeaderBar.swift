@@ -75,20 +75,13 @@ struct SessionHeaderBar: View {
                     Image(systemName: "exclamationmark.shield").foregroundStyle(.orange)
                         .help(Strings.t("team.violation"))
                 }
-                if team.current {
-                    if team.waiting {
-                        Button(Strings.t("team.startStep")) { advance(team) }
-                    } else if team.manual || actions.pane.status == .idle || actions.pane.status == .done {
-                        Button(Strings.t("team.next")) { advance(team) }.controlSize(.mini)
-                        if team.index == 2, actions.store.panes.contains(where: {
-                            $0.team?.id == team.id && $0.team?.index == 1
-                        }) {
-                            Button { advance(team, back: true) } label: {
-                                Image(systemName: "arrow.uturn.backward")
-                            }.help(Strings.t("team.back"))
-                        }
-                    }
-                } else {
+                if team.current && !team.waiting && team.canAdvance && team.index == 2,
+                   actions.store.panes.contains(where: { $0.team?.id == team.id && $0.team?.index == 1 }) {
+                    Button { advance(team, back: true) } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }.help(Strings.t("team.back"))
+                }
+                if team.waiting {
                     Text(Strings.t("team.waiting")).font(.caption).foregroundStyle(.secondary)
                 }
                 if team.undoStep != nil {

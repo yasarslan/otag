@@ -318,6 +318,17 @@ public final class Workbench {
         focus(pane: was.flatMap { tree.panes.contains($0) ? $0 : nil } ?? tree.panes[0])
     }
 
+    /// Show all members of the selected team without toggling Arrange.
+    public func showTeam(_ members: [PaneID], focused pane: PaneID) {
+        guard members.contains(pane) else { return }
+        if Set(panes) != Set(members), let team = Arrangement.team(members) {
+            beforeArranging = nil
+            root = team
+            leastRecentlyFocused = team.panes.reversed()
+        }
+        focus(pane: pane)
+    }
+
     /// Show `pane` on its own, replacing whatever was showing.
     ///
     /// What selecting a session in the sidebar means. A session already

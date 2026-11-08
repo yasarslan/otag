@@ -89,14 +89,32 @@ enum PaneCommand {
     /// The pane is now this size.
     Resize(PaneSize),
     /// Report the lines the pane has shown, for a snapshot.
-    History(usize, tokio::sync::oneshot::Sender<Vec<String>>),
+    History(usize, bool, tokio::sync::oneshot::Sender<Vec<String>>),
     /// Report what is on the screen as terminal output, together with a
     /// receiver of everything the program writes from that moment on.
     ///
     /// Both come from the pane's own task so that they fit together: a
     /// client that replayed the screen and then applied the receiver's
     /// chunks sees neither a gap nor the same output twice.
-    Attach(tokio::sync::oneshot::Sender<RawAttach>),
+    Attach(Replay, tokio::sync::oneshot::Sender<RawAttach>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Replay {
+    Screen,
+    Full,
+    Retained,
+}
+
+impl Replay {
+    fn bytes(self, screen: &ScreenState, history: &crate::replay::History) -> Vec<u8> {
+        match self {
+            Self::Screen => crate::replay::snapshot(screen),
+            Self::Full | Self::Retained => {
+                crate::replay::with_history(screen, history, matches!(self, Self::Retained))
+            }
+        }
+    }
 }
 
 /// What a client that emulates the terminal itself needs to start.
@@ -118,6 +136,8 @@ pub struct PaneState {
     pub screen: ScreenState,
     /// How the program ended, once it has.
     pub exit: Option<PaneExit>,
+    // Only captured on exit. While running, the emulator owns the history.
+    history: crate::replay::History,
 }
 
 /// A handle on one running pane.
@@ -129,6 +149,10 @@ pub struct PaneHandle {
 }
 
 impl PaneHandle {
+    pub(crate) fn same_process(&self, other: &Self) -> bool {
+        self.commands.same_channel(&other.commands)
+    }
+
     /// Which pane this is.
     #[must_use]
     pub const fn id(&self) -> PaneId {
@@ -165,13 +189,24 @@ impl PaneHandle {
     /// screen instead: that screen is everything the program ever printed,
     /// including its last line, and there is nothing more to come.
     pub async fn attach_raw(&self) -> Result<RawAttach> {
+        self.attach(Replay::Full).await
+    }
+
+    pub(crate) async fn replay_screen(&self) -> Result<RawAttach> {
+        self.attach(Replay::Screen).await
+    }
+
+    async fn attach(&self, replay: Replay) -> Result<RawAttach> {
         let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
-        if self.send(PaneCommand::Attach(attach_tx)).await.is_ok()
+        if self
+            .send(PaneCommand::Attach(replay, attach_tx))
+            .await
+            .is_ok()
             && let Ok(attach) = attach_rx.await
         {
             return Ok(attach);
         }
-        self.last_attach()
+        self.last_attach(replay)
     }
 
     /// What a client needs in order to show a pane that is already over.
@@ -180,7 +215,7 @@ impl PaneHandle {
     /// any more; the last state the task published is the whole truth, and
     /// an output channel with no sender tells the stream straight away that
     /// there is nothing to follow.
-    fn last_attach(&self) -> Result<RawAttach> {
+    fn last_attach(&self, replay: Replay) -> Result<RawAttach> {
         let state = self.snapshot();
         if state.exit.is_none() {
             // The task is unreachable without having reported an end, which
@@ -191,7 +226,7 @@ impl PaneHandle {
         let (sender, output) = broadcast::channel(1);
         drop(sender);
         Ok(RawAttach {
-            snapshot: crate::replay::snapshot(&state.screen),
+            snapshot: replay.bytes(&state.screen, &state.history),
             size: state.screen.size(),
             output,
         })
@@ -211,11 +246,24 @@ impl PaneHandle {
     ///
     /// Asked of the pane's own task, because that is what owns the emulator.
     pub async fn history(&self, max: usize) -> Result<Vec<String>> {
+        self.history_for_snapshot(max, false).await
+    }
+
+    async fn history_for_snapshot(&self, max: usize, team: bool) -> Result<Vec<String>> {
         let (lines_tx, lines_rx) = tokio::sync::oneshot::channel();
-        self.send(PaneCommand::History(max, lines_tx)).await?;
-        lines_rx
+        if self
+            .send(PaneCommand::History(max, team, lines_tx))
             .await
-            .map_err(|_| Error::PaneGone { id: Some(self.id) })
+            .is_ok()
+            && let Ok(lines) = lines_rx.await
+        {
+            return Ok(lines);
+        }
+        let state = self.snapshot();
+        if team && state.exit.is_some() {
+            return Ok(state.history.clone().with_visible(&state.screen, max));
+        }
+        Err(Error::PaneGone { id: Some(self.id) })
     }
 
     async fn send(&self, command: PaneCommand) -> Result<()> {
@@ -229,6 +277,8 @@ impl PaneHandle {
 /// What `otag ls` reports about a pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneSummary {
+    /// Whether the completed team result requires attention.
+    pub team_result_warning: bool,
     /// Which pane this is.
     pub id: PaneId,
     /// Its current size.
@@ -296,11 +346,16 @@ struct Starting<'a> {
     nickname: &'a str,
     /// What the pane showed before, when it is being restored.
     restored: &'a [String],
+    /// Exact display to carry over when replacing a role's process.
+    retained: &'a [u8],
+    /// Size claimed by a raw client.
+    size_override: Option<PaneSize>,
 }
 
 /// One running pane, with what the interface says about it.
 #[derive(Debug)]
 struct Pane {
+    team_result_warning: bool,
     handle: PaneHandle,
     title: String,
     workspace: WorkspaceId,
@@ -580,6 +635,27 @@ impl Session {
         }
         self.commit(true).await;
     }
+
+    /// Hold automatic progression after a permission request or guard stop.
+    pub async fn note_team_attention(self: &Arc<Self>, pane: PaneId) {
+        if !self.is_team_role(pane) {
+            return;
+        }
+        let _operation = self.team_operation().await;
+        let mut teams = self.teams();
+        if let Some(team) = teams.iter_mut().find(|team| {
+            team.automatic
+                && team.running
+                && !team.needs_you
+                && team
+                    .members
+                    .get(team.current)
+                    .is_some_and(|member| member.pane == pane)
+        }) {
+            team.needs_you = true;
+            self.set_teams(teams).await;
+        }
+    }
     /// Remove unpublished placeholder panes after an incomplete team creation.
     pub async fn discard_new_panes(self: &Arc<Self>, ids: &[PaneId]) {
         for id in ids {
@@ -673,10 +749,7 @@ impl Session {
         title: &str,
     ) -> Result<()> {
         let previous = self.pane(id).ok_or(Error::PaneGone { id: Some(id) })?;
-        let history = previous
-            .history(snapshot::HISTORY_LINES)
-            .await
-            .unwrap_or_default();
+        let retained = previous.attach(Replay::Retained).await?.snapshot;
         let pid = self.lock()?.panes.get(&id).and_then(|p| p.pid);
         if let Some(pid) = pid {
             tokio::task::spawn_blocking(move || crate::process::terminate(&[pid as i32]))
@@ -702,7 +775,9 @@ impl Session {
                     command,
                     title,
                     nickname: &nickname,
-                    restored: &history,
+                    restored: &[],
+                    retained: &retained,
+                    size_override: from.size_override,
                 },
             )?;
             state.panes.insert(id, pane)
@@ -1016,15 +1091,30 @@ impl Session {
     /// Write bytes to the focused pane's program.
     pub async fn input(&self, bytes: Vec<u8>) -> Result<()> {
         let pane = self.focused_pane().ok_or(Error::NoPanes)?;
-        pane.input(bytes).await
+        self.input_to(pane.id(), bytes).await
     }
 
     /// Write bytes to one pane's program.
     pub async fn input_to(&self, id: PaneId, bytes: Vec<u8>) -> Result<()> {
-        self.pane(id)
-            .ok_or(Error::PaneGone { id: Some(id) })?
-            .input(bytes)
-            .await
+        let handle = {
+            let state = self.lock()?;
+            if state.teams.iter().any(|team| {
+                team.members.iter().any(|member| member.pane == id)
+                    && (!team.running
+                        || !team
+                            .members
+                            .get(team.current)
+                            .is_some_and(|member| member.pane == id))
+            }) {
+                return Ok(());
+            }
+            state
+                .panes
+                .get(&id)
+                .map(|pane| pane.handle.clone())
+                .ok_or(Error::PaneGone { id: Some(id) })?
+        };
+        handle.input(bytes).await
     }
 
     /// Give one pane the size the client drawing it has.
@@ -1050,6 +1140,16 @@ impl Session {
     pub fn pane(&self, id: PaneId) -> Option<PaneHandle> {
         let state = self.state.lock().ok()?;
         state.panes.get(&id).map(|pane| pane.handle.clone())
+    }
+
+    /// Team roles remain present when their process exits.
+    pub fn is_team_role(&self, id: PaneId) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            state
+                .teams
+                .iter()
+                .any(|team| team.members.iter().any(|member| member.pane == id))
+        })
     }
 
     /// A pane whose program has ended, if it is still remembered.
@@ -1182,6 +1282,7 @@ impl Session {
             .map(|pane| {
                 let snapshot = pane.handle.snapshot();
                 PaneSummary {
+                    team_result_warning: pane.team_result_warning,
                     id: pane.handle.id(),
                     size: snapshot.screen.size(),
                     agent: pane.agent,
@@ -1295,7 +1396,30 @@ impl Session {
             changed
         });
         self.commit(changed).await;
+        if status == PaneStatus::NeedsApproval {
+            self.note_team_attention(pane).await;
+        }
         changed
+    }
+
+    /// Publish a completed team result without losing its advance eligibility.
+    pub async fn set_team_result(
+        self: &Arc<Self>,
+        pane: PaneId,
+        started_at: SystemTime,
+        warning: bool,
+    ) {
+        let changed = self.change(pane, |pane| {
+            if pane.started_at != started_at {
+                return false;
+            }
+            let changed = pane.status != PaneStatus::Done || pane.team_result_warning != warning;
+            pane.status = PaneStatus::Done;
+            pane.last_hook = Some(Instant::now());
+            pane.team_result_warning = warning;
+            changed
+        });
+        self.commit(changed).await;
     }
 
     /// Record which of an agent's sessions a pane is running.
@@ -1402,7 +1526,7 @@ impl Session {
     /// the transcript reader offer one on every pass without cost.
     pub async fn set_first_prompt(self: &Arc<Self>, pane: PaneId, prompt: &str) {
         let wanted = prompt.trim();
-        if wanted.is_empty() {
+        if wanted.is_empty() || self.is_team_role(pane) {
             return;
         }
         let wanted: String = wanted.chars().take(Self::FIRST_PROMPT_LIMIT).collect();
@@ -1539,14 +1663,21 @@ impl Session {
             Ok(state) => state
                 .panes
                 .values()
-                .map(|pane| pane.handle.clone())
+                .map(|pane| {
+                    let id = pane.handle.id();
+                    let team = state
+                        .teams
+                        .iter()
+                        .any(|team| team.members.iter().any(|member| member.pane == id));
+                    (pane.handle.clone(), team)
+                })
                 .collect::<Vec<_>>(),
             Err(_) => return Vec::new(),
         };
 
         let mut histories = Vec::with_capacity(panes.len());
-        for handle in panes {
-            match handle.history(max).await {
+        for (handle, team) in panes {
+            match handle.history_for_snapshot(max, team).await {
                 Ok(lines) => histories.push((handle.id(), lines)),
                 Err(error) => {
                     tracing::debug!(%error, pane = %handle.id(), "cannot read what a pane has shown");
@@ -1751,6 +1882,8 @@ impl Session {
                 // one in, and the user gives the rest.
                 nickname: "",
                 restored: &[],
+                retained: &[],
+                size_override: None,
             },
         )?;
         state.next_pane = id.next();
@@ -1788,11 +1921,20 @@ impl Session {
         // A pane is started at the size of the whole content area and told
         // its real size as soon as the layout is known, which is one resize
         // before the program has drawn anything.
-        let size = state.chrome().content.inset(BORDER).size();
-        let (handle, pid) = spawn_pane(starting.id, &spec, size, starting.restored)?;
+        let size = starting
+            .size_override
+            .unwrap_or_else(|| state.chrome().content.inset(BORDER).size());
+        let (handle, pid) = spawn_pane(
+            starting.id,
+            &spec,
+            size,
+            starting.restored,
+            starting.retained,
+        )?;
         self.reap(handle.clone());
 
         Ok(Pane {
+            team_result_warning: false,
             handle,
             title: starting.title.to_owned(),
             workspace: starting.workspace,
@@ -1809,7 +1951,7 @@ impl Session {
             tokens: Tokens::default(),
             last_hook: None,
             context_window: None,
-            size_override: None,
+            size_override: starting.size_override,
         })
     }
 
@@ -1888,6 +2030,7 @@ fn spawn_pane(
     spec: &PaneSpec,
     size: PaneSize,
     restored: &[String],
+    retained: &[u8],
 ) -> Result<(PaneHandle, Option<u32>)> {
     let (pty, events) = Pty::spawn(id, spec, size)?;
     let pid = pty.pid();
@@ -1895,10 +2038,12 @@ fn spawn_pane(
     if !restored.is_empty() {
         screen.process(&restored_bytes(restored));
     }
+    screen.process(retained);
 
     let (view_tx, view_rx) = watch::channel(Arc::new(PaneState {
         screen: screen.state(),
         exit: None,
+        history: crate::replay::History::default(),
     }));
     let (commands_tx, commands_rx) = mpsc::channel(COMMAND_QUEUE);
     // The pane's own task owns the only sender: once it ends, everything
@@ -1965,13 +2110,13 @@ async fn run_pane(
                     // everything the program printed, including whatever it
                     // printed last. Nothing is left for the frame ticker,
                     // which stops with this task.
-                    publish(&view, &screen, Some(exit));
+                    publish(&view, &mut screen, Some(exit));
                     return;
                 }
                 // The reading thread is gone without reporting an exit, which
                 // means the pane cannot produce anything more.
                 None => {
-                    publish(&view, &screen, Some(PaneExit { code: None, signal: None }));
+                    publish(&view, &mut screen, Some(PaneExit { code: None, signal: None }));
                     return;
                 }
             },
@@ -1991,21 +2136,31 @@ async fn run_pane(
                         dirty = true;
                     }
                 }
-                Some(PaneCommand::Attach(answer)) => {
+                Some(PaneCommand::Attach(replay, answer)) => {
                     // Built here, in the task that owns both the screen and
                     // the output, so that the snapshot and the subscription
                     // describe the same moment.
+                    let history = if matches!(replay, Replay::Screen) {
+                        crate::replay::History::default()
+                    } else {
+                        screen.replay_history(snapshot::HISTORY_LINES)
+                    };
                     let _ = answer.send(RawAttach {
-                        snapshot: crate::replay::snapshot(&screen.state()),
-                        size: screen.state().size(),
+                        snapshot: replay.bytes(&screen.state(), &history),
+                        size: screen.size(),
                         output: output.subscribe(),
                     });
                 }
-                Some(PaneCommand::History(max, answer)) => {
+                Some(PaneCommand::History(max, team, answer)) => {
                     // The caller may have given up waiting, which is not a
                     // problem: a snapshot without this pane's lines is
                     // better than a pane that stopped reading its program.
-                    let _ = answer.send(screen.history(max));
+                    let lines = if team {
+                        screen.replay_history(max).with_visible(&screen.state(), max)
+                    } else {
+                        screen.history(max)
+                    };
+                    let _ = answer.send(lines);
                 }
                 // Nobody can reach this pane any more. The program is killed
                 // when the pseudo-terminal is dropped.
@@ -2014,7 +2169,7 @@ async fn run_pane(
 
             _ = ticker.tick(), if dirty => {
                 dirty = false;
-                publish(&view, &screen, None);
+                publish(&view, &mut screen, None);
             }
         }
     }
@@ -2066,12 +2221,34 @@ fn restore_into(
                 let mut command = record
                     .map(|record| record.command.clone())
                     .unwrap_or_default();
-                if state
-                    .teams
-                    .iter()
-                    .any(|t| t.members.iter().any(|m| m.pane == pane))
-                {
-                    command = vec!["/bin/sleep".into(), "2147483647".into()];
+                if let Some((team, index, member)) = state.teams.iter().find_map(|team| {
+                    team.members
+                        .iter()
+                        .enumerate()
+                        .find(|(_, member)| member.pane == pane)
+                        .map(|(index, member)| (team, index, member))
+                }) {
+                    command = if team.finished
+                        || index < team.current
+                        || team
+                            .steps
+                            .iter()
+                            .any(|step| step.role == member.role_index(index))
+                    {
+                        vec!["/bin/sleep".into(), "2147483647".into()]
+                    } else {
+                        member
+                            .role
+                            .agent
+                            .map(|agent| {
+                                otag_agents::team::standby_command(
+                                    agent,
+                                    &member.cwd,
+                                    state.agent_models.get(&agent).map(String::as_str),
+                                )
+                            })
+                            .unwrap_or_default()
+                    };
                 }
                 let title = record
                     .map(|record| record.title.as_str())
@@ -2089,6 +2266,8 @@ fn restore_into(
                         title,
                         nickname,
                         restored: &history(pane),
+                        retained: &[],
+                        size_override: None,
                     },
                 ) {
                     Ok(restored) => started.push((pane, restored)),
@@ -2172,10 +2351,16 @@ fn restored_bytes(lines: &[String]) -> Vec<u8> {
 }
 
 /// Publish the current screen, but only when it actually changed.
-fn publish(view: &watch::Sender<Arc<PaneState>>, screen: &Screen, exit: Option<PaneExit>) {
+fn publish(view: &watch::Sender<Arc<PaneState>>, screen: &mut Screen, exit: Option<PaneExit>) {
+    let history = if exit.is_some() {
+        screen.replay_history(snapshot::HISTORY_LINES)
+    } else {
+        crate::replay::History::default()
+    };
     let next = PaneState {
         screen: screen.state(),
         exit,
+        history,
     };
     if **view.borrow() == next {
         return;

@@ -11,10 +11,8 @@
 //! pane through [`crate::proto::Request::PaneResize`]; nothing about the
 //! pane's program changes because of who is watching it.
 //!
-//! Two things can interrupt the stream, and both are answered with a new
-//! replay rather than with silence: a client that falls far enough behind
-//! that the daemon has dropped output it never received, and a pane that
-//! changed size, whose old bytes no longer describe the screen.
+//! A new replay follows dropped output, a resize, or a team role switching
+//! to a replacement process. The pane's connection survives those changes.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -138,9 +136,7 @@ impl Attachments {
 
 /// Start sending `outbox`'s client the bytes of one pane.
 ///
-/// Returns the first message, which carries the screen as it is now; the
-/// output after it is pushed by a task that ends when the pane ends or the
-/// client goes away.
+/// Sends the replay before starting the task that pushes further output.
 ///
 /// `size` is how large the client is drawing the pane. Giving one hands that
 /// pane's size to the client: see [`Session::resize_pane_to`].
@@ -150,13 +146,10 @@ pub async fn attach_pane(
     outbox: &Outbox,
     pane: PaneId,
     size: Option<PaneSize>,
-) -> Result<Response> {
-    // The handle is taken before anything else, and everything after it
-    // works through that handle rather than looking the pane up again. A
-    // program can print its last line and end at any moment, including
-    // between these two statements, and a client that asked to watch it is
-    // still owed that line and the news that the program ended.
-    let handle = match session.pane(pane) {
+) -> Result<()> {
+    // Keep the handle if the program exits during attach, so the client
+    // can still see the last screen it left behind.
+    let mut handle = match session.pane(pane) {
         Some(handle) => handle,
         // Already over by the time the attach arrived, which is the normal
         // case for a program that prints one line and exits.
@@ -169,25 +162,38 @@ pub async fn attach_pane(
     // has nothing to resize, and the client is only being shown what it
     // left behind.
     if let Some(size) = size.filter(|_| !handle.is_finished()) {
-        session.resize_pane_to(pane, size).await?;
+        let resized = session.resize_pane_to(pane, size).await;
+        if let Some(current) = session
+            .pane(pane)
+            .filter(|current| !current.same_process(&handle))
+        {
+            handle = current;
+        } else if !handle.is_finished() {
+            resized?;
+        }
     }
 
     let attach = handle.attach_raw().await?;
-    let first = screen_response(pane, &attach);
+    attachments.remove(outbox.id(), pane);
+    if !outbox.send(screen_response(pane, &attach)).await {
+        return Ok(());
+    }
 
     let key = (outbox.id(), pane);
     let generation = attachments.generation();
-    let task = tokio::spawn(stream(
-        handle,
-        outbox.clone(),
-        attach,
-        attachments.clone(),
-        key,
-        generation,
-    ));
+    let (start, registered) = tokio::sync::oneshot::channel();
+    let session = Arc::clone(session);
+    let outbox = outbox.clone();
+    let streams = attachments.clone();
+    let task = tokio::spawn(async move {
+        if registered.await.is_ok() {
+            stream(session, handle, outbox, attach, streams, key, generation).await;
+        }
+    });
     attachments.insert(key, generation, task);
+    let _ = start.send(());
 
-    Ok(first)
+    Ok(())
 }
 
 /// The message that puts a pane's whole screen on a client's terminal.
@@ -201,7 +207,8 @@ fn screen_response(pane: PaneId, attach: &RawAttach) -> Response {
 
 /// Push one pane's output to one client until there is nothing more to send.
 async fn stream(
-    handle: PaneHandle,
+    session: Arc<Session>,
+    mut handle: PaneHandle,
     outbox: Outbox,
     attach: RawAttach,
     attachments: Attachments,
@@ -209,19 +216,69 @@ async fn stream(
     generation: u64,
 ) {
     let pane = handle.id();
+    let mut changes = session.changes();
+    let mut attachment = Some(attach);
+    loop {
+        if let Some(attach) = attachment.take()
+            && !stream_process(&handle, &outbox, attach).await
+        {
+            break;
+        }
+        // A role's PTY can end while the role remains on screen. Leave the
+        // last display in place and wait for the same pane's next process.
+        let next = loop {
+            if let Some(next) = session
+                .pane(pane)
+                .filter(|next| !next.same_process(&handle))
+            {
+                break Some(next);
+            }
+            if !session.is_team_role(pane) {
+                outbox
+                    .send(Response::PaneEnded {
+                        pane,
+                        exit: handle.snapshot().exit.clone(),
+                    })
+                    .await;
+                break None;
+            }
+            tokio::select! {
+                () = outbox.closed() => break None,
+                changed = changes.changed() => if changed.is_err() { break None; },
+            }
+        };
+        let Some(next) = next else { break };
+        handle = next;
+        let Ok(replay) = handle.attach_raw().await else {
+            // This process was itself replaced while the replay was being
+            // built. Keep following the stable pane ID.
+            continue;
+        };
+        if !outbox.send(screen_response(pane, &replay)).await {
+            break;
+        }
+        attachment = Some(replay);
+    }
+    attachments.forget(key, generation);
+}
+
+/// Forward one PTY. True means it ended and the client is still listening.
+async fn stream_process(handle: &PaneHandle, outbox: &Outbox, attach: RawAttach) -> bool {
+    let pane = handle.id();
     let mut output = attach.output;
     let mut size = attach.size;
     let mut pane_state = handle.watch();
+    let mut watching = true;
 
     loop {
         tokio::select! {
             // The client went away; nothing left to send it.
-            () = outbox.closed() => break,
+            () = outbox.closed() => return false,
 
             received = output.recv() => match received {
                 Ok(bytes) => {
                     if !outbox.send(Response::Output { pane, bytes: Bytes(bytes.to_vec()) }).await {
-                        break;
+                        return false;
                     }
                 }
                 Err(RecvError::Lagged(missed)) => {
@@ -229,12 +286,12 @@ async fn stream(
                     // what it has on screen is wrong. A fresh replay is the
                     // only honest answer.
                     tracing::debug!(%pane, missed, "a raw client fell behind; replaying its screen");
-                    match restart(&handle, &outbox).await {
+                    match restart(handle, outbox, true).await {
                         Some(attach) => {
                             output = attach.output;
                             size = attach.size;
                         }
-                        None => break,
+                        None => return handle.is_finished(),
                     }
                 }
                 // Every sender is gone, which happens when the pane's task
@@ -242,15 +299,14 @@ async fn stream(
                 // that was buffered, so the program's last output has been
                 // sent and the end can be reported.
                 Err(RecvError::Closed) => {
-                    let exit = handle.snapshot().exit.clone();
-                    outbox.send(Response::PaneEnded { pane, exit }).await;
-                    break;
+                    return true;
                 }
             },
 
-            changed = pane_state.changed() => {
+            changed = pane_state.changed(), if watching => {
                 if changed.is_err() {
-                    break;
+                    watching = false;
+                    continue;
                 }
 
                 let state = handle.snapshot();
@@ -259,34 +315,36 @@ async fn stream(
                     // Its old bytes assumed the old size, so the client is
                     // sent the screen again rather than a stream it would
                     // misread.
-                    match restart(&handle, &outbox).await {
+                    match restart(handle, outbox, false).await {
                         Some(attach) => {
                             output = attach.output;
                             size = attach.size;
                         }
-                        None => break,
+                        None => return handle.is_finished(),
                     }
                 }
 
-                if let Some(exit) = state.exit.clone() {
+                if state.exit.is_some() {
                     // Whatever the program printed last has to reach the
                     // client before the news that it ended.
-                    drain(&outbox, pane, &mut output).await;
-                    outbox.send(Response::PaneEnded { pane, exit: Some(exit) }).await;
-                    break;
+                    drain(outbox, pane, &mut output).await;
+                    return true;
                 }
             }
         }
     }
-
-    attachments.forget(key, generation);
 }
 
 /// Send the client the pane's screen again and follow it from there.
 ///
 /// `None` once the pane or the client is gone, which ends the stream.
-async fn restart(handle: &PaneHandle, outbox: &Outbox) -> Option<RawAttach> {
-    let attach = handle.attach_raw().await.ok()?;
+async fn restart(handle: &PaneHandle, outbox: &Outbox, history: bool) -> Option<RawAttach> {
+    let attach = if history {
+        handle.attach_raw().await
+    } else {
+        handle.replay_screen().await
+    }
+    .ok()?;
     if !outbox.send(screen_response(handle.id(), &attach)).await {
         return None;
     }

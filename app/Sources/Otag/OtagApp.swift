@@ -295,6 +295,26 @@ struct MainView: View {
         } message: { target in
             Text(Strings.t(target.confirmationKey))
         }
+        .alert(
+            Strings.t("team.advanceWarning.title"),
+            isPresented: Binding(
+                get: { store.teamAdvanceWarning != nil },
+                set: { if !$0 { store.teamAdvanceWarning = nil } }
+            ),
+            presenting: store.teamAdvanceWarning
+        ) { warning in
+            Button(Strings.t("team.advanceWarning.continue")) {
+                store.send(.teamAdvance(
+                    pane: warning.pane, revision: warning.revision,
+                    back: warning.back, confirmation: warning.confirmation
+                ))
+            }
+            Button(Strings.t("sheet.cancel"), role: .cancel) {}
+        } message: { warning in
+            Text(warning.result == "MISSING"
+                ? Strings.t("team.advanceWarning.missing")
+                : Strings.t("team.advanceWarning.detail", warning.result))
+        }
         .sheet(item: $pending) { request in
             NewSessionSheet(
                 socket: store.socket,
@@ -308,7 +328,7 @@ struct MainView: View {
             , started: { pane in
                 place(pane: pane, axis: request.axis)
             }, teamStarted: { panes in
-                workbench.arrange(panes, keeping: panes.first)
+                if let first = panes.first { workbench.showTeam(panes, focused: first) }
             })
         }
         .sheet(item: $prompt) { asking in
@@ -365,6 +385,7 @@ struct MainView: View {
             // The daemon's list is what the session numbering counts along,
             // and what a rename of a session that is over is pruned against.
             names.took(panes)
+            showFocusedTeam()
             workbench.save()
         }
         .onChange(of: store.hasLoadedPanes) { _, loaded in
@@ -380,8 +401,14 @@ struct MainView: View {
             }
             workbench.save()
         }
-        .onChange(of: workbench.root) { _, _ in workbench.save() }
-        .onChange(of: workbench.focus) { _, _ in workbench.save() }
+        .onChange(of: workbench.root) { _, _ in
+            showFocusedTeam()
+            workbench.save()
+        }
+        .onChange(of: workbench.focus) { _, _ in
+            showFocusedTeam()
+            workbench.save()
+        }
     }
 
     /// Toolbar actions, one job each, in one style.
@@ -401,14 +428,18 @@ struct MainView: View {
             .labelStyle(.iconOnly)
             .keyboardShortcut("s", modifiers: [.command, .control])
         }
-        ToolbarItem(placement: .navigation) {
+        ToolbarItem(placement: .primaryAction) {
             if let team = focused?.team {
-                Button {
-                    store.send(.teamMode(team: team.id, automatic: !team.automatic))
-                } label: {
-                    Label(Strings.t(team.automatic ? "team.auto" : "team.manual"), systemImage: team.automatic ? "play.circle" : "hand.tap")
+                HStack(spacing: 12) {
+                    teamAdvanceButton(team.id)
+                    Toggle(Strings.t("team.auto"), isOn: Binding(
+                        get: { team.automatic },
+                        set: { store.send(.teamMode(team: team.id, automatic: $0)) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .controlSize(.regular)
+                    .fixedSize()
                 }
-                .help(Strings.t("team.mode.help"))
             }
         }
         ToolbarItem(placement: .primaryAction) {
@@ -417,7 +448,7 @@ struct MainView: View {
                 title: Strings.t("toolbar.arrange.title"),
                 label: Strings.t(workbench.isArranged
                     ? "toolbar.arrange.undo" : "toolbar.arrange"),
-                enabled: workbench.isArranged || arrangementIDs.count > 1,
+                enabled: focused?.team == nil && (workbench.isArranged || arrangementIDs.count > 1),
                 action: arrange
             )
         }
@@ -503,7 +534,36 @@ struct MainView: View {
     }
 
     private func arrange() {
+        guard focused?.team == nil else { return }
         workbench.arrange(arrangementIDs, keeping: workbench.focus)
+    }
+
+    private func showFocusedTeam() {
+        guard let pane = focused, let team = pane.team else { return }
+        let members = TeamMembership.members(of: team.id, in: store.panes).map(\.id)
+        workbench.showTeam(members, focused: pane.id)
+    }
+
+    private func teamAdvanceButton(_ team: UInt64) -> some View {
+        let current = TeamMembership.members(of: team, in: store.panes)
+            .first { $0.team?.current == true }
+        let role = current?.team
+        let title = if role?.waiting == true {
+            Strings.t("team.startStep")
+        } else if let next = role?.nextRole {
+            Strings.t("team.sendTo", next)
+        } else if role != nil {
+            Strings.t("team.finish")
+        } else {
+            Strings.t("team.finished")
+        }
+        return Button(title) {
+            guard let current, let role else { return }
+            store.send(.teamAdvance(pane: current.id, revision: role.revision, back: false))
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.secondary)
+        .disabled(role?.canAdvance != true)
     }
 
     private var anyGuarded: Bool {

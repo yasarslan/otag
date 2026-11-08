@@ -24,11 +24,71 @@ use crate::frame::{
 /// end because that is the state a terminal starts in.
 #[must_use]
 pub fn snapshot(screen: &ScreenState) -> Vec<u8> {
+    draw(screen, screen.modes()).into_bytes()
+}
+
+/// The normal buffer behind a live alternate screen, and its scrollback.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct History {
+    pub(crate) lines: Vec<String>,
+    pub(crate) normal_screen: Option<ScreenState>,
+}
+
+impl History {
+    /// Flatten both terminal buffers into the saved scrollback format.
+    pub(crate) fn with_visible(mut self, screen: &ScreenState, max: usize) -> Vec<String> {
+        if let Some(normal) = &self.normal_screen {
+            self.lines
+                .extend(normal.text().trim_end().lines().map(str::to_owned));
+        }
+        self.lines
+            .extend(screen.text().trim_end().lines().map(str::to_owned));
+        self.lines.drain(..self.lines.len().saturating_sub(max));
+        self.lines
+    }
+}
+
+/// Rebuild the scrollback and screen of a pane on a fresh attachment.
+/// A replacement process starts with the old grid in the normal buffer.
+pub(crate) fn with_history(screen: &ScreenState, history: &History, retain: bool) -> Vec<u8> {
+    let mut out = String::from("\x1b[?1049l\x1b[!p\x1b[0m\x1b[H\x1b[2J\x1b[3J");
+    let last_row = screen.size().rows_nonzero();
+    out.push_str(&format!("\x1b[{last_row};1H"));
+    let mut scroll = |line: &str| {
+        out.extend(line.chars().filter(|c| !c.is_control()));
+        out.push_str("\r\n");
+    };
+    for line in &history.lines {
+        scroll(line);
+    }
+    if let Some(normal) = &history.normal_screen {
+        if retain {
+            // The replacement displays the alternate grid in the normal
+            // buffer. Move the old normal grid into scrollback first.
+            for line in normal.text().trim_end().lines() {
+                scroll(line);
+            }
+        } else {
+            out.push_str(&draw(normal, InputModes::default()));
+        }
+    }
+    out.push_str(&draw(
+        screen,
+        if retain {
+            InputModes::default()
+        } else {
+            screen.modes()
+        },
+    ));
+    out.into_bytes()
+}
+
+fn draw(screen: &ScreenState, input: InputModes) -> String {
     let mut out = String::new();
 
     // The alternate screen comes first: everything below belongs on whichever
     // buffer the program is drawing on.
-    if screen.modes().alternate_screen {
+    if input.alternate_screen {
         out.push_str("\x1b[?1049h");
     }
     out.push_str("\x1b[0m\x1b[?7l\x1b[H\x1b[2J");
@@ -49,9 +109,9 @@ pub fn snapshot(screen: &ScreenState) -> Vec<u8> {
     }
 
     out.push_str("\x1b[?7h");
-    out.push_str(&modes(screen.modes()));
+    out.push_str(&modes(input));
     out.push_str(&cursor(screen.cursor()));
-    out.into_bytes()
+    out
 }
 
 /// Whether a run would leave the screen as a clear already leaves it.

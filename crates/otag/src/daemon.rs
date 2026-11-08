@@ -370,16 +370,28 @@ impl Handler for Daemon {
                 })
                 .await,
             ),
-            Request::StartTeam { cwd, roles } => {
-                Some(crate::team::create(&self.session, &cwd, roles).await)
+            Request::StartTeam { cwd, roles, task } => {
+                Some(crate::team::create(&self.session, &cwd, roles, &task).await)
             }
             Request::TeamAdvance {
                 pane,
                 revision,
                 back,
-            } => Some(crate::team::advance(&self.session, pane, revision, back).await),
+                confirmation,
+            } => {
+                Some(crate::team::advance(&self.session, pane, revision, back, confirmation).await)
+            }
             Request::TeamMode { team, automatic } => {
-                Some(crate::team::mode(&self.session, team, automatic).await)
+                let response = crate::team::mode(&self.session, team, automatic).await;
+                if matches!(response, Response::Ok)
+                    && let Some(snapshots) = &self.snapshots
+                    && !snapshots.save_session(&self.session).await
+                {
+                    return Some(Response::error(
+                        "Could not save the team's Automatic setting.",
+                    ));
+                }
+                Some(response)
             }
             Request::TeamUndoPreview { pane, step } => {
                 Some(crate::team::undo_preview(&self.session, pane, step).await)
@@ -394,7 +406,7 @@ impl Handler for Daemon {
                 model,
                 refresh,
             } => Some(self.api_provider(&provider, model, refresh).await),
-            Request::AttachPane { pane, size } => Some(self.attach_pane(outbox, pane, size).await),
+            Request::AttachPane { pane, size } => self.attach_pane(outbox, pane, size).await,
             Request::DetachPane { pane } => {
                 self.attachments.remove(outbox.id(), pane);
                 Some(Response::Ok)
@@ -666,12 +678,17 @@ impl Daemon {
     }
 
     /// Watch one pane as a stream of bytes.
-    async fn attach_pane(&self, outbox: &Outbox, pane: PaneId, size: Option<PaneSize>) -> Response {
+    async fn attach_pane(
+        &self,
+        outbox: &Outbox,
+        pane: PaneId,
+        size: Option<PaneSize>,
+    ) -> Option<Response> {
         match raw::attach_pane(&self.session, &self.attachments, outbox, pane, size).await {
-            Ok(response) => response,
+            Ok(()) => None,
             Err(error) => {
                 tracing::debug!(%error, %pane, "cannot attach a client to a pane");
-                Response::error(error.to_string())
+                Some(Response::error(error.to_string()))
             }
         }
     }
@@ -827,10 +844,18 @@ impl Daemon {
         if hook.written_file(event).is_some() {
             self.session.note_read_only_edit(pane).await;
         }
-        if let Some(status) = hook.status(event) {
+        let team_role = self.session.is_team_role(pane);
+        let status = if team_role {
+            hook.team_status(event)
+        } else {
+            hook.status(event)
+        };
+        if let Some(status) = status {
             self.session.set_status(pane, status, true).await;
         }
-        self.collect_question(event, pane, &hook);
+        if status.is_some() || !team_role {
+            self.collect_question(status, pane, &hook);
+        }
         if let Some(id) = hook.session_id.clone() {
             self.remember_session(pane, id, hook.transcript_path, hook.cwd)
                 .await;
@@ -839,11 +864,13 @@ impl Daemon {
 
     /// Put what an agent is asking into the inbox, or take it out again
     /// because the agent has moved on.
-    fn collect_question(&self, event: &str, pane: PaneId, hook: &hooks::HookPayload) {
-        let asking = matches!(
-            hook.status(event),
-            Some(otag_agents::PaneStatus::NeedsApproval)
-        );
+    fn collect_question(
+        &self,
+        status: Option<otag_agents::PaneStatus>,
+        pane: PaneId,
+        hook: &hooks::HookPayload,
+    ) {
+        let asking = status == Some(otag_agents::PaneStatus::NeedsApproval);
         let Ok(mut inbox) = self.inbox.lock() else {
             return;
         };

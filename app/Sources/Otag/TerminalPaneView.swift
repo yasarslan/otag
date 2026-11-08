@@ -171,14 +171,6 @@ private struct TerminalSurface: NSViewRepresentable {
                 let text = "\r\n\u{1b}[2m-- \(message) --\u{1b}[0m\r\n"
                 self?.view?.feed(text: text)
             }
-            stream.onReattached = { [weak self] in
-                self?.cancelFlush()
-                // The daemon is about to send the pane's whole screen, and
-                // those bytes clear what is there first. Resetting the
-                // emulator as well means a restart cannot leave the view in
-                // a mode the old program set.
-                self?.view?.softReset()
-            }
             stream.onGone = { [weak self] message in
                 self?.onGone(message)
             }
@@ -196,7 +188,6 @@ private struct TerminalSurface: NSViewRepresentable {
                 stream.stop()
                 return
             }
-            view.softReset()
             let size = view.terminalDimensions
             stream.start(size: PaneSize(
                 rows: UInt16(max(size.rows, 1)),

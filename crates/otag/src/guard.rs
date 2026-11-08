@@ -267,6 +267,7 @@ async fn carry_out(
                 watching.progress.resets_at = resets_at;
             }
             tracing::info!(%pane, used, "the limit guard paused a session");
+            session.note_team_attention(pane).await;
             bus.publish(Event::Notice {
                 pane: Some(pane),
                 text: format!(

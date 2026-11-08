@@ -33,20 +33,18 @@ impl Handler for TestDaemon {
     async fn handle(&self, request: Request, outbox: &Outbox) -> Option<Response> {
         match request {
             Request::Ping => Some(Response::Pong),
-            Request::AttachPane { pane, size } => Some(
-                match otag_core::raw::attach_pane(
-                    &self.session,
-                    &self.attachments,
-                    outbox,
-                    pane,
-                    size,
-                )
-                .await
-                {
-                    Ok(response) => response,
-                    Err(error) => Response::error(error.to_string()),
-                },
-            ),
+            Request::AttachPane { pane, size } => match otag_core::raw::attach_pane(
+                &self.session,
+                &self.attachments,
+                outbox,
+                pane,
+                size,
+            )
+            .await
+            {
+                Ok(()) => None,
+                Err(error) => Some(Response::error(error.to_string())),
+            },
             Request::DetachPane { pane } => {
                 self.attachments.remove(outbox.id(), pane);
                 Some(Response::Ok)

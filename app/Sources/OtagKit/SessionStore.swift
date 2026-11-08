@@ -68,6 +68,8 @@ public final class SessionStore {
 
     /// A close the daemon says would interrupt active work.
     public private(set) var closeConfirmation: CloseTarget?
+    /// The daemon's warning for a team transition awaiting confirmation.
+    public var teamAdvanceWarning: TeamAdvanceWarning?
     private var closing: CloseTarget?
     private var pendingCloses: [CloseTarget] = []
 
@@ -538,6 +540,8 @@ public final class SessionStore {
             acceptProvider(info)
         case let .event(event):
             apply(event)
+        case let .teamAdvanceWarning(warning):
+            teamAdvanceWarning = warning
         case let .panes(panes):
             took(panes: panes)
         case let .usage(report):

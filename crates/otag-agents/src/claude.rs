@@ -93,6 +93,9 @@ impl AgentAdapter for Claude {
         if WORKING.iter().any(|marker| screen.contains(marker)) {
             return Some(PaneStatus::Working);
         }
+        if screen.lines().any(is_done_footer) {
+            return Some(PaneStatus::Done);
+        }
         None
     }
 
@@ -175,6 +178,28 @@ impl AgentAdapter for Claude {
         })?;
         Ok(parse_transcript(&text, session_id_from_path(path)))
     }
+}
+
+fn is_done_footer(line: &str) -> bool {
+    let Some((worked, clock)) = line.trim().split_once(" · done ") else {
+        return false;
+    };
+    if !worked
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .starts_with("Worked for ")
+    {
+        return false;
+    }
+    let mut parts = clock.split_whitespace();
+    let Some((hour, minute)) = parts.next().and_then(|time| time.split_once(':')) else {
+        return false;
+    };
+    // Claude can display either a 12-hour or a 24-hour clock.
+    hour.parse::<u8>().is_ok_and(|hour| hour < 24)
+        && minute.len() == 2
+        && minute.parse::<u8>().is_ok_and(|minute| minute < 60)
+        && matches!(parts.next(), None | Some("AM" | "PM"))
+        && parts.next().is_none()
 }
 
 impl Claude {
@@ -282,8 +307,12 @@ struct Record {
     r#type: Option<String>,
     #[serde(default)]
     cwd: Option<PathBuf>,
-    #[serde(default, alias = "sessionId")]
+    #[serde(default)]
     session_id: Option<String>,
+    // Current native releases can emit both spellings in the same record.
+    // An alias would reject the whole record as a duplicate field.
+    #[serde(default, rename = "sessionId")]
+    camel_session_id: Option<String>,
     #[serde(default, rename = "gitBranch")]
     git_branch: Option<String>,
     #[serde(default)]
@@ -381,7 +410,7 @@ pub fn parse_transcript(text: &str, session_id: Option<String>) -> Transcript {
             continue;
         }
         if transcript.session_id.is_none() {
-            transcript.session_id = record.session_id;
+            transcript.session_id = record.camel_session_id.or(record.session_id);
         }
         if let Some(cwd) = record.cwd {
             transcript.cwd = Some(cwd);

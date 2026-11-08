@@ -116,6 +116,10 @@ struct Seen {
     /// What that file last said about the agent's turn, so only a change of
     /// state sets the pane's status.
     turn: Option<otag_agents::TurnState>,
+    /// Distinguish a new finished turn from later writes to the same record.
+    final_turn: Option<u64>,
+    /// The last detected screen state for this process.
+    screen: Option<(SystemTime, otag_agents::PaneStatus)>,
 }
 
 /// What otag remembers about every pane it is watching.
@@ -141,8 +145,13 @@ async fn watch_once(
     let mut fresh = false;
 
     for pane in panes {
-        let role = teams.iter().find_map(|team| team.membership(pane.id));
-        if role.as_ref().is_some_and(|role| role.waiting) {
+        let role = teams
+            .iter()
+            .find_map(|team| team.membership(pane.id).map(|role| (team, role)));
+        if role
+            .as_ref()
+            .is_some_and(|(team, role)| !team.running || !role.current)
+        {
             // The welcome screen belongs to this pane, but a transcript
             // discovered by directory could belong to the active role.
             read.remove(&pane.id);
@@ -163,11 +172,35 @@ async fn watch_once(
             continue;
         };
 
-        if let Some(status) = agent.adapter().detect_status(&pane.screen)
-            && (pane.trusts_the_screen
-                || (role.is_some() && status == otag_agents::PaneStatus::NeedsApproval))
-        {
-            session.set_status(pane.id, status, false).await;
+        if let Some(status) = agent.adapter().detect_status(&pane.screen) {
+            let previous = read
+                .entry(pane.id)
+                .or_default()
+                .screen
+                .replace((pane.started_at, status));
+            if let Some((team, _)) = &role
+                && status == otag_agents::PaneStatus::Done
+                && previous == Some((pane.started_at, otag_agents::PaneStatus::Working))
+            {
+                // Require work on this process first: the pane may still
+                // contain the previous process's footer after a restart.
+                session
+                    .set_team_turn(
+                        pane.id,
+                        pane.started_at,
+                        team.revision,
+                        Some(otag_core::team::StepCompletion {
+                            result: None,
+                            answer: None,
+                        }),
+                    )
+                    .await;
+            }
+            if pane.trusts_the_screen
+                || (role.is_some() && status == otag_agents::PaneStatus::NeedsApproval)
+            {
+                session.set_status(pane.id, status, false).await;
+            }
         }
 
         if pane.session_id.is_none() {
@@ -212,6 +245,7 @@ async fn read_session(
     if seen.path.as_ref() != Some(&path) {
         *seen = Seen {
             path: Some(path.clone()),
+            screen: seen.screen,
             ..Seen::default()
         };
     }
@@ -220,6 +254,10 @@ async fn read_session(
     }
     seen.at = Some(modified);
     let was = seen.turn;
+    let revision = session.teams().iter().find_map(|team| {
+        let role = team.membership(pane.id)?;
+        (team.running && role.current).then_some(team.revision)
+    });
 
     let parsed = tokio::task::spawn_blocking(move || agent.adapter().read_transcript(&path)).await;
     let transcript = match parsed {
@@ -247,26 +285,42 @@ async fn read_session(
     // itself. Only a change counts: a turn writes many lines, and claiming
     // the agent reported on every one of them would hide a question it put
     // on its screen in the middle of that turn.
-    if transcript.turn == Some(otag_agents::TurnState::Finished)
-        && session.is_team_role(pane.id)
-        && !transcript.interrupted
-    {
-        let result =
-            crate::team::warning_result(transcript.final_message.as_deref().unwrap_or_default());
-        tracing::debug!(pane = %pane.id, ?agent, result = result.unwrap_or("READY"), "team turn finished from transcript");
-        session
-            .set_team_result(pane.id, pane.started_at, result.is_some())
-            .await;
-        if let Some(seen) = read.get_mut(&pane.id) {
-            seen.turn = transcript.turn;
+    if let Some(turn) = transcript.turn {
+        use otag_agents::TurnState;
+        seen.turn = Some(turn);
+        if let Some(revision) = revision {
+            if turn == TurnState::Finished && !transcript.interrupted {
+                use std::hash::{DefaultHasher, Hash, Hasher};
+                let mut hash = DefaultHasher::new();
+                (
+                    transcript.turns,
+                    transcript.prompts.len(),
+                    &transcript.final_message,
+                )
+                    .hash(&mut hash);
+                let fingerprint = hash.finish();
+                if seen.final_turn.replace(fingerprint) != Some(fingerprint)
+                    || was == Some(TurnState::Working)
+                {
+                    let completion = otag_core::team::StepCompletion::from_answer(
+                        transcript.final_message.clone().unwrap_or_default(),
+                    );
+                    tracing::debug!(pane = %pane.id, ?agent, result = completion.warning().unwrap_or("READY"), "team turn finished from transcript");
+                    session
+                        .set_team_turn(pane.id, pane.started_at, revision, Some(completion))
+                        .await;
+                }
+            } else if turn == TurnState::Working && was != Some(turn) {
+                session
+                    .set_team_turn(pane.id, pane.started_at, revision, None)
+                    .await;
+            }
         }
-    } else if let Some(turn) = transcript.turn
-        && was != Some(turn)
-    {
-        if let Some(seen) = read.get_mut(&pane.id) {
-            seen.turn = Some(turn);
+        if was != Some(turn)
+            && (revision.is_none() || turn != TurnState::Finished || transcript.interrupted)
+        {
+            session.set_status(pane.id, turn.status(), true).await;
         }
-        session.set_status(pane.id, turn.status(), true).await;
     }
 
     // What the session was first asked, which is what a client calls it.

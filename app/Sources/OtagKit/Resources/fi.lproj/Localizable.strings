@@ -283,7 +283,7 @@
 "team.finish" = "Viimeistele tiimi";
 "team.finished" = "Tiimi valmis";
 "team.back" = "Palauta koodaajalle";
-"team.waiting" = "Odottaa vaihetta / kirjoitusvuoroa";
+"team.waiting" = "Odottaa";
 "team.auto" = "Automaattinen";
 "team.undo" = "Kumoa tämä vaihe";
 "team.undo.detail" = "Palauta alla olevat tiedostot vaiheen tarkistuspisteeseen. Tässä työkopiossa käynnissä olevat roolit pysähtyvät. Haarat ja tallennushistoria säilyvät.";

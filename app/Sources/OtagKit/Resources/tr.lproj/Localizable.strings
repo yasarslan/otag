@@ -283,7 +283,7 @@
 "team.finish" = "Takımı tamamla";
 "team.finished" = "Takım tamamlandı";
 "team.back" = "Kodlamaya geri gönder";
-"team.waiting" = "Adım / yazma sırası bekleniyor";
+"team.waiting" = "Bekliyor";
 "team.auto" = "Otomatik";
 "team.undo" = "Bu adımı geri al";
 "team.undo.detail" = "Aşağıdaki dosyaları adımın kontrol noktasına döndür. Bu çalışma kopyasındaki çalışan roller duracak. Dallar ve kayıt geçmişi değişmez.";

@@ -73,6 +73,15 @@ public extension PaneStatus {
     }
 }
 
+public extension PaneInfo {
+    /// One label for the same team step in the pane header and sidebar.
+    @MainActor var teamStatusLabel: String? {
+        guard let team else { return nil }
+        if team.waiting { return Strings.t("team.waiting") }
+        return team.stepFinished ? Strings.t(status.badge.key) : nil
+    }
+}
+
 /// Everything there is to do with one session, in one place.
 ///
 /// The header bar's `⋯` menu and the sidebar's right click offer the same

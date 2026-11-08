@@ -123,20 +123,19 @@ struct AgentMark: View {
 
 /// What a session is doing, as a capsule of one or two words.
 ///
-/// Four words and nothing else: Working, Needs you, Done, Idle. Tinted, not
-/// filled; still, not animated. It is a state you glance at.
 struct StatusPill: View {
     let status: PaneStatus
+    var label: String? = nil
 
     var body: some View {
-        Text(Strings.t(status.badge.key))
+        Text(label ?? Strings.t(status.badge.key))
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(colour)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(colour.opacity(0.10), in: Capsule())
-            .help(status.localizedPrecise)
-            .accessibilityLabel(status.localizedPrecise)
+            .help(label ?? status.localizedPrecise)
+            .accessibilityLabel(label ?? status.localizedPrecise)
     }
 
     private var colour: Color {

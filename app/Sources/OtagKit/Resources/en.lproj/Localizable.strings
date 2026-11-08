@@ -283,7 +283,7 @@
 "team.advanceWarning.detail" = "The step reported %@. You can return to the session to respond or send the result anyway.";
 "team.advanceWarning.missing" = "The step finished without an OTAG_RESULT line. You can return to the session to respond or send the result anyway.";
 "team.back" = "Send back to Coder";
-"team.waiting" = "Waiting for step / write turn";
+"team.waiting" = "Waiting";
 "team.auto" = "Automatic";
 "team.undo" = "Undo this step";
 "team.undo.detail" = "Restore the files below to this step’s checkpoint. Running roles in this checkout will stop. Branches and commit history stay unchanged.";

@@ -172,7 +172,9 @@ while :; do /bin/sleep 10; done
     assert_eq!(find(&plan)["team"]["next_role"], "Coder");
     assert_eq!(find(&plan)["team"]["can_advance"], false);
     result(&plan, ready);
-    assert_eq!(find(&plan)["team"]["can_advance"], true);
+    until("the finished transcript did not enable handoff", || {
+        find(&plan)["team"]["can_advance"] == true
+    });
     std::thread::sleep(Duration::from_millis(2200));
     assert_eq!(find(&plan)["team"]["current"], true);
     automatic(&plan, true);
@@ -366,14 +368,8 @@ exec /bin/sleep 30
             plan["status"] == "working" && plan["team"]["can_advance"] == false
         },
     );
-    std::fs::write(home.path().join("finish-plan"), "").expect("finish the fake Claude turn");
-    until(
-        "new Claude footer should enable the team button before transcript discovery",
-        || current()["team"]["can_advance"] == true,
-    );
     let mut reattached = read_screen(&mut attach());
     assert!(reattached.state().text().contains("Plan screen retained"));
-    assert!(reattached.state().text().contains("done 11:08 AM"));
     reattached.process(b"\x1b[?1049l");
     assert!(reattached.state().text().contains("plan-history-099"));
     assert!(has_history(&mut reattached));
@@ -392,6 +388,14 @@ exec /bin/sleep 30
     assert_eq!(resume["type"], "ok", "{resume}");
     terminal = attach();
     let mut resumed = read_screen(&mut terminal);
+    until("the resumed role should be working", || {
+        current()["status"] == "working"
+    });
+    std::fs::write(home.path().join("finish-plan"), "").expect("finish the fake Claude turn");
+    until(
+        "new Claude footer should enable the team button before transcript discovery",
+        || current()["team"]["can_advance"] == true,
+    );
     while !resumed.state().modes().alternate_screen
         || !resumed.state().text().contains("done 11:08 AM")
     {
@@ -414,10 +418,18 @@ exec /bin/sleep 30
     std::fs::write(&transcript, fixture).expect("transcript");
     // The fake agent execs sleep and never sends hooks, just as the daemon
     // cannot identify a native agent whose process name is its version.
-    until("finished transcript should mark Plan as Needs you", || {
-        let plan = current();
-        plan["status"] == "needs_approval" && plan["team"]["can_advance"] == true
-    });
+    until(
+        "finished transcript should report QUESTION instead of the footer alone",
+        || {
+            request(
+                &home,
+                json!({
+                    "type":"team_advance", "pane":pane, "revision":current()["team"]["revision"]
+                }),
+            )["result"]
+                == "QUESTION"
+        },
+    );
     let ready = fixture
         .replace(
             "Which platform should the sample target?",
@@ -453,6 +465,9 @@ exec /bin/sleep 30
             fixture.replace("OTAG_RESULT: QUESTION", &format!("OTAG_RESULT: {result}")),
         )
         .expect("new result");
+        until("new transcript result was not recorded", || {
+            advance(Value::Null)["result"] == result
+        });
         let warning = advance(token);
         assert_eq!(warning["type"], "team_advance_warning", "{warning}");
         assert_eq!(warning["result"], result);
@@ -462,6 +477,9 @@ exec /bin/sleep 30
     }
     std::fs::write(&transcript, fixture.replace("\\nOTAG_RESULT: QUESTION", ""))
         .expect("transcript without a result marker");
+    until("missing marker was not recorded", || {
+        advance(Value::Null)["result"] == "MISSING"
+    });
     assert_eq!(current()["team"]["can_advance"], true);
     let warning = advance(token);
     assert_eq!(warning["type"], "team_advance_warning", "{warning}");
@@ -515,17 +533,21 @@ fn codex_completed_turns_can_be_sent_with_or_without_a_result_marker() {
     )
     .expect("fake agent");
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).expect("executable");
-    let mut daemon = home
-        .command()
-        .arg("daemon")
-        .env("PATH", "/usr/bin:/bin")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("daemon");
-    until("daemon did not start", || {
-        UnixStream::connect(home.socket()).is_ok()
-    });
+    let spawn = || {
+        let daemon = home
+            .command()
+            .arg("daemon")
+            .env("PATH", "/usr/bin:/bin")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("daemon");
+        until("daemon did not start", || {
+            UnixStream::connect(home.socket()).is_ok()
+        });
+        daemon
+    };
+    let mut daemon = spawn();
     let rollouts = home.path().join(".codex/sessions/2026/11/08");
     std::fs::create_dir_all(&rollouts).expect("rollout directory");
     let fixture = include_str!("../../../tests/fixtures/codex-team-final.jsonl");
@@ -558,6 +580,72 @@ fn codex_completed_turns_can_be_sent_with_or_without_a_result_marker() {
         until("finished Codex turn should enable the button", || {
             plan()["team"]["can_advance"] == true
         });
+        if result == "READY" {
+            let assert_reconnected = || {
+                let mut connection = connect(&home, json!({"type":"subscribe"}));
+                loop {
+                    let response = receive(&mut connection);
+                    let Some(panes) = response["event"]["panes"].as_array() else {
+                        continue;
+                    };
+                    assert_eq!(panes[0]["status"], "done");
+                    assert_eq!(panes[0]["team"]["can_advance"], true);
+                    assert_eq!(panes[0]["team"]["step_finished"], true);
+                    assert_eq!(panes[0]["team"]["waiting"], false);
+                    assert_eq!(panes[1]["team"]["waiting"], true);
+                    break;
+                }
+            };
+            // SessionStart sets the underlying pane status to Idle without
+            // changing its transcript, just like a quiet screen can.
+            hook(&home, pane, "SessionStart", json!({}));
+            assert_eq!(plan()["status"], "done");
+            assert_eq!(plan()["team"]["can_advance"], true);
+            assert_reconnected();
+
+            let old_revision = plan()["team"]["revision"].clone();
+            let send_input = |bytes| {
+                let mut stream = connect(
+                    &home,
+                    json!({"type":"pane_input","pane":pane,"bytes":bytes}),
+                );
+                writeln!(stream.get_mut(), "{}", json!({"type":"ping"})).expect("wait for input");
+                assert_eq!(receive(&mut stream)["type"], "pong");
+            };
+            send_input(json!([110, 101, 120, 116])); // Draft "next".
+            assert_eq!(plan()["team"]["can_advance"], true);
+            send_input(json!([13]));
+            assert_eq!(plan()["team"]["can_advance"], false);
+            assert_eq!(plan()["team"]["step_finished"], false);
+            assert_eq!(plan()["status"], "working");
+            assert_ne!(plan()["team"]["revision"], old_revision);
+            let blocked = request(
+                &home,
+                json!({
+                    "type":"team_advance", "pane":pane, "revision":plan()["team"]["revision"]
+                }),
+            );
+            assert_eq!(blocked["type"], "error", "{blocked}");
+
+            // A metadata-only write to the old finished transcript must not
+            // complete the new turn.
+            std::fs::write(&file, format!("{metadata}\n{transcript}\n")).expect("old rollout");
+            std::thread::sleep(Duration::from_millis(1100));
+            assert_eq!(plan()["team"]["can_advance"], false);
+            let second = transcript
+                .replace("sample-turn", "next-turn")
+                .replace("Tests passed.", "Follow-up tests passed.");
+            std::fs::write(&file, format!("{metadata}\n{transcript}\n{second}")).expect("new turn");
+            until("follow-up completion did not enable handoff", || {
+                plan()["team"]["can_advance"] == true
+            });
+            request(&home, json!({"type":"shutdown"}));
+            common::stop_child(&mut daemon);
+            // Sending after restart must use the saved answer.
+            std::fs::remove_file(&file).expect("remove fixture rollout before restart");
+            daemon = spawn();
+            assert_reconnected();
+        }
         let revision = plan()["team"]["revision"].clone();
         let advance = |confirmation: Value| {
             request(
@@ -570,6 +658,17 @@ fn codex_completed_turns_can_be_sent_with_or_without_a_result_marker() {
         let response = advance(Value::Null);
         if result == "READY" {
             assert_eq!(response["type"], "ok", "{response}");
+            assert_eq!(plan()["status"], "done");
+            assert_eq!(plan()["team"]["can_advance"], false);
+            let output = project
+                .join(".otag/team")
+                .join(pane.to_string())
+                .join("task.md");
+            assert!(
+                std::fs::read_to_string(output)
+                    .expect("saved result")
+                    .contains("Follow-up tests passed.")
+            );
         } else {
             assert_eq!(response["type"], "team_advance_warning", "{response}");
             assert_eq!(response["result"], result);
@@ -583,7 +682,9 @@ fn codex_completed_turns_can_be_sent_with_or_without_a_result_marker() {
             )["type"],
             "ok"
         );
-        std::fs::remove_file(file).expect("remove fixture rollout");
+        if result != "READY" {
+            std::fs::remove_file(file).expect("remove fixture rollout");
+        }
     }
     request(&home, json!({"type":"shutdown"}));
     common::stop_child(&mut daemon);

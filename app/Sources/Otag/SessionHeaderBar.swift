@@ -81,9 +81,6 @@ struct SessionHeaderBar: View {
                         Image(systemName: "arrow.uturn.backward")
                     }.help(Strings.t("team.back"))
                 }
-                if team.waiting {
-                    Text(Strings.t("team.waiting")).font(.caption).foregroundStyle(.secondary)
-                }
                 if team.undoStep != nil {
                     Button { undoing = true } label: { Image(systemName: "arrow.uturn.backward.circle") }
                         .help(Strings.t("team.undo"))
@@ -150,7 +147,7 @@ struct SessionHeaderBar: View {
         )
         add(actions.pane.workspace, style: AnyShapeStyle(.secondary))
         add(
-            actions.pane.status.localizedPrecise,
+            actions.pane.teamStatusLabel ?? actions.pane.status.localizedPrecise,
             style: actions.pane.status.badge.wantsAttention
                 ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
         )

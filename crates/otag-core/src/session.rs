@@ -277,8 +277,6 @@ impl PaneHandle {
 /// What `otag ls` reports about a pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneSummary {
-    /// Whether the completed team result requires attention.
-    pub team_result_warning: bool,
     /// Which pane this is.
     pub id: PaneId,
     /// Its current size.
@@ -355,7 +353,6 @@ struct Starting<'a> {
 /// One running pane, with what the interface says about it.
 #[derive(Debug)]
 struct Pane {
-    team_result_warning: bool,
     handle: PaneHandle,
     title: String,
     workspace: WorkspaceId,
@@ -581,6 +578,18 @@ impl State {
             .iter()
             .position(|candidate| candidate.id() == workspace)
     }
+}
+
+fn clear_team_completion(team: &mut crate::team::Team) -> bool {
+    if team
+        .current_step_mut()
+        .and_then(|step| step.completion.take())
+        .is_none()
+    {
+        return false;
+    }
+    team.revision = team.revision.saturating_add(1);
+    true
 }
 
 impl Session {
@@ -1089,13 +1098,21 @@ impl Session {
     }
 
     /// Write bytes to the focused pane's program.
-    pub async fn input(&self, bytes: Vec<u8>) -> Result<()> {
+    pub async fn input(self: &Arc<Self>, bytes: Vec<u8>) -> Result<()> {
         let pane = self.focused_pane().ok_or(Error::NoPanes)?;
         self.input_to(pane.id(), bytes).await
     }
 
     /// Write bytes to one pane's program.
-    pub async fn input_to(&self, id: PaneId, bytes: Vec<u8>) -> Result<()> {
+    pub async fn input_to(self: &Arc<Self>, id: PaneId, bytes: Vec<u8>) -> Result<()> {
+        // Enter submits a turn; drafting, navigation and bracketed paste do
+        // not. Serialize submission with sending the previous result.
+        let submits = matches!(bytes.last(), Some(b'\r' | b'\n')) && self.is_team_role(id);
+        let _operation = if submits {
+            Some(self.team_operation().await)
+        } else {
+            None
+        };
         let handle = {
             let state = self.lock()?;
             if state.teams.iter().any(|team| {
@@ -1114,7 +1131,27 @@ impl Session {
                 .map(|pane| pane.handle.clone())
                 .ok_or(Error::PaneGone { id: Some(id) })?
         };
-        handle.input(bytes).await
+        handle.input(bytes).await?;
+        if submits {
+            let changed = {
+                let mut state = self.lock()?;
+                let changed = state.teams.iter_mut().any(|team| {
+                    team.running
+                        && team
+                            .members
+                            .get(team.current)
+                            .is_some_and(|member| member.pane == id && member.role.agent.is_some())
+                        && clear_team_completion(team)
+                });
+                if changed && let Some(pane) = state.panes.get_mut(&id) {
+                    pane.status = PaneStatus::Working;
+                    pane.last_hook = Some(Instant::now());
+                }
+                changed
+            };
+            self.commit(changed).await;
+        }
+        Ok(())
     }
 
     /// Give one pane the size the client drawing it has.
@@ -1282,7 +1319,6 @@ impl Session {
             .map(|pane| {
                 let snapshot = pane.handle.snapshot();
                 PaneSummary {
-                    team_result_warning: pane.team_result_warning,
                     id: pane.handle.id(),
                     size: snapshot.screen.size(),
                     agent: pane.agent,
@@ -1402,23 +1438,52 @@ impl Session {
         changed
     }
 
-    /// Publish a completed team result without losing its advance eligibility.
-    pub async fn set_team_result(
+    /// Record an observed turn independently of the pane's display status.
+    /// The revision and process identity prevent late observations from
+    /// completing a turn that the user has already moved past.
+    pub async fn set_team_turn(
         self: &Arc<Self>,
         pane: PaneId,
         started_at: SystemTime,
-        warning: bool,
+        revision: u64,
+        completion: Option<crate::team::StepCompletion>,
     ) {
-        let changed = self.change(pane, |pane| {
-            if pane.started_at != started_at {
-                return false;
+        let _operation = self.team_operation().await;
+        let changed = (|| {
+            let mut state = self.lock().ok()?;
+            if state.panes.get(&pane)?.started_at != started_at {
+                return None;
             }
-            let changed = pane.status != PaneStatus::Done || pane.team_result_warning != warning;
-            pane.status = PaneStatus::Done;
-            pane.last_hook = Some(Instant::now());
-            pane.team_result_warning = warning;
-            changed
-        });
+            let team = state.teams.iter_mut().find(|team| {
+                team.running
+                    && team.revision == revision
+                    && team
+                        .members
+                        .get(team.current)
+                        .is_some_and(|member| member.pane == pane)
+            })?;
+            if let Some(completion) = completion {
+                let step = team.current_step_mut()?;
+                // A footer can announce completion before the transcript,
+                // but cannot replace a result supplied by the transcript.
+                if step.completion.as_ref() == Some(&completion)
+                    || (completion.answer.is_none() && step.completion.is_some())
+                {
+                    return None;
+                }
+                step.completion = Some(completion);
+                if let Some(pane) = state.panes.get_mut(&pane)
+                    && pane.status != PaneStatus::NeedsApproval
+                {
+                    pane.status = PaneStatus::Done;
+                    pane.last_hook = Some(Instant::now());
+                }
+                Some(true)
+            } else {
+                Some(clear_team_completion(team))
+            }
+        })()
+        .unwrap_or(false);
         self.commit(changed).await;
     }
 
@@ -1934,7 +1999,6 @@ impl Session {
         self.reap(handle.clone());
 
         Ok(Pane {
-            team_result_warning: false,
             handle,
             title: starting.title.to_owned(),
             workspace: starting.workspace,

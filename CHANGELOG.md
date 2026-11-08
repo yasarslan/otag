@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Finished team steps stay sendable across window switches and restarts until handed off or the role starts a new turn; pane and sidebar labels stay in sync.
 - Closing macOS sessions or ending teams stops their processes and keeps them closed across daemon restarts.
 - Team panes keep their screen and scrollback when steps change or a hidden window returns.
 - Team sessions display their configured role names in the macOS app.

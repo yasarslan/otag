@@ -31,6 +31,7 @@ public struct TeamMembership: Codable, Hashable, Sendable {
     public var needsYou: Bool
     public var nextRole: String?
     public var canAdvance: Bool
+    public var stepFinished: Bool
     public var manual: Bool
     enum CodingKeys: String, CodingKey {
         case id, index, current, waiting, automatic, manual, revision, violation, project
@@ -39,6 +40,7 @@ public struct TeamMembership: Codable, Hashable, Sendable {
         case needsYou = "needs_you"
         case nextRole = "next_role"
         case canAdvance = "can_advance"
+        case stepFinished = "step_finished"
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -53,6 +55,7 @@ public struct TeamMembership: Codable, Hashable, Sendable {
         needsYou = try c.decodeIfPresent(Bool.self, forKey: .needsYou) ?? false
         nextRole = try c.decodeIfPresent(String.self, forKey: .nextRole)
         canAdvance = try c.decodeIfPresent(Bool.self, forKey: .canAdvance) ?? false
+        stepFinished = try c.decodeIfPresent(Bool.self, forKey: .stepFinished) ?? false
         manual = try c.decodeIfPresent(Bool.self, forKey: .manual) ?? false
         violation = try c.decodeIfPresent(Bool.self, forKey: .violation) ?? false
         undoStep = try c.decodeIfPresent(UInt64.self, forKey: .undoStep)

@@ -129,9 +129,63 @@ pub struct Step {
     /// Git tree at completion; protects subsequent work from an older undo.
     #[serde(default)]
     pub ended: Option<String>,
+    /// The latest finished turn in this step, independent of pane status.
+    #[serde(default)]
+    pub completion: Option<StepCompletion>,
     /// Whether the checkpoint has already been restored.
     #[serde(default)]
     pub undone: bool,
+}
+
+/// The outcome of a finished turn. A missing answer means only the terminal
+/// footer has reported completion so far.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepCompletion {
+    /// The result marker, if recognized.
+    pub result: Option<StepResult>,
+    /// The final answer to send, including any marker.
+    pub answer: Option<String>,
+}
+
+/// Result markers emitted by a team role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StepResult {
+    /// The role is ready for handoff.
+    Ready,
+    /// The role needs an answer.
+    Question,
+    /// The role could not complete the task.
+    Failed,
+    /// The role found problems.
+    Problems,
+}
+
+impl StepCompletion {
+    /// Parse the last line of the agent's final answer.
+    pub fn from_answer(answer: String) -> Self {
+        let result = match answer.trim_end().lines().last().map(str::trim) {
+            Some("OTAG_RESULT: READY") => Some(StepResult::Ready),
+            Some("OTAG_RESULT: QUESTION") => Some(StepResult::Question),
+            Some("OTAG_RESULT: FAILED") => Some(StepResult::Failed),
+            Some("OTAG_RESULT: PROBLEMS") => Some(StepResult::Problems),
+            _ => None,
+        };
+        Self {
+            result,
+            answer: Some(answer),
+        }
+    }
+
+    /// Warning shown before sending an unsuccessful or unmarked result.
+    pub fn warning(&self) -> Option<&'static str> {
+        match self.result {
+            Some(StepResult::Ready) => None,
+            Some(StepResult::Question) => Some("QUESTION"),
+            Some(StepResult::Failed) => Some("FAILED"),
+            Some(StepResult::Problems) => Some("PROBLEMS"),
+            None => Some("MISSING"),
+        }
+    }
 }
 
 /// Exact files and tree identity shown by the undo confirmation.
@@ -182,11 +236,48 @@ pub struct Membership {
     /// The current role can start or send its result.
     #[serde(default)]
     pub can_advance: bool,
+    /// This role finished a turn in its latest step.
+    #[serde(default)]
+    pub step_finished: bool,
     /// Shell roles are always manual.
     pub manual: bool,
 }
 
 impl Team {
+    /// The current execution, before it has been handed off.
+    pub(crate) fn current_step_mut(&mut self) -> Option<&mut Step> {
+        let role = self.members.get(self.current)?.role_index(self.current);
+        self.steps
+            .last_mut()
+            .filter(|step| step.role == role && step.ended.is_none() && !step.undone)
+    }
+
+    /// The current step's pending completion, if it has not been handed off.
+    pub fn pending_completion(&self) -> Option<&StepCompletion> {
+        let role = self.members.get(self.current)?.role_index(self.current);
+        let step = self.steps.last()?;
+        if step.role == role && step.ended.is_none() && !step.undone {
+            step.completion.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// The completion shown for a role, including after its handoff.
+    pub fn role_completion(&self, pane: PaneId) -> Option<&StepCompletion> {
+        let index = self.members.iter().position(|member| member.pane == pane)?;
+        if index == self.current && !self.finished {
+            return self.pending_completion();
+        }
+        let role = self.members[index].role_index(index);
+        self.steps
+            .iter()
+            .rev()
+            .find(|step| step.role == role && !step.undone && step.ended.is_some())?
+            .completion
+            .as_ref()
+    }
+
     /// Remove a member while preserving the identity of surviving roles and steps.
     pub(crate) fn remove_member(&mut self, pane: PaneId) {
         let Some(index) = self.members.iter().position(|m| m.pane == pane) else {
@@ -237,14 +328,25 @@ impl Team {
             id: self.id,
             index: role_index,
             current: index == self.current && !self.finished,
-            waiting: self.finished || index != self.current || !self.running,
+            waiting: self.role_completion(pane).is_none()
+                && (self.finished || index != self.current || !self.running),
             automatic: self.automatic,
-            needs_you: index == self.current && self.needs_you,
+            needs_you: index == self.current
+                && (self.needs_you
+                    || (self.automatic
+                        && self.pending_completion().is_some_and(|completion| {
+                            completion.answer.is_some() && completion.warning().is_some()
+                        }))),
             next_role: self
                 .members
                 .get(index + 1)
                 .map(|next| next.role.name.clone()),
-            can_advance: false,
+            can_advance: index == self.current
+                && !self.finished
+                && (!self.running
+                    || self.members[index].role.agent.is_none()
+                    || self.pending_completion().is_some()),
+            step_finished: self.role_completion(pane).is_some(),
             manual: self.members[index].role.agent.is_none(),
         })
     }

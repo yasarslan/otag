@@ -78,21 +78,20 @@ pub fn panes_of(session: &Session) -> Vec<PaneInfo> {
         .into_iter()
         .map(|pane| {
             use otag_agents::PaneStatus;
-            let mut team = teams.iter().find_map(|team| team.membership(pane.id));
-            if let Some(role) = &mut team {
-                role.can_advance = role.current
-                    && (role.waiting || role.manual || pane.status == PaneStatus::Done);
-            }
-            let status = if team.as_ref().is_some_and(|role| {
-                role.needs_you
-                    || (role.current && pane.status == PaneStatus::Done && pane.team_result_warning)
-            }) {
-                PaneStatus::NeedsApproval
-            } else {
-                pane.status
+            let membership = teams
+                .iter()
+                .find_map(|team| team.membership(pane.id).map(|role| (team, role)));
+            let status = match &membership {
+                Some((_, role)) if role.needs_you => PaneStatus::NeedsApproval,
+                Some((team, _)) => match team.role_completion(pane.id) {
+                    Some(completion) if completion.warning().is_none() => PaneStatus::Done,
+                    Some(_) => PaneStatus::NeedsApproval,
+                    None => pane.status,
+                },
+                None => pane.status,
             };
             PaneInfo {
-                team,
+                team: membership.map(|(_, role)| role),
                 id: pane.id,
                 size: pane.size,
                 workspace: pane.workspace,

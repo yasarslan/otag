@@ -233,7 +233,7 @@ private struct SessionRow: View {
                         .help(guardHelp)
                 }
 
-                StatusPill(status: pane.status)
+                StatusPill(status: pane.status, label: pane.teamStatusLabel)
             }
 
             // The nickname: what job this session is doing, under what it
@@ -318,7 +318,7 @@ private struct SessionRow: View {
         var parts = [name]
         if !pane.nickname.isEmpty { parts.append(pane.nickname) }
         parts.append(pane.agent.name)
-        parts.append(pane.status.localizedPrecise)
+        parts.append(pane.teamStatusLabel ?? pane.status.localizedPrecise)
         if let number { parts.append("⌘\(number)") }
         return parts.joined(separator: " · ")
     }

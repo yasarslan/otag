@@ -260,6 +260,7 @@ pub async fn activate(session: &Arc<Session>, id: u64) -> Result<(), String> {
         cwd: root,
         checkpoint,
         ended: None,
+        completion: None,
         undone: false,
     });
     team.revision = step;
@@ -442,16 +443,6 @@ fn auto_ready(text: &str) -> bool {
         .any(|word| lower.contains(word))
 }
 
-pub(crate) fn warning_result(text: &str) -> Option<&'static str> {
-    match text.trim_end().lines().last().map(str::trim) {
-        Some("OTAG_RESULT: READY") => None,
-        Some("OTAG_RESULT: QUESTION") => Some("QUESTION"),
-        Some("OTAG_RESULT: FAILED") => Some("FAILED"),
-        Some("OTAG_RESULT: PROBLEMS") => Some("PROBLEMS"),
-        _ => Some("MISSING"),
-    }
-}
-
 fn reported_failure(text: &str) -> bool {
     let words: Vec<_> = text
         .split(|c: char| !c.is_alphanumeric())
@@ -549,7 +540,7 @@ async fn advance_locked(
     if team.revision != revision {
         return Err("This step changed. Use the current step controls.".into());
     }
-    if !team.running {
+    if !team.running && team.pending_completion().is_none() {
         if confirmation.is_some() {
             return Err("This step changed. Use the current step controls.".into());
         }
@@ -577,28 +568,22 @@ async fn advance_locked(
     } else {
         team.current + 1
     };
-    let status = session
-        .summaries()
-        .into_iter()
-        .find(|p| p.id == pane)
-        .map(|p| p.status);
-    if member.role.agent.is_some()
-        && !matches!(
-            status,
-            Some(otag_agents::PaneStatus::Idle | otag_agents::PaneStatus::Done)
-        )
-    {
-        return Err("Wait until the agent is idle or done before sending its result.".into());
-    }
     if member.role.agent.is_some() {
-        let transcript = final_answer(session, pane).await?;
-        let text = transcript.final_message.as_deref().unwrap_or_default();
+        let completion = team
+            .pending_completion()
+            .ok_or("Wait until the agent finishes its turn before sending its result.")?;
+        let text = completion.answer.as_deref().unwrap_or_default();
+        if auto && (completion.answer.is_none() || completion.warning().is_some()) {
+            // The screen alone is not enough to advance, and an answer
+            // needing attention remains pending until the user acts.
+            return Ok(None);
+        }
         if auto && !auto_ready(text) {
             team.needs_you = true;
             session.set_teams(teams).await;
             return Ok(None);
         }
-        if let Some(result) = warning_result(text).filter(|_| !back) {
+        if let Some(result) = completion.warning().filter(|_| !back) {
             let mut hash = DefaultHasher::new();
             (pane, revision, back, text).hash(&mut hash);
             let token = hash.finish();
@@ -613,6 +598,9 @@ async fn advance_locked(
             }
         } else if confirmation.is_some() {
             return Err("This step's result changed. Review it before sending again.".into());
+        }
+        if completion.answer.is_none() {
+            return Err("The final answer is not available yet. Wait for it to be saved, then try sending again.".into());
         }
         save_output(
             &team.project,
@@ -633,6 +621,9 @@ async fn advance_locked(
     if let Some(step) = team.steps.last_mut() {
         let cwd = step.cwd.clone();
         step.ended = Some(git_work(move || crate::checkpoint::tree(&cwd)).await?);
+        if let Some(completion) = &mut step.completion {
+            completion.answer = None;
+        }
     }
     team.revision = team.revision.saturating_add(1);
     team.current = next;
@@ -681,9 +672,7 @@ pub async fn keep_working(session: Arc<Session>, guards: Arc<crate::guard::Guard
                 .map(|pane| pane.status);
             if used >= 90
                 || guards.view(member.pane, used).is_some_and(|guard| {
-                    guard.paused
-                        || (status == Some(otag_agents::PaneStatus::Done)
-                            && used >= guard.threshold)
+                    guard.paused || (team.pending_completion().is_some() && used >= guard.threshold)
                 })
                 || status == Some(otag_agents::PaneStatus::NeedsApproval)
             {
@@ -694,7 +683,7 @@ pub async fn keep_working(session: Arc<Session>, guards: Arc<crate::guard::Guard
                 }
                 continue;
             }
-            if status == Some(otag_agents::PaneStatus::Done) {
+            if team.pending_completion().is_some() {
                 let _ =
                     advance_locked(&session, member.pane, team.revision, false, true, None).await;
             }

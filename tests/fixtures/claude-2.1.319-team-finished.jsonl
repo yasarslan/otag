@@ -1,0 +1,8 @@
+{"type":"user","version":"2.1.319","isSidechain":false,"session_id":"sample-session","sessionId":"sample-session","message":{"role":"user","content":"Plan how to verify the sample."}}
+{"type":"assistant","version":"2.1.319","isSidechain":false,"session_id":"sample-session","sessionId":"sample-session","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Read","input":{"file_path":"sample.txt"}}]}}
+{"type":"user","version":"2.1.319","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","content":"Sample data"}]}}
+{"type":"assistant","version":"2.1.319","isSidechain":false,"session_id":"sample-session","sessionId":"sample-session","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"The target platform is unspecified."}]}}
+{"type":"assistant","version":"2.1.319","isSidechain":false,"session_id":"sample-session","sessionId":"sample-session","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Which platform should the sample target?\nOTAG_RESULT: QUESTION"}],"usage":{"input_tokens":12,"output_tokens":8,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"system","subtype":"turn_duration","durationMs":312}
+{"type":"last-prompt","lastPrompt":"Plan how to verify the sample."}
+{"type":"cost-state"}

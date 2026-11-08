@@ -7,6 +7,13 @@
 <p align="center">Run agents side by side, see which one needs your attention, and hand off work with its context.</p>
 
 <p align="center">
+  <a href="https://github.com/yasarslan/otag/releases/latest">
+    <img src="https://img.shields.io/badge/Download-macOS%20·%20Apple%20silicon-111111?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/yasarslan/otag/releases/latest"><strong>Download</strong></a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#under-the-hood">Under the hood</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -25,7 +32,7 @@
 The macOS download supports Apple silicon Macs running macOS 14 or later. Install
 and sign in to Claude Code, Codex, or both before starting a session.
 
-1. Download the `.dmg` from [GitHub Releases](https://github.com/yasarslan/otag/releases).
+1. Download the `.dmg` from [GitHub Releases](https://github.com/yasarslan/otag/releases/latest).
 2. Open the disk image and drag **Otag** to **Applications**.
 3. Try opening **Otag** from **Applications**. Because the app is not notarized,
    go to **System Settings → Privacy & Security → Open Anyway** after the first

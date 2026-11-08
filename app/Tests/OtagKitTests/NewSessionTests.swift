@@ -11,6 +11,11 @@ import Testing
 @Suite("The project a new session starts in")
 @MainActor
 struct NewSessionTests {
+    @Test("the New session form only offers solo mode")
+    func onlySoloModeIsOffered() {
+        #expect(NewSessionMode.offered == [.solo])
+    }
+
     /// A store holding the panes a daemon would have sent.
     private func store(_ panes: [(pane: PaneID, cwd: String?)]) throws -> SessionStore {
         let store = SessionStore(

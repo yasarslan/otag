@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Starting a team requires a task, which is included in the first role’s instructions.
 - Team handoffs recognize native Claude completion records and the new done footer. Completed Claude and Codex steps can be sent manually, with confirmation for warnings or a missing result marker.
 
+### Changed
+
+- Team mode is hidden in the macOS app for now while it is redesigned.
+
 ## [0.1.0] - 2026-11-07
 
 ### Changed

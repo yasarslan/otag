@@ -298,7 +298,7 @@ struct MainView: View {
         .alert(
             Strings.t("team.advanceWarning.title"),
             isPresented: Binding(
-                get: { store.teamAdvanceWarning != nil },
+                get: { AppFeatures.teamMode && store.teamAdvanceWarning != nil },
                 set: { if !$0 { store.teamAdvanceWarning = nil } }
             ),
             presenting: store.teamAdvanceWarning
@@ -428,8 +428,8 @@ struct MainView: View {
             .labelStyle(.iconOnly)
             .keyboardShortcut("s", modifiers: [.command, .control])
         }
-        ToolbarItem(placement: .primaryAction) {
-            if let team = focused?.team {
+        if let team = focusedTeam {
+            ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 12) {
                     teamAdvanceButton(team.id)
                     Toggle(Strings.t("team.auto"), isOn: Binding(
@@ -448,7 +448,7 @@ struct MainView: View {
                 title: Strings.t("toolbar.arrange.title"),
                 label: Strings.t(workbench.isArranged
                     ? "toolbar.arrange.undo" : "toolbar.arrange"),
-                enabled: focused?.team == nil && (workbench.isArranged || arrangementIDs.count > 1),
+                enabled: focusedTeam == nil && (workbench.isArranged || arrangementIDs.count > 1),
                 action: arrange
             )
         }
@@ -534,12 +534,16 @@ struct MainView: View {
     }
 
     private func arrange() {
-        guard focused?.team == nil else { return }
+        guard focusedTeam == nil else { return }
         workbench.arrange(arrangementIDs, keeping: workbench.focus)
     }
 
+    private var focusedTeam: TeamMembership? {
+        AppFeatures.teamMode ? focused?.team : nil
+    }
+
     private func showFocusedTeam() {
-        guard let pane = focused, let team = pane.team else { return }
+        guard let team = focusedTeam, let pane = focused else { return }
         let members = TeamMembership.members(of: team.id, in: store.panes).map(\.id)
         workbench.showTeam(members, focused: pane.id)
     }

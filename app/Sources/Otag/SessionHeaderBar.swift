@@ -70,7 +70,7 @@ struct SessionHeaderBar: View {
 
             Spacer(minLength: Chrome.gap)
 
-            if let team = actions.pane.team {
+            if AppFeatures.teamMode, let team = actions.pane.team {
                 if team.violation {
                     Image(systemName: "exclamationmark.shield").foregroundStyle(.orange)
                         .help(Strings.t("team.violation"))

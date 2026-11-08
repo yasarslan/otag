@@ -39,7 +39,8 @@ struct NewSessionSheet: View {
     @State private var prompt = ""
     @State private var problem: String?
     @State private var starting = false
-    @State private var team = false
+    @State private var mode: NewSessionMode = .solo
+    private var team: Bool { mode == .team && NewSessionMode.offered.contains(.team) }
     @State private var createdTeam: UInt64?
     @State private var roles: [TeamRole] = []
 
@@ -52,10 +53,14 @@ struct NewSessionSheet: View {
                 .padding(.bottom, 12)
 
             Form {
-                Picker(Strings.t("team.mode"), selection: $team) {
-                    Text(Strings.t("team.solo")).tag(false)
-                    Text(Strings.t("team.title")).tag(true)
-                }.pickerStyle(.segmented)
+                let modes = NewSessionMode.offered
+                if modes.count > 1 {
+                    Picker(Strings.t("team.mode"), selection: $mode) {
+                        ForEach(modes, id: \.self) { mode in
+                            Text(Strings.t(mode == .solo ? "team.solo" : "team.title")).tag(mode)
+                        }
+                    }.pickerStyle(.segmented)
+                }
                 Section {
                     LabeledContent(Strings.t("new.project")) {
                         HStack(spacing: 8) {
@@ -188,9 +193,11 @@ struct NewSessionSheet: View {
             folder = URL(fileURLWithPath: suggestedProject, isDirectory: true)
         }
         kind = lastAgent
-        roles = [TeamRole(name: Strings.t("team.plan")),
-                 TeamRole(name: Strings.t("team.coder"), canEdit: true),
-                 TeamRole(name: Strings.t("team.review"))]
+        if NewSessionMode.offered.contains(.team) {
+            roles = [TeamRole(name: Strings.t("team.plan")),
+                     TeamRole(name: Strings.t("team.coder"), canEdit: true),
+                     TeamRole(name: Strings.t("team.review"))]
+        }
     }
 
     /// Ask for the project folder.

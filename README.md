@@ -21,11 +21,13 @@
 
 ## What you can do
 - **Coordinate multiple agents:** Organize Claude Code and Codex into project-based workflows.
-- **Delegate tasks:** Assign different roles and responsibilities across agents.
+- **Run tasks in parallel:** Work on separate tasks in different agent sessions.
 - **Switch seamlessly:** Transfer work between agents while preserving context.
 - **Manage usage limits:** Monitor quotas and configure limit-aware handoffs.
-- **Automate workflows:** Progress through team tasks and queued prompts with safety checks.
+- **Automate workflows:** Run queued prompts with safety checks.
 - **Keep your work organized:** Manage persistent sessions and isolated Git worktrees.
+
+Team mode (Plan → Coder → Review) is in development and not available in this version.
 
 ## Download
 

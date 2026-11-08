@@ -26,32 +26,34 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(store.workspaces.filter { $0.panes.contains { $0.team == nil } }) { workspace in
+            ForEach(store.workspaces.filter { $0.panes.contains(where: showsInProject) }) { workspace in
                 Section {
-                    ForEach(workspace.panes.filter { $0.team == nil }) { pane in
+                    ForEach(workspace.panes.filter(showsInProject)) { pane in
                         row(for: pane)
                     }
                 } header: {
                     ProjectHeader(name: workspace.name)
                 }
             }
-            ForEach(Array(Set(store.panes.compactMap { $0.team?.id })).sorted(), id: \.self) { team in
-                let members = TeamMembership.members(of: team, in: store.panes)
-                Section {
-                    DisclosureGroup {
-                        ForEach(members) { pane in row(for: pane) }
-                    } label: {
-                        Text(Strings.t("team.title") + " \(team)")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .contextMenu {
-                                Button(Strings.t("team.end"), role: .destructive) {
-                                    store.close(.team(team))
+            if AppFeatures.teamMode {
+                ForEach(Array(Set(store.panes.compactMap { $0.team?.id })).sorted(), id: \.self) { team in
+                    let members = TeamMembership.members(of: team, in: store.panes)
+                    Section {
+                        DisclosureGroup {
+                            ForEach(members) { pane in row(for: pane) }
+                        } label: {
+                            Text(Strings.t("team.title") + " \(team)")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .contextMenu {
+                                    Button(Strings.t("team.end"), role: .destructive) {
+                                        store.close(.team(team))
+                                    }
                                 }
-                            }
+                        }
+                    } header: {
+                        ProjectHeader(name: members.first?.team?.project ?? members.first?.workspace ?? "")
                     }
-                } header: {
-                    ProjectHeader(name: members.first?.team?.project ?? members.first?.workspace ?? "")
                 }
             }
             if !browsers.sessions.isEmpty {
@@ -85,6 +87,12 @@ struct SidebarView: View {
                 LimitsCard(store: store, focused: workbench.focus.flatMap(store.pane))
             }
         }
+    }
+
+    /// Keep existing team panes accessible as project sessions while the
+    /// team interface is hidden.
+    private func showsInProject(_ pane: PaneInfo) -> Bool {
+        !AppFeatures.teamMode || pane.team == nil
     }
 
     /// One row, with everything hung off it: the drag that puts a session

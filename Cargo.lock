@@ -1117,7 +1117,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
- "nix 0.29.0",
+ "nix 0.31.3",
  "otag-agents",
  "otag-core",
  "otag-features",
@@ -1137,7 +1137,7 @@ dependencies = [
 name = "otag-agents"
 version = "0.1.0"
 dependencies = [
- "nix 0.29.0",
+ "nix 0.31.3",
  "serde",
  "serde_json",
  "tempfile",
@@ -1151,7 +1151,7 @@ name = "otag-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nix 0.29.0",
+ "nix 0.31.3",
  "otag-agents",
  "otag-features",
  "portable-pty",

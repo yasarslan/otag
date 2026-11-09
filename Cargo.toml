@@ -23,7 +23,7 @@ base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 jiff = "0.2"
-nix = { version = "0.29", features = ["signal", "process", "fs", "user"] }
+nix = { version = "0.31", features = ["signal", "process", "fs", "user"] }
 portable-pty = "0.9"
 ratatui = "0.30"
 rusqlite = { version = "0.37", features = ["bundled"] }
